@@ -46,13 +46,14 @@ type Respo struct {
 }
 
 func CheckAt() {
+	ctx := context.Background()
 	loger.Loger.Info("[XHH]检查@")
 	var offset int
 	nomore := "false"
 	other := fmt.Sprintf("?message_type=16&offset=%v&limit=20&no_more=%s", offset, nomore)
 	resp := SendReq("GET", "/bbs/app/user/message", nil, other)
 	var data Respo
-
+	defer ctx.Done()
 	Dbyte, err := io.ReadAll(resp.Body)
 	if err != nil {
 		loger.Loger.Error("[XHH]无法读取Body")
@@ -64,7 +65,7 @@ func CheckAt() {
 		return
 	}
 	for _, v := range data.Result.Messages {
-		_, err := pg.Conn.Exec(context.Background(), "INSERT INTO at (msg_id,comment_a_id,comment_root_id,link_id,user_a_id,comment_text,reply) VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (msg_id) DO NOTHING", v.MsgID, v.CommentID, v.RootCommentID, v.LinkID, v.UserID, v.CommentText, false)
+		_, err := pg.Conn.Exec(ctx, "INSERT INTO at (msg_id,comment_a_id,comment_root_id,link_id,user_a_id,comment_text,reply) VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (msg_id) DO NOTHING", v.MsgID, v.CommentID, v.RootCommentID, v.LinkID, v.UserID, v.CommentText, false)
 		if err != nil {
 			loger.Loger.Info("[XHH]PsqlError", zap.Error(err))
 			return
@@ -73,15 +74,17 @@ func CheckAt() {
 }
 
 func AutoReply() {
-	row := pg.Conn.QueryRow(context.Background(), "SELECT link_id,comment_a_id,comment_root_id,comment_text FROM at WHERE reply=false LIMIT 1")
+	ctx := context.Background()
+	row := pg.Conn.QueryRow(ctx, "SELECT link_id,comment_a_id,comment_root_id,comment_text FROM at WHERE reply=false LIMIT 1")
 	var linkID, commentID, rootID int
 	var text string
 	row.Scan(&linkID, &commentID, &rootID, &text)
 	if commentID != 0 {
 		loger.Loger.Info("[XHH]正在回复")
 		Reply("Ask Grok is currently available to Premium and Premium+ subscribers only. Subscribe to unlock this feature: x.com/i/premium_sign…", strconv.Itoa(linkID), strconv.Itoa(commentID), strconv.Itoa(rootID), "")
-		pg.Conn.Exec(context.Background(), "UPDATE at SET reply=$1 WHERE comment_a_id=$2", true, commentID)
+		pg.Conn.Exec(ctx, "UPDATE at SET reply=$1 WHERE comment_a_id=$2", true, commentID)
 	} else {
 		loger.Loger.Info("[XHH]无事可做")
 	}
+	defer ctx.Done()
 }

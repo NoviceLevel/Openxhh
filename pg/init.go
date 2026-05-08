@@ -6,11 +6,11 @@ import (
 	"xhhrobot/config"
 	"xhhrobot/loger"
 
-	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"go.uber.org/zap"
 )
 
-var Conn *pgx.Conn
+var Conn *pgxpool.Pool
 
 func InitPostgreSQL() {
 	UserName := config.ConfigStruct.DataBase.User
@@ -20,7 +20,7 @@ func InitPostgreSQL() {
 	Db := config.ConfigStruct.DataBase.Db
 	ConnStr := fmt.Sprintf("postgresql://%s:%s@%s:%s/%s", UserName, Passwd, Host, Port, Db)
 	var err error
-	Conn, err = pgx.Connect(context.Background(), ConnStr)
+	Conn, err = pgxpool.New(context.Background(), ConnStr)
 	if err != nil {
 		loger.Loger.Fatal("[DB]Failed to Connect Database", zap.Error(err))
 	}
