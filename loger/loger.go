@@ -15,7 +15,8 @@ func InitLog() {
 	ConsoleLogConfig := zap.NewProductionEncoderConfig()
 	ConsoleLogConfig.EncodeTime = zapcore.TimeEncoderOfLayout("2006-01-02 15:04:05")
 	ConsoleLogConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder
-	ConsoleLogerEcoder := zapcore.NewConsoleEncoder(ConsoleLogConfig)
+	var ConsoleLogerEcoder zapcore.Encoder
+	ConsoleLogerEcoder = zapcore.NewConsoleEncoder(ConsoleLogConfig)
 	wd, err := os.Getwd()
 	if err != nil {
 		panic(err)

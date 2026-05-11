@@ -1,6 +1,6 @@
 log/
 *.json
-
+sql.db
 main
 main.exe
 *.png

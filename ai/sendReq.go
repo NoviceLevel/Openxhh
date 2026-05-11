@@ -3,7 +3,6 @@ package ai
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"xhhrobot/config"
@@ -63,10 +62,9 @@ func SendReq(Model string, Msg []Messages) (Jresp respStruct) {
 	}
 
 	Dresp, err := io.ReadAll(resp.Body)
-	fmt.Println(string(Dresp))
 	err = json.Unmarshal(Dresp, &Jresp)
 	if err != nil {
-		loger.Loger.Error("[Ai]无法反序列化JSON", zap.Error(err))
+		loger.Loger.Error("[Ai]无法反序列化JSON", zap.Error(err), zap.String("body", string(Dresp)))
 		return
 	}
 

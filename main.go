@@ -1,7 +1,11 @@
 package main
 
 import (
+	"bufio"
 	"flag"
+	"fmt"
+	"os"
+	"strings"
 	"time"
 	"xhhrobot/config"
 	"xhhrobot/db"
@@ -14,9 +18,41 @@ func main() {
 	config.InitConfig()
 	time.Sleep(1 * time.Second)
 	db.Init()
+	CheckNew()
 	mode := flag.String("mode", "default", "Switch a mode when start")
 	flag.Parse()
 	start(mode)
+}
+
+func CheckNew() {
+	if !db.IsNew() {
+		return
+	}
+	fmt.Println("检测到您是第一次运行\n是否允许将先前@过的名单加入至艾特列表？\ny(es) or n(o)\n请输入y或n")
+	input := bufio.NewReader(os.Stdin)
+	str, err := input.ReadString('\n')
+	if err != nil {
+		loger.Loger.Fatal("[MAIN]无法读取您的输入")
+	}
+	in := strings.TrimRight(str, "\r\n")
+
+	switch in {
+	case "n":
+		xhh.DontReply = true
+		return
+	case "no":
+		xhh.DontReply = true
+		return
+	case "N":
+		xhh.DontReply = true
+		return
+	case "No":
+		xhh.DontReply = true
+		return
+	case "NO":
+		xhh.DontReply = true
+		return
+	}
 }
 
 func start(mode *string) {
@@ -24,7 +60,7 @@ func start(mode *string) {
 	case "default":
 		loger.Loger.Info("\nHi,This is XhhRobot\nYou need start with a mode\n-mode start | login | test")
 	case "test":
-		xhh.GetLinkInfo(180970107)
+		fmt.Println("hi")
 	case "login":
 		xhh.Login()
 	case "start":

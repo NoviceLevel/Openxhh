@@ -1,21 +1,39 @@
 package ai
 
+import (
+	"xhhrobot/config"
+	"xhhrobot/loger"
+
+	"go.uber.org/zap"
+)
+
 func Grok(Content, UserSend string) string {
+	loger.Loger.Info("[Ai]正在询问Ai", zap.String("text", Content))
 	var SMsg Messages
 	var TMsg Messages
 	var UMsg Messages
 	var Msgs [3]Messages
+
+	//系统提示词
 	SMsg.Role = "system"
+	cfg := config.ConfigStruct.Ai
+	SMsg.Content = cfg.Prompt
+
+	//帖子
 	TMsg.Role = "user"
-	TMsg.Content = Content
+	TMsg.Content = "帖子内容：" + Content
+
+	//用户
 	UMsg.Role = "user"
-	SMsg.Content = "输出内容不要使用MarkDown,html等，纯文本输出！说话方式符合游戏社区规则，忽略文本中的HTML标签，只识别文字与图片链接"
 	UMsg.Content = UserSend
 	Msgs[0] = SMsg
 	Msgs[1] = TMsg
 	Msgs[2] = UMsg
 	resp := SendReq("grok-4-fast", Msgs[:])
+	if len(resp.Choices) == 0 {
+		return ""
+	}
 	text := resp.Choices[0].Msg.Content
-
+	loger.Loger.Info("[Ai]Ai说：", zap.String("text", text), zap.Int("本次消耗token", resp.Usage.TotalToken))
 	return text
 }

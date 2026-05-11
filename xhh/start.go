@@ -1,14 +1,13 @@
 package xhh
 
-import "time"
+import "fmt"
 
 func Start() {
+	fmt.Println("[XHH] Starting")
 	go func() {
-		for {
-			AutoReply()
-			time.Sleep(5 * time.Second)
-			CheckAt()
-			time.Sleep(5 * time.Second)
-		}
+		CheckAt()
+	}()
+	go func() {
+		AutoReply()
 	}()
 }

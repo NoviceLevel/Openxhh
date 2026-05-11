@@ -1,6 +1,7 @@
 package xhh
 
 import (
+	"crypto/md5"
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/base64"
@@ -9,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 	"xhhrobot/loger"
@@ -87,6 +89,7 @@ func Qr() {
 		}
 		cookie := resp.Cookies()
 		Info.Cookie = cookie[0].Name + "=" + cookie[0].Value + ";" + cookie[1].Name + "=" + cookie[1].Value
+		Info.Cookie += GetFuckingToken()
 		for _, v := range cookie {
 			if v.Name == "user_heybox_id" {
 				Info.HeyBoxId = v.Value
@@ -106,6 +109,23 @@ func Qr() {
 		fmt.Printf("\n欢迎您 -> %s | Cookie已保存\n", resps.Result.NickName)
 		return
 	}
+}
+
+func GetFuckingToken() string {
+	var rawstr []byte
+	_str := strconv.Itoa(int(time.Now().Unix()))
+	_md5 := md5.Sum([]byte(_str))
+	rawstr = append(rawstr, _md5[:]...)
+	_md5 = md5.Sum([]byte("asda"))
+	rawstr = append(rawstr, _md5[:]...)
+	_md5 = md5.Sum([]byte("sdaasf"))
+	rawstr = append(rawstr, _md5[:]...)
+	_md5 = md5.Sum([]byte("sadasdas"))
+	rawstr = append(rawstr, _md5[:]...)
+	rawstr = append(rawstr, 0)
+	str := ";x_xhh_tokenid=" + base64.StdEncoding.EncodeToString([]byte(rawstr))
+	return str
+
 }
 func RSA(before string) (after string) {
 	publicKey := "-----BEGIN PUBLIC KEY-----\nMIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDZgjVwAiKTjZ55nG+mW6r3TSU4\nECvNYqDMIS/bhCj2QaH5GI/KZb2TBp+CBvUj9SLFnmJQ0kzHzHoGZCQ88VevCffF7JePGF9cmKQqotlfTKbV4oxV5iLz7JSG6b/Vg7AXtrTolNtWsa8HiB0tI0YClYaQlOXm4UxLeSxQwSFETwIDAQAB\n-----END PUBLIC KEY-----\n"

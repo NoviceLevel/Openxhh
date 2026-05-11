@@ -8,10 +8,13 @@ import (
 
 var ConfigStruct struct {
 	Xhh struct {
-		Owner   int    `json:"owner"`
-		BaseUrl string `json:"baseUrl"`
-		WebVer  string `json:"webver"`
-		Ver     string `json:"version"`
+		CheckTime int    `json:"checkTime"`
+		ReplyTime int    `json:"replyTime"`
+		Owner     string `json:"owner"`
+		DeviceID  string `json:"deviceID"`
+		BaseUrl   string `json:"baseUrl"`
+		WebVer    string `json:"webver"`
+		Ver       string `json:"version"`
 	} `json:"xhh"`
 	DataBase struct {
 		Type   string `json:"type"`
@@ -22,6 +25,7 @@ var ConfigStruct struct {
 		Passwd string `json:"passwd"`
 	} `json:"database"`
 	Ai struct {
+		Prompt  string `json:"prompt"`
 		BaseUrl string `json:"baseUrl"`
 		Token   string `json:"token"`
 	} `json:"ai"`

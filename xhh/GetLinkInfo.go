@@ -54,12 +54,13 @@ func GetLinkInfo(LinkID int) (str string) {
 	text := ""
 
 	for _, v := range Content {
+		text += RespS.Result.Link.Title + "\n"
 		if v.Type == "html" {
 			text = v.Text
 			break
 		}
 		if v.Type != "text" {
-			text += v.Url
+			text += " " + v.Url
 			continue
 		}
 		text += v.Text
