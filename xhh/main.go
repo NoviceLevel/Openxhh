@@ -136,7 +136,7 @@ func AutoReply() {
 				if v.CommentID != 0 {
 					var isok bool
 					if Check(v.Uid) {
-						Info, top, tags := GetLinkInfo(v.LinkID, v.CommentID)
+						Info, top, tags, _ := GetLinkInfo(v.LinkID, v.CommentID)
 						if len(Info) <= 1 {
 							loger.Loger.Info("[XHH]获取LinkID失败")
 							IsErr()
