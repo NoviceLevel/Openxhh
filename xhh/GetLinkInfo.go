@@ -238,6 +238,46 @@ func findComment(comments []CommentInfo, commentID int) *CommentInfo {
 	return nil
 }
 
+func GetCommentAuthorMention(linkID int, rootCommentID int, commentID int, userID int) string {
+	lookupRootID := rootCommentID
+	if lookupRootID == 0 {
+		lookupRootID = commentID
+	}
+
+	resp, ok := fetchLinkInfoPage(linkID, 1)
+	if !ok {
+		return ""
+	}
+
+	comments := findCommentGroup(resp.Result.Comments, lookupRootID)
+	if comments == nil {
+		maxPage := resp.Result.TotalPage
+		if maxPage <= 0 {
+			maxPage = 1
+		}
+		for page := 2; page <= maxPage; page++ {
+			pageResp, ok := fetchLinkInfoPage(linkID, page)
+			if !ok {
+				continue
+			}
+			comments = findCommentGroup(pageResp.Result.Comments, lookupRootID)
+			if comments != nil {
+				break
+			}
+		}
+	}
+	if comments == nil {
+		return ""
+	}
+
+	comments = fetchMoreSubComments(lookupRootID, commentID, comments)
+	target := findComment(comments, commentID)
+	if target == nil || target.UserID == 0 || target.UserID != userID || target.User.UserName == "" {
+		return ""
+	}
+	return buildMention(target.UserID, target.User.UserName)
+}
+
 func inferMentionTarget(comments []CommentInfo, commentID int, currentUserID int) string {
 	lastCandidateID := 0
 	lastCandidateName := ""

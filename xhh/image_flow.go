@@ -69,6 +69,11 @@ func ProcessImageGenerationComment(linkID, commentID, rootID, userID int, text s
 	replyID := "-1"
 	rootIDText := "-1"
 	replyText := "已生成：" + prompt
+	if !options.DryRun {
+		if mention := GetCommentAuthorMention(linkID, rootID, commentID, userID); mention != "" {
+			replyText = mention + replyText
+		}
+	}
 	form := CommentCreateFormData(replyText, strconv.Itoa(linkID), replyID, rootIDText, "0", imageURL)
 
 	if options.DryRun {
