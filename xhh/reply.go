@@ -3,7 +3,6 @@ package xhh
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/url"
 	"strconv"
@@ -21,18 +20,33 @@ func Reply(text, link_id, reply_id, root_id, iscy string) (isok bool) {
 	return createComment(text, link_id, reply_id, root_id, iscy, "")
 }
 
+func ReplyImage(text, linkID, replyID, rootID, imageURL string) bool {
+	return createComment(text, linkID, replyID, rootID, "0", imageURL)
+}
+
 func CommentPostImage(text, linkID, imageURL string) bool {
 	return createComment(text, linkID, "-1", "-1", "0", imageURL)
+}
+
+func CommentCreateFormData(text, linkID, replyID, rootID, iscy, imageURL string) url.Values {
+	if iscy == "" {
+		iscy = "0"
+	}
+	form := url.Values{}
+	form.Set("is_cy", iscy)
+	form.Set("link_id", linkID)
+	form.Set("reply_id", replyID)
+	form.Set("root_id", rootID)
+	form.Set("text", text)
+	form.Set("imgs", imageURL)
+	return form
 }
 
 func createComment(text, link_id, reply_id, root_id, iscy, imageURL string) (isok bool) {
 	lock.Lock()
 	defer lock.Unlock()
 	Path := "/bbs/app/comment/create"
-	Body := fmt.Sprintf("is_cy=%s&link_id=%s&reply_id=%s&root_id=%s&text=%s", iscy, link_id, reply_id, root_id, url.QueryEscape(text))
-	if imageURL != "" {
-		Body += "&imgs=" + url.QueryEscape(imageURL)
-	}
+	Body := CommentCreateFormData(text, link_id, reply_id, root_id, iscy, imageURL).Encode()
 	resp := SendReq("POST", Path, bytes.NewReader([]byte(Body)), "")
 	if resp == nil {
 		loger.Loger.Error("[XHH]链接发送失败了")

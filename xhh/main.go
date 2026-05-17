@@ -155,39 +155,47 @@ func AutoReply() {
 		for _, v := range Arr {
 			go func() {
 				defer wg.Done()
-				if v.CommentID != 0 {
-					var isok bool
-					if Check(v.Uid) {
-						Info, top, tags, mention := GetLinkInfo(v.LinkID, v.RootID, v.CommentID, v.Uid)
-						if len(Info) <= 1 {
-							loger.Loger.Info("[XHH]无法整理@消息，已标记完成避免阻塞", zap.Int("comment_id", v.CommentID), zap.Int("link_id", v.LinkID))
-							db.Replyed(v.CommentID)
-							return
-						}
-						mentionTrigger := ShouldMentionTarget(v.Text)
-						mentionTarget := mention != "" && mentionTrigger
-						loger.Loger.Info("[XHH]Mention decision", zap.Bool("trigger", mentionTrigger), zap.Bool("hasMention", mention != ""))
-						ReplyText := ai.GetAiReply(Info, v.Text, top, tags)
-						if ReplyText == "" {
-							loger.Loger.Info("[XHH]Ai返回错误")
-							IsErr()
-							return
-						}
-						if mentionTarget {
-							ReplyText = mention + " " + ReplyText
-						}
-						isok = Reply(ReplyText, strconv.Itoa(v.LinkID), strconv.Itoa(v.CommentID), strconv.Itoa(v.RootID), "")
-
-					}
-					if isok {
-						db.Replyed(v.CommentID)
-					} else {
-						IsErr()
-						loger.Loger.Error("[XHH]无法回复评论")
-					}
-				} else {
-					wg.Done()
+				if v.CommentID == 0 {
 					fmt.Println("[XHH]无事可做")
+					return
+				}
+
+				if !Check(v.Uid) {
+					db.Replyed(v.CommentID)
+					return
+				}
+
+				var isok bool
+				handledImage, imageOK := HandleImageGenerationComment(v.LinkID, v.CommentID, v.RootID, v.Uid, v.Text)
+				if handledImage {
+					isok = imageOK
+				} else {
+					Info, top, tags, mention := GetLinkInfo(v.LinkID, v.RootID, v.CommentID, v.Uid)
+					if len(Info) <= 1 {
+						loger.Loger.Info("[XHH]无法整理@消息，已标记完成避免阻塞", zap.Int("comment_id", v.CommentID), zap.Int("link_id", v.LinkID))
+						db.Replyed(v.CommentID)
+						return
+					}
+					mentionTrigger := ShouldMentionTarget(v.Text)
+					mentionTarget := mention != "" && mentionTrigger
+					loger.Loger.Info("[XHH]Mention decision", zap.Bool("trigger", mentionTrigger), zap.Bool("hasMention", mention != ""))
+					ReplyText := ai.GetAiReply(Info, v.Text, top, tags)
+					if ReplyText == "" {
+						loger.Loger.Info("[XHH]Ai返回错误")
+						IsErr()
+						return
+					}
+					if mentionTarget {
+						ReplyText = mention + " " + ReplyText
+					}
+					isok = Reply(ReplyText, strconv.Itoa(v.LinkID), strconv.Itoa(v.CommentID), strconv.Itoa(v.RootID), "")
+				}
+
+				if isok {
+					db.Replyed(v.CommentID)
+				} else {
+					IsErr()
+					loger.Loger.Error("[XHH]无法回复评论")
 				}
 			}()
 		}

@@ -30,6 +30,14 @@ var ConfigStruct struct {
 		BaseUrl string `json:"baseUrl"`
 		Token   string `json:"token"`
 	} `json:"ai"`
+	Image struct {
+		Model          string `json:"model"`
+		BaseUrl        string `json:"baseUrl"`
+		Token          string `json:"token"`
+		Size           string `json:"size"`
+		ResponseFormat string `json:"responseFormat"`
+		OutputDir      string `json:"outputDir"`
+	} `json:"image"`
 }
 
 func InitConfig() {

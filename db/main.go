@@ -27,6 +27,9 @@ func Init() {
 
 func Insert(msg_id, comment_a_id, comment_root_id, link_id, user_a_id int, comment_text string, reply bool) bool {
 	ctx := context.Background()
+	if CommentExists(comment_a_id) {
+		return true
+	}
 	if cfg.Type == "pg" {
 		_, err := pg.Conn.Exec(ctx, "INSERT INTO at (msg_id,comment_a_id,comment_root_id,link_id,user_a_id,comment_text,reply) VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (msg_id) DO NOTHING", msg_id, comment_a_id, comment_root_id, link_id, user_a_id, comment_text, reply)
 		if err != nil {
@@ -42,6 +45,28 @@ func Insert(msg_id, comment_a_id, comment_root_id, link_id, user_a_id int, comme
 			return false
 		}
 		return true
+	}
+	return false
+}
+
+func CommentExists(commentID int) bool {
+	ctx := context.Background()
+	var exists bool
+	if cfg.Type == "pg" {
+		err := pg.Conn.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM at WHERE comment_a_id=$1)", commentID).Scan(&exists)
+		if err != nil {
+			loger.Loger.Info("[DB]PsqlError", zap.Error(err))
+			return false
+		}
+		return exists
+	}
+	if cfg.Type == "sqlite" {
+		err := sqlite.Db.QueryRow("SELECT EXISTS(SELECT 1 FROM at WHERE comment_a_id=?)", commentID).Scan(&exists)
+		if err != nil {
+			loger.Loger.Info("[DB]SQLiteERROR", zap.Error(err))
+			return false
+		}
+		return exists
 	}
 	return false
 }
