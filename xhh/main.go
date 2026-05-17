@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 	"xhhrobot/ai"
@@ -23,6 +24,16 @@ var Info struct {
 }
 var CheckTime int
 var ReplyTime int
+
+func ShouldMentionTarget(text string) bool {
+	triggers := []string{"他", "她", "对方", "那个人", "这个人", "楼上", "上面", "反驳", "告诉", "问问", "回复他", "回复她", "怼"}
+	for _, trigger := range triggers {
+		if strings.Contains(text, trigger) {
+			return true
+		}
+	}
+	return false
+}
 
 func Init() {
 	file, err := os.ReadFile("./cookie.json")
@@ -136,17 +147,23 @@ func AutoReply() {
 				if v.CommentID != 0 {
 					var isok bool
 					if Check(v.Uid) {
-						Info, top, tags, _ := GetLinkInfo(v.LinkID, v.CommentID)
+						Info, top, tags, mention := GetLinkInfo(v.LinkID, v.RootID, v.CommentID, v.Uid)
 						if len(Info) <= 1 {
 							loger.Loger.Info("[XHH]获取LinkID失败")
 							IsErr()
 							return
 						}
+						mentionTrigger := ShouldMentionTarget(v.Text)
+						mentionTarget := mention != "" && mentionTrigger
+						loger.Loger.Info("[XHH]Mention decision", zap.Bool("trigger", mentionTrigger), zap.Bool("hasMention", mention != ""))
 						ReplyText := ai.GetAiReply(Info, v.Text, top, tags)
 						if ReplyText == "" {
 							loger.Loger.Info("[XHH]Ai返回错误")
 							IsErr()
 							return
+						}
+						if mentionTarget {
+							ReplyText = mention + " " + ReplyText
 						}
 						isok = Reply(ReplyText, strconv.Itoa(v.LinkID), strconv.Itoa(v.CommentID), strconv.Itoa(v.RootID), "")
 
