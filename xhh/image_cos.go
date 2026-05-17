@@ -152,12 +152,6 @@ func sendXHHCOSUploadTokenReq(body io.Reader) (*http.Response, error) {
 	query.Set("x_request_default", "true")
 	query.Set("x_client_version", "999.999.999")
 	query.Set("version", "999.0.4")
-	if cfg.DeviceID != "" {
-		query.Set("device_id", cfg.DeviceID)
-	}
-	if Info.HeyBoxId != "" {
-		query.Set("heybox_id", Info.HeyBoxId)
-	}
 	query.Set("hkey", hkey)
 	query.Set("_time", strconv.Itoa(requestTime))
 	query.Set("nonce", nonce)
