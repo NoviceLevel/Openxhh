@@ -16,8 +16,9 @@ import (
 )
 
 type ImageCommentOptions struct {
-	DryRun    bool
-	MockImage bool
+	DryRun          bool
+	MockImage       bool
+	TriggerUserName string
 }
 
 type ImageCommentResult struct {
@@ -26,8 +27,8 @@ type ImageCommentResult struct {
 	Err     error
 }
 
-func HandleImageGenerationComment(linkID, commentID, rootID, userID int, text string) (bool, bool) {
-	result := ProcessImageGenerationComment(linkID, commentID, rootID, userID, text, ImageCommentOptions{})
+func HandleImageGenerationComment(linkID, commentID, rootID, userID int, userName, text string) (bool, bool) {
+	result := ProcessImageGenerationComment(linkID, commentID, rootID, userID, text, ImageCommentOptions{TriggerUserName: userName})
 	if result.Err != nil {
 		loger.Loger.Error("[XHH]图片评论处理失败", zap.Error(result.Err), zap.Int("comment_id", commentID), zap.Int("link_id", linkID))
 		if result.Handled {
@@ -94,6 +95,9 @@ func ProcessImageGenerationComment(linkID, commentID, rootID, userID int, text s
 		mention := ""
 		if command.MentionTargetText != "" {
 			mention = GetExplicitMentionFromPost(linkID, "艾特"+command.MentionTargetText, userID)
+		}
+		if mention == "" && options.TriggerUserName != "" {
+			mention = buildMention(userID, options.TriggerUserName)
 		}
 		if mention == "" {
 			mention = GetCommentAuthorMention(linkID, rootID, commentID, userID)

@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"strings"
 	"openxhh/config"
 	"openxhh/loger"
 	"openxhh/pg"
@@ -16,22 +17,40 @@ func Init() {
 	switch cfg.Type {
 	case "pg":
 		pg.InitPostgreSQL()
-		return
 	case "sqlite":
 		sqlite.Init()
-		return
 	default:
 		loger.Loger.Fatal("[DB]无效的数据库类型")
+	}
+	migrateAtTable()
+}
+
+func migrateAtTable() {
+	if cfg.Type == "pg" {
+		_, err := pg.Conn.Exec(context.Background(), "ALTER TABLE at ADD COLUMN IF NOT EXISTS user_a_name TEXT DEFAULT ''")
+		if err != nil {
+			loger.Loger.Warn("[DB]无法迁移 user_a_name", zap.Error(err))
+		}
+	}
+	if cfg.Type == "sqlite" {
+		_, err := sqlite.Db.Exec("ALTER TABLE at ADD COLUMN user_a_name TEXT DEFAULT ''")
+		if err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+			loger.Loger.Warn("[DB]无法迁移 user_a_name", zap.Error(err))
+		}
 	}
 }
 
 func Insert(msg_id, comment_a_id, comment_root_id, link_id, user_a_id int, comment_text string, reply bool) bool {
+	return InsertWithUserName(msg_id, comment_a_id, comment_root_id, link_id, user_a_id, "", comment_text, reply)
+}
+
+func InsertWithUserName(msg_id, comment_a_id, comment_root_id, link_id, user_a_id int, user_a_name, comment_text string, reply bool) bool {
 	ctx := context.Background()
 	if comment_a_id > 0 && CommentExists(comment_a_id) {
 		return true
 	}
 	if cfg.Type == "pg" {
-		_, err := pg.Conn.Exec(ctx, "INSERT INTO at (msg_id,comment_a_id,comment_root_id,link_id,user_a_id,comment_text,reply) VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (msg_id) DO NOTHING", msg_id, comment_a_id, comment_root_id, link_id, user_a_id, comment_text, reply)
+		_, err := pg.Conn.Exec(ctx, "INSERT INTO at (msg_id,comment_a_id,comment_root_id,link_id,user_a_id,user_a_name,comment_text,reply) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (msg_id) DO NOTHING", msg_id, comment_a_id, comment_root_id, link_id, user_a_id, user_a_name, comment_text, reply)
 		if err != nil {
 			loger.Loger.Info("[DB]PsqlError", zap.Error(err))
 			return false
@@ -39,7 +58,7 @@ func Insert(msg_id, comment_a_id, comment_root_id, link_id, user_a_id int, comme
 		return true
 	}
 	if cfg.Type == "sqlite" {
-		_, err := sqlite.Db.Exec("INSERT INTO at (msg_id,comment_a_id,comment_root_id,link_id,user_a_id,comment_text,reply) VALUES (?,?,?,?,?,?,?) ON CONFLICT (msg_id) DO NOTHING", msg_id, comment_a_id, comment_root_id, link_id, user_a_id, comment_text, reply)
+		_, err := sqlite.Db.Exec("INSERT INTO at (msg_id,comment_a_id,comment_root_id,link_id,user_a_id,user_a_name,comment_text,reply) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT (msg_id) DO NOTHING", msg_id, comment_a_id, comment_root_id, link_id, user_a_id, user_a_name, comment_text, reply)
 		if err != nil {
 			loger.Loger.Info("[DB]SQLiteERROR", zap.Error(err))
 			return false
@@ -92,38 +111,39 @@ func ReplyedMsg(msgID int) {
 }
 
 type CommStruct struct {
-	MsgID     int
-	LinkID    int
+	MsgID    int
+	LinkID   int
 	CommentID int
-	RootID    int
-	Text      string
-	Uid       int
+	RootID   int
+	Text     string
+	Uid      int
+	UserName string
 }
 
 func GetComm() (CommArr []CommStruct) {
 	ctx := context.Background()
 	if cfg.Type == "pg" {
-		row, err := pg.Conn.Query(ctx, "SELECT msg_id,link_id,comment_a_id,comment_root_id,comment_text,user_a_id FROM at WHERE reply=false LIMIT 3")
+		row, err := pg.Conn.Query(ctx, "SELECT msg_id,link_id,comment_a_id,comment_root_id,comment_text,user_a_id,user_a_name FROM at WHERE reply=false LIMIT 3")
 		if err != nil {
 			loger.Loger.Error("[DB]无法获取评论信息", zap.Error(err))
 			return
 		}
 		for row.Next() {
 			var Comm CommStruct
-			row.Scan(&Comm.MsgID, &Comm.LinkID, &Comm.CommentID, &Comm.RootID, &Comm.Text, &Comm.Uid)
+			row.Scan(&Comm.MsgID, &Comm.LinkID, &Comm.CommentID, &Comm.RootID, &Comm.Text, &Comm.Uid, &Comm.UserName)
 			CommArr = append(CommArr, Comm)
 		}
 		return
 	}
 	if cfg.Type == "sqlite" {
-		row, err := sqlite.Db.Query("SELECT msg_id,link_id,comment_a_id,comment_root_id,comment_text,user_a_id FROM at WHERE reply=false LIMIT 3")
+		row, err := sqlite.Db.Query("SELECT msg_id,link_id,comment_a_id,comment_root_id,comment_text,user_a_id,user_a_name FROM at WHERE reply=false LIMIT 3")
 		if err != nil {
 			loger.Loger.Error("[DB]无法获取评论信息", zap.Error(err))
 			return
 		}
 		for row.Next() {
 			var Comm CommStruct
-			row.Scan(&Comm.MsgID, &Comm.LinkID, &Comm.CommentID, &Comm.RootID, &Comm.Text, &Comm.Uid)
+			row.Scan(&Comm.MsgID, &Comm.LinkID, &Comm.CommentID, &Comm.RootID, &Comm.Text, &Comm.Uid, &Comm.UserName)
 			CommArr = append(CommArr, Comm)
 		}
 	}

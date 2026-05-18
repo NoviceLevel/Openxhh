@@ -9,7 +9,7 @@ func TestMsgUnmarshalAtPost(t *testing.T) {
 	data := []byte(`{
 		"message_id": 1001,
 		"message_type": 16,
-		"user_a": {"userid": "89055874"},
+		"user_a": {"userid": "89055874", "username": "小猫娘喵喵"},
 		"link": {"linkid": 181099114, "description": "@机器人 生成一张机械朋克猫"}
 	}`)
 
@@ -28,6 +28,9 @@ func TestMsgUnmarshalAtPost(t *testing.T) {
 	}
 	if msg.UserID != 89055874 {
 		t.Fatalf("UserID = %d", msg.UserID)
+	}
+	if msg.UserName != "小猫娘喵喵" {
+		t.Fatalf("UserName = %q", msg.UserName)
 	}
 	if msg.CommentText != "@机器人 生成一张机械朋克猫" {
 		t.Fatalf("CommentText = %q", msg.CommentText)

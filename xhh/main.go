@@ -68,6 +68,7 @@ type Msg struct {
 	LinkID        int
 	UserID        int
 	MessageType   int
+	UserName      string
 	IsPost        bool
 }
 
@@ -81,7 +82,8 @@ func (m *Msg) UnmarshalJSON(data []byte) error {
 		UserID        json.RawMessage `json:"userid_a"`
 		MessageType   int             `json:"message_type"`
 		User          struct {
-			UserID json.RawMessage `json:"userid"`
+			UserID   json.RawMessage `json:"userid"`
+			UserName string          `json:"username"`
 		} `json:"user_a"`
 		Link struct {
 			LinkID int    `json:"linkid"`
@@ -102,6 +104,7 @@ func (m *Msg) UnmarshalJSON(data []byte) error {
 		m.UserID = jsonInt(aux.User.UserID)
 	}
 	m.MessageType = aux.MessageType
+	m.UserName = aux.User.UserName
 	m.IsPost = aux.MessageType == messageTypeAtPost
 	if m.IsPost {
 		m.CommentID = -1
@@ -192,9 +195,9 @@ func CheckAt() {
 			for _, v := range data.Result.Messages {
 				if Check(v.UserID) {
 					if DontReply {
-						db.Insert(v.MsgID, v.CommentID, v.RootCommentID, v.LinkID, v.UserID, v.CommentText, true)
+						db.InsertWithUserName(v.MsgID, v.CommentID, v.RootCommentID, v.LinkID, v.UserID, v.UserName, v.CommentText, true)
 					} else {
-						db.Insert(v.MsgID, v.CommentID, v.RootCommentID, v.LinkID, v.UserID, v.CommentText, false)
+						db.InsertWithUserName(v.MsgID, v.CommentID, v.RootCommentID, v.LinkID, v.UserID, v.UserName, v.CommentText, false)
 					}
 				}
 			}
@@ -235,7 +238,7 @@ func AutoReply() {
 				}
 
 				var isok bool
-				handledImage, imageOK := HandleImageGenerationComment(v.LinkID, v.CommentID, v.RootID, v.Uid, v.Text)
+				handledImage, imageOK := HandleImageGenerationComment(v.LinkID, v.CommentID, v.RootID, v.Uid, v.UserName, v.Text)
 				if handledImage {
 					isok = imageOK
 				} else {
