@@ -32,6 +32,12 @@ func TestParseImageCommand(t *testing.T) {
 			wantPrompt: "小黑盒头像",
 		},
 		{
+			name:       "weak generate creature",
+			text:       "@机器人 生成一只可爱的猫娘",
+			wantOK:     true,
+			wantPrompt: "可爱的猫娘",
+		},
+		{
 			name:              "cleanup mention control",
 			text:              "@机器人 生图 一张小菲的画像，并艾特她查看",
 			wantOK:            true,

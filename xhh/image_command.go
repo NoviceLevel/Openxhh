@@ -19,7 +19,7 @@ type ImageCommand struct {
 var htmlTagPattern = regexp.MustCompile(`<[^>]*>`)
 var leadingMentionPattern = regexp.MustCompile(`^\s*(?:@\S+\s*)+`)
 var imageWeakTriggerPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?:帮我|请|可以|能不能)?\s*(生成|画|来|做|出)\s*(一张|一幅|张|幅|个)\s*(.+)`),
+	regexp.MustCompile(`(?:帮我|请|可以|能不能)?\s*(生成|画|来|做|出)\s*(一张|一幅|一个|一只|一位|张|幅|个|只|位)\s*(.+)`),
 	regexp.MustCompile(`(?:帮我|请|可以|能不能)?\s*(画|生成)\s*(.+)`),
 }
 var mentionControlPattern = regexp.MustCompile(`(?:并|，|,|。|、|\s)*(?:顺便|帮我|请|可以|能不能)?(?:艾特|提到|喊|叫)\s*(?:她|他|ta|TA|@?[^\s，,。.!！?？:：、@]{1,24})?(?:看看|查看|看下|来看|评价|一下)?`)
@@ -95,13 +95,20 @@ func extractImagePromptWithTrigger(text string) (string, string, bool) {
 }
 
 func looksLikeImageIntent(text string, prompt string) bool {
-	imageWords := []string{"图", "图片", "画像", "照片", "海报", "插画", "壁纸", "头像", "表情包", "梗图", "封面", "画"}
+	textTaskWords := []string{"回复", "文案", "文章", "摘要", "总结", "代码", "脚本", "表格", "清单", "标题", "评论"}
+	for _, word := range textTaskWords {
+		if strings.Contains(prompt, word) {
+			return false
+		}
+	}
+
+	imageWords := []string{"图", "图片", "画像", "照片", "海报", "插画", "壁纸", "头像", "表情包", "梗图", "封面", "画", "猫", "狗", "猫娘", "角色", "人物", "女孩", "男孩", "少女", "少年", "机器人", "怪物", "动物"}
 	for _, word := range imageWords {
 		if strings.Contains(text, word) || strings.Contains(prompt, word) {
 			return true
 		}
 	}
-	measureWords := []string{"一张", "一幅", "张", "幅"}
+	measureWords := []string{"一张", "一幅", "一只", "一位", "张", "幅", "只", "位"}
 	for _, word := range measureWords {
 		if strings.Contains(text, word) {
 			return true
