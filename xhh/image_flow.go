@@ -27,6 +27,11 @@ type ImageCommentResult struct {
 	Err     error
 }
 
+const (
+	defaultImageReplyText = "图片来了喵"
+	maxImageReplyRunes    = 40
+)
+
 func HandleImageGenerationComment(linkID, commentID, rootID, userID int, userName, text string) (bool, bool) {
 	result := ProcessImageGenerationComment(linkID, commentID, rootID, userID, text, ImageCommentOptions{TriggerUserName: userName})
 	if result.Err != nil {
@@ -90,7 +95,7 @@ func ProcessImageGenerationComment(linkID, commentID, rootID, userID int, text s
 
 	replyID := "-1"
 	rootIDText := "-1"
-	replyText := "已生成：" + prompt
+	replyText := buildImageReplyText(linkID, rootID, commentID, userID, text, options.DryRun)
 	if !options.DryRun {
 		mention := ""
 		if command.MentionTargetText != "" {
@@ -119,6 +124,40 @@ func ProcessImageGenerationComment(linkID, commentID, rootID, userID int, text s
 		return ImageCommentResult{Handled: true, OK: true}
 	}
 	return ImageCommentResult{Handled: true, Err: errors.New("comment/create image reply failed")}
+}
+
+func buildImageReplyText(linkID, rootID, commentID, userID int, originalText string, dryRun bool) string {
+	if dryRun {
+		return defaultImageReplyText
+	}
+	contents, topics, tags, _ := GetLinkInfo(linkID, rootID, commentID, userID)
+	if len(contents) == 0 {
+		return defaultImageReplyText
+	}
+	instruction := "用户请求生成的图片已经成功附在本条评论里。请只输出一句自然简短的中文回复，最多20个字；不要复述用户的图片要求；不要出现“已生成”“prompt”“提示词”“生图指令”。用户原话仅供理解语气：" + originalText
+	return normalizeImageReplyText(ai.GetAiReply(contents, instruction, topics, tags))
+}
+
+func normalizeImageReplyText(text string) string {
+	text = strings.TrimSpace(text)
+	text = strings.ReplaceAll(text, "\r", " ")
+	text = strings.ReplaceAll(text, "\n", " ")
+	text = strings.Join(strings.Fields(text), " ")
+	text = strings.Trim(text, "\"'“”‘’「」")
+	if text == "" {
+		return defaultImageReplyText
+	}
+	lower := strings.ToLower(text)
+	for _, forbidden := range []string{"已生成", "prompt", "提示词", "生图指令"} {
+		if strings.Contains(lower, strings.ToLower(forbidden)) {
+			return defaultImageReplyText
+		}
+	}
+	runes := []rune(text)
+	if len(runes) > maxImageReplyRunes {
+		return string(runes[:maxImageReplyRunes])
+	}
+	return text
 }
 
 func generateImageForComment(ctx context.Context, prompt string, options ImageCommentOptions) (ai.ImageResult, error) {
