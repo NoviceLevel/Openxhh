@@ -2,6 +2,28 @@ package xhh
 
 import "testing"
 
+func TestAppendUniqueMention(t *testing.T) {
+	trigger := buildMention(1001, "触发者")
+	target := buildMention(2002, "目标用户")
+
+	mentions := appendUniqueMention(nil, trigger)
+	mentions = appendUniqueMention(mentions, target)
+	if got := len(mentions); got != 2 {
+		t.Fatalf("len(mentions) = %d, want 2", got)
+	}
+
+	mentions = appendUniqueMention(mentions, buildMention(1001, "触发者新名字"))
+	if got := len(mentions); got != 2 {
+		t.Fatalf("len(mentions) after duplicate = %d, want 2", got)
+	}
+}
+
+func TestExtractMentionUserID(t *testing.T) {
+	if got := extractMentionUserID(buildMention(1001, "触发者")); got != "1001" {
+		t.Fatalf("extractMentionUserID = %q, want 1001", got)
+	}
+}
+
 func TestNormalizeImageReplyText(t *testing.T) {
 	cases := []struct {
 		name string

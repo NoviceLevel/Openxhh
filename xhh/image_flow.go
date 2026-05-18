@@ -97,19 +97,7 @@ func ProcessImageGenerationComment(linkID, commentID, rootID, userID int, text s
 	rootIDText := "-1"
 	replyText := buildImageReplyText(linkID, rootID, commentID, userID, text, options.DryRun)
 	if !options.DryRun {
-		mention := ""
-		if command.MentionTargetText != "" {
-			mention = GetExplicitMentionFromPost(linkID, "艾特"+command.MentionTargetText, userID)
-		}
-		if mention == "" && options.TriggerUserName != "" {
-			mention = buildMention(userID, options.TriggerUserName)
-		}
-		if mention == "" {
-			mention = GetCommentAuthorMention(linkID, rootID, commentID, userID)
-		}
-		if mention != "" {
-			replyText = mention + replyText
-		}
+		replyText = prependImageReplyMentions(replyText, linkID, rootID, commentID, userID, options.TriggerUserName, command.MentionTargetText)
 	}
 	form := CommentCreateFormData(replyText, strconv.Itoa(linkID), replyID, rootIDText, "0", imageURL)
 
@@ -124,6 +112,54 @@ func ProcessImageGenerationComment(linkID, commentID, rootID, userID int, text s
 		return ImageCommentResult{Handled: true, OK: true}
 	}
 	return ImageCommentResult{Handled: true, Err: errors.New("comment/create image reply failed")}
+}
+
+func prependImageReplyMentions(replyText string, linkID, rootID, commentID, userID int, triggerUserName, targetText string) string {
+	mentions := make([]string, 0, 2)
+	if triggerUserName != "" {
+		mentions = appendUniqueMention(mentions, buildMention(userID, triggerUserName))
+	}
+	if targetText != "" {
+		mentions = appendUniqueMention(mentions, GetExplicitMentionFromPost(linkID, "艾特"+targetText, userID))
+	}
+	if len(mentions) == 0 {
+		mentions = appendUniqueMention(mentions, GetCommentAuthorMention(linkID, rootID, commentID, userID))
+	}
+	if len(mentions) == 0 {
+		return replyText
+	}
+	return strings.Join(mentions, "") + replyText
+}
+
+func appendUniqueMention(mentions []string, mention string) []string {
+	mention = strings.TrimSpace(mention)
+	if mention == "" {
+		return mentions
+	}
+	mentionID := extractMentionUserID(mention)
+	for _, existing := range mentions {
+		if mentionID != "" && mentionID == extractMentionUserID(existing) {
+			return mentions
+		}
+		if mentionID == "" && mention == strings.TrimSpace(existing) {
+			return mentions
+		}
+	}
+	return append(mentions, mention+" ")
+}
+
+func extractMentionUserID(mention string) string {
+	marker := `data-user-id="`
+	start := strings.Index(mention, marker)
+	if start < 0 {
+		return ""
+	}
+	start += len(marker)
+	end := strings.Index(mention[start:], `"`)
+	if end < 0 {
+		return ""
+	}
+	return mention[start : start+end]
 }
 
 func buildImageReplyText(linkID, rootID, commentID, userID int, originalText string, dryRun bool) string {
