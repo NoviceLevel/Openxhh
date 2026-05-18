@@ -12,6 +12,10 @@ INSTALL_DIR="${INSTALL_DIR:-/opt/Openxhh}"
 
 SERVICE_NAME="${SERVICE_NAME:-Openxhh}"
 
+WEBUI_SERVICE_NAME="${WEBUI_SERVICE_NAME:-Openxhh-webui-vps}"
+
+INSTALL_WEBUI_VPS="${INSTALL_WEBUI_VPS:-1}"
+
 GOPROXY_VALUE="${GOPROXY:-https://goproxy.cn,direct}"
 
 GOSUMDB_VALUE="${GOSUMDB:-sum.golang.google.cn}"
@@ -142,15 +146,29 @@ main() {
 
   go build -p "$GO_BUILD_P" -o "$tmp_dir/Openxhh" .
 
+  if [ "$INSTALL_WEBUI_VPS" != "0" ]; then
+
+    go build -p "$GO_BUILD_P" -o "$tmp_dir/Openxhh-webui-vps" ./cmd/webui-vps
+
+  fi
+
 
 
   timestamp="$(date +%Y%m%d-%H%M%S)"
 
   service_exists=0
 
+  webui_service_exists=0
+
   if systemctl cat "$SERVICE_NAME" >/dev/null 2>&1; then
 
     service_exists=1
+
+  fi
+
+  if [ "$INSTALL_WEBUI_VPS" != "0" ] && systemctl cat "$WEBUI_SERVICE_NAME" >/dev/null 2>&1; then
+
+    webui_service_exists=1
 
   fi
 
@@ -164,6 +182,14 @@ main() {
 
   fi
 
+  if [ "$webui_service_exists" -eq 1 ]; then
+
+    log "停止 Web UI 服务：$WEBUI_SERVICE_NAME"
+
+    systemctl stop "$WEBUI_SERVICE_NAME" || true
+
+  fi
+
 
 
   if [ -f "$INSTALL_DIR/Openxhh" ]; then
@@ -174,6 +200,14 @@ main() {
 
   fi
 
+  if [ "$INSTALL_WEBUI_VPS" != "0" ] && [ -f "$INSTALL_DIR/Openxhh-webui-vps" ]; then
+
+    log "备份旧 Web UI 二进制：$INSTALL_DIR/Openxhh-webui-vps.bak-$timestamp"
+
+    cp "$INSTALL_DIR/Openxhh-webui-vps" "$INSTALL_DIR/Openxhh-webui-vps.bak-$timestamp"
+
+  fi
+
 
 
   log "替换二进制，保留 config.json、cookie.json、sql.db 和 log。"
@@ -181,6 +215,14 @@ main() {
   cp "$tmp_dir/Openxhh" "$INSTALL_DIR/Openxhh"
 
   chmod +x "$INSTALL_DIR/Openxhh"
+
+  if [ "$INSTALL_WEBUI_VPS" != "0" ]; then
+
+    cp "$tmp_dir/Openxhh-webui-vps" "$INSTALL_DIR/Openxhh-webui-vps"
+
+    chmod +x "$INSTALL_DIR/Openxhh-webui-vps"
+
+  fi
 
 
 
@@ -195,6 +237,24 @@ main() {
   else
 
     log "未检测到 systemd 服务 $SERVICE_NAME。你可以手动运行：cd $INSTALL_DIR && ./Openxhh -mode start"
+
+  fi
+
+  if [ "$INSTALL_WEBUI_VPS" != "0" ]; then
+
+    if [ "$webui_service_exists" -eq 1 ]; then
+
+      log "启动 Web UI 服务：$WEBUI_SERVICE_NAME"
+
+      systemctl start "$WEBUI_SERVICE_NAME"
+
+      systemctl status "$WEBUI_SERVICE_NAME" --no-pager || true
+
+    else
+
+      log "已更新 Web UI 二进制：$INSTALL_DIR/Openxhh-webui-vps"
+
+    fi
 
   fi
 
