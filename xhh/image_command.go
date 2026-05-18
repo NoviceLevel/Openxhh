@@ -53,6 +53,10 @@ func ParseImageCommand(text string) (ImageCommand, bool) {
 	command.RawPrompt = strings.TrimSpace(prompt)
 	command.Trigger = trigger
 	command.Prompt = cleanupImagePrompt(prompt)
+	if shouldUseContextForPortrait(command.Prompt) {
+		command.UsePostContext = true
+		command.UseCommentContext = true
+	}
 	if command.Prompt == "" {
 		return ImageCommand{}, false
 	}
@@ -141,6 +145,16 @@ func wantsImageInput(text string) bool {
 	triggers := []string{"参考这张图", "参考图片", "按图", "按照图", "图生图", "改图", "把这张图改成", "根据这张图"}
 	for _, trigger := range triggers {
 		if strings.Contains(text, trigger) {
+			return true
+		}
+	}
+	return false
+}
+
+func shouldUseContextForPortrait(prompt string) bool {
+	for _, pattern := range portraitSubjectPatterns {
+		match := pattern.FindStringSubmatch(prompt)
+		if len(match) >= 2 && normalizeControlMentionTarget(match[1]) != "" {
 			return true
 		}
 	}
