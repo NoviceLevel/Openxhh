@@ -176,6 +176,9 @@ func normalizeControlMentionTarget(target string) string {
 	target = strings.TrimSpace(target)
 	target = strings.TrimPrefix(target, "@")
 	target = strings.Trim(target, "：:，,。.!！?？、")
+	for _, prefix := range []string{"一张", "一幅", "一个", "张", "幅", "个"} {
+		target = strings.TrimPrefix(target, prefix)
+	}
 	for _, suffix := range []string{"看看", "查看", "看下", "来看", "评价", "一下"} {
 		target = strings.TrimSuffix(target, suffix)
 	}

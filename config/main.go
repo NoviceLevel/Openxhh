@@ -38,8 +38,13 @@ var ConfigStruct struct {
 		ResponseFormat  string `json:"responseFormat"`
 		OutputDir       string `json:"outputDir"`
 		UploadMode      string `json:"uploadMode"`
-		ExternalDir     string `json:"externalDir"`
-		ExternalBaseUrl string `json:"externalBaseUrl"`
+		ExternalDir      string `json:"externalDir"`
+		ExternalBaseUrl  string `json:"externalBaseUrl"`
+		PromptRefine    bool   `json:"promptRefine"`
+		PromptModel     string `json:"promptModel"`
+		PromptBaseUrl   string `json:"promptBaseUrl"`
+		PromptToken     string `json:"promptToken"`
+		PromptMaxChars  int    `json:"promptMaxChars"`
 	} `json:"image"`
 }
 

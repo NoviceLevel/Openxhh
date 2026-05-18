@@ -56,7 +56,25 @@ func ProcessImageGenerationComment(linkID, commentID, rootID, userID int, text s
 
 	started := time.Now()
 	generationPrompt = BuildContextualImagePrompt(prompt, command, linkID, rootID, commentID, userID)
-	loger.Loger.Info("[XHH]开始处理生图评论", zap.Int("comment_id", commentID), zap.Int("link_id", linkID), zap.Int("userid", userID), zap.String("prompt", prompt), zap.Bool("post_context", command.UsePostContext), zap.Bool("comment_context", command.UseCommentContext), zap.Bool("image_input", command.UseImageInput), zap.Bool("dry_run", options.DryRun))
+	if ai.ShouldRefineImagePrompt() {
+		refined, err := ai.RefineImagePrompt(ctx, ai.ImagePromptRefineRequest{
+			OriginalText:       text,
+			RulePrompt:         prompt,
+			ContextPrompt:      generationPrompt,
+			UsePostContext:     command.UsePostContext,
+			UseCommentContext:  command.UseCommentContext,
+			UseImageInput:      command.UseImageInput,
+		})
+		if err != nil {
+			loger.Loger.Warn("[XHH]文本模型优化生图 prompt 失败，使用规则 prompt", zap.Error(err))
+		} else {
+			generationPrompt = refined.ImagePrompt
+			if command.MentionTargetText == "" {
+				command.MentionTargetText = refined.MentionTarget
+			}
+		}
+	}
+	loger.Loger.Info("[XHH]开始处理生图评论", zap.Int("comment_id", commentID), zap.Int("link_id", linkID), zap.Int("userid", userID), zap.String("prompt", prompt), zap.Bool("post_context", command.UsePostContext), zap.Bool("comment_context", command.UseCommentContext), zap.Bool("image_input", command.UseImageInput), zap.Bool("prompt_refine", ai.ShouldRefineImagePrompt()), zap.Bool("dry_run", options.DryRun))
 	imageResult, err := generateImageForComment(ctx, generationPrompt, options)
 	if err != nil {
 		return ImageCommentResult{Handled: true, Err: fmt.Errorf("generate image failed: %w", err)}
