@@ -62,3 +62,25 @@ func TestMsgUnmarshalAtComment(t *testing.T) {
 		t.Fatalf("LinkID/UserID = %d/%d", msg.LinkID, msg.UserID)
 	}
 }
+
+func TestExtractExplicitMentionTargetConversationCommands(t *testing.T) {
+	cases := []struct {
+		text string
+		want string
+	}{
+		{text: "@机器人 向小明打个招呼", want: "小明"},
+		{text: "@机器人 和小明说说", want: "小明"},
+		{text: "@机器人 跟小红聊两句", want: "小红"},
+		{text: "@机器人 对@阿伟说一下", want: "阿伟"},
+		{text: "@机器人 咬小明一口", want: "小明"},
+		{text: "@机器人 反驳小明的观点", want: "小明"},
+		{text: "@机器人 问问小周怎么看", want: "小周"},
+		{text: "@机器人 反驳他", want: ""},
+	}
+
+	for _, tt := range cases {
+		if got := extractExplicitMentionTarget(tt.text); got != tt.want {
+			t.Fatalf("extractExplicitMentionTarget(%q) = %q, want %q", tt.text, got, tt.want)
+		}
+	}
+}
