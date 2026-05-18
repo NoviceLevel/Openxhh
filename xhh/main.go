@@ -28,6 +28,9 @@ var ReplyTime int
 const messagePageLimit = 20
 const maxMessagePages = 5
 
+const messageTypeAtPost = 16
+const messageTypeAtComment = 17
+
 func ShouldMentionTarget(text string) bool {
 	triggers := []string{"他", "她", "对方", "那个人", "这个人", "楼上", "上面", "反驳", "告诉", "问问", "回复他", "回复她", "怼"}
 	for _, trigger := range triggers {
@@ -58,12 +61,75 @@ func Init() {
 }
 
 type Msg struct {
-	CommentID     int    `json:"comment_a_id"`
-	CommentText   string `json:"comment_a_text"`
-	MsgID         int    `json:"message_id"`
-	RootCommentID int    `json:"root_comment_id"`
-	LinkID        int    `json:"linkid"`
-	UserID        int    `json:"userid_a"`
+	CommentID     int
+	CommentText   string
+	MsgID         int
+	RootCommentID int
+	LinkID        int
+	UserID        int
+	MessageType   int
+	IsPost        bool
+}
+
+func (m *Msg) UnmarshalJSON(data []byte) error {
+	var aux struct {
+		CommentID     int             `json:"comment_a_id"`
+		CommentText   string          `json:"comment_a_text"`
+		MsgID         int             `json:"message_id"`
+		RootCommentID int             `json:"root_comment_id"`
+		LinkID        int             `json:"linkid"`
+		UserID        json.RawMessage `json:"userid_a"`
+		MessageType   int             `json:"message_type"`
+		User          struct {
+			UserID json.RawMessage `json:"userid"`
+		} `json:"user_a"`
+		Link struct {
+			LinkID int    `json:"linkid"`
+			Text   string `json:"description"`
+		} `json:"link"`
+	}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+
+	m.CommentID = aux.CommentID
+	m.CommentText = aux.CommentText
+	m.MsgID = aux.MsgID
+	m.RootCommentID = aux.RootCommentID
+	m.LinkID = aux.LinkID
+	m.UserID = jsonInt(aux.UserID)
+	if m.UserID == 0 {
+		m.UserID = jsonInt(aux.User.UserID)
+	}
+	m.MessageType = aux.MessageType
+	m.IsPost = aux.MessageType == messageTypeAtPost
+	if m.IsPost {
+		m.CommentID = -1
+		m.RootCommentID = -1
+		if aux.Link.LinkID != 0 {
+			m.LinkID = aux.Link.LinkID
+		}
+		if aux.Link.Text != "" {
+			m.CommentText = aux.Link.Text
+		}
+	}
+	return nil
+}
+
+func jsonInt(raw json.RawMessage) int {
+	if len(raw) == 0 {
+		return 0
+	}
+	var number int
+	if err := json.Unmarshal(raw, &number); err == nil {
+		return number
+	}
+	var text string
+	if err := json.Unmarshal(raw, &text); err != nil {
+		return 0
+	}
+	number, _ = strconv.Atoi(text)
+	return number
 }
 type Respo struct {
 	Msg    string `json:"msg"`
@@ -96,43 +162,45 @@ func IsErr() {
 func CheckAt() {
 	fmt.Println("[XHH]检查@", time.Now().Format("2006-01-02 15:04:05"))
 
-	for page := 0; page < maxMessagePages; page++ {
-		offset := page * messagePageLimit
-		other := fmt.Sprintf("?message_type=16&offset=%v&limit=%v&no_more=false", offset, messagePageLimit)
-		resp := SendReq("GET", "/bbs/app/user/message", nil, other)
-		if resp == nil {
-			loger.Loger.Error("[XHH]链接发送失败了")
-			IsErr()
-			return
-		}
+	for _, messageType := range []int{messageTypeAtPost, messageTypeAtComment} {
+		for page := 0; page < maxMessagePages; page++ {
+			offset := page * messagePageLimit
+			other := fmt.Sprintf("?message_type=%v&offset=%v&limit=%v&no_more=false", messageType, offset, messagePageLimit)
+			resp := SendReq("GET", "/bbs/app/user/message", nil, other)
+			if resp == nil {
+				loger.Loger.Error("[XHH]链接发送失败了")
+				IsErr()
+				return
+			}
 
-		var data Respo
-		Dbyte, err := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		if err != nil {
-			loger.Loger.Error("[XHH]无法读取Body", zap.Error(err))
-			IsErr()
-			return
-		}
-		err = json.Unmarshal(Dbyte, &data)
-		if err != nil {
-			loger.Loger.Error("[XHH]无法反序列化", zap.Error(err), zap.String("raw", string(Dbyte)))
-			IsErr()
-			return
-		}
+			var data Respo
+			Dbyte, err := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if err != nil {
+				loger.Loger.Error("[XHH]无法读取Body", zap.Error(err))
+				IsErr()
+				return
+			}
+			err = json.Unmarshal(Dbyte, &data)
+			if err != nil {
+				loger.Loger.Error("[XHH]无法反序列化", zap.Error(err), zap.String("raw", string(Dbyte)))
+				IsErr()
+				return
+			}
 
-		for _, v := range data.Result.Messages {
-			if Check(v.UserID) {
-				if DontReply {
-					db.Insert(v.MsgID, v.CommentID, v.RootCommentID, v.LinkID, v.UserID, v.CommentText, true)
-				} else {
-					db.Insert(v.MsgID, v.CommentID, v.RootCommentID, v.LinkID, v.UserID, v.CommentText, false)
+			for _, v := range data.Result.Messages {
+				if Check(v.UserID) {
+					if DontReply {
+						db.Insert(v.MsgID, v.CommentID, v.RootCommentID, v.LinkID, v.UserID, v.CommentText, true)
+					} else {
+						db.Insert(v.MsgID, v.CommentID, v.RootCommentID, v.LinkID, v.UserID, v.CommentText, false)
+					}
 				}
 			}
-		}
 
-		if len(data.Result.Messages) < messagePageLimit {
-			break
+			if len(data.Result.Messages) < messagePageLimit {
+				break
+			}
 		}
 	}
 
@@ -161,7 +229,7 @@ func AutoReply() {
 				}
 
 				if !Check(v.Uid) {
-					db.Replyed(v.CommentID)
+					db.ReplyedMsg(v.MsgID)
 					return
 				}
 
@@ -173,7 +241,7 @@ func AutoReply() {
 					Info, top, tags, mention := GetLinkInfo(v.LinkID, v.RootID, v.CommentID, v.Uid)
 					if len(Info) <= 1 {
 						loger.Loger.Info("[XHH]无法整理@消息，已标记完成避免阻塞", zap.Int("comment_id", v.CommentID), zap.Int("link_id", v.LinkID))
-						db.Replyed(v.CommentID)
+						db.ReplyedMsg(v.MsgID)
 						return
 					}
 					mentionTrigger := ShouldMentionTarget(v.Text)
@@ -195,7 +263,7 @@ func AutoReply() {
 				}
 
 				if isok {
-					db.Replyed(v.CommentID)
+					db.ReplyedMsg(v.MsgID)
 				} else {
 					IsErr()
 					loger.Loger.Error("[XHH]无法回复评论")

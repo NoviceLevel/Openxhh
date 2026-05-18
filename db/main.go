@@ -27,7 +27,7 @@ func Init() {
 
 func Insert(msg_id, comment_a_id, comment_root_id, link_id, user_a_id int, comment_text string, reply bool) bool {
 	ctx := context.Background()
-	if CommentExists(comment_a_id) {
+	if comment_a_id > 0 && CommentExists(comment_a_id) {
 		return true
 	}
 	if cfg.Type == "pg" {
@@ -81,7 +81,18 @@ func Replyed(comment_id int) {
 	}
 }
 
+func ReplyedMsg(msgID int) {
+	ctx := context.Background()
+	if cfg.Type == "pg" {
+		pg.Conn.Exec(ctx, "UPDATE at SET reply=$1 WHERE msg_id=$2", true, msgID)
+	}
+	if cfg.Type == "sqlite" {
+		sqlite.Db.Exec("UPDATE at SET reply=? WHERE msg_id=?", true, msgID)
+	}
+}
+
 type CommStruct struct {
+	MsgID     int
 	LinkID    int
 	CommentID int
 	RootID    int
@@ -92,27 +103,27 @@ type CommStruct struct {
 func GetComm() (CommArr []CommStruct) {
 	ctx := context.Background()
 	if cfg.Type == "pg" {
-		row, err := pg.Conn.Query(ctx, "SELECT link_id,comment_a_id,comment_root_id,comment_text,user_a_id FROM at WHERE reply=false LIMIT 3")
+		row, err := pg.Conn.Query(ctx, "SELECT msg_id,link_id,comment_a_id,comment_root_id,comment_text,user_a_id FROM at WHERE reply=false LIMIT 3")
 		if err != nil {
 			loger.Loger.Error("[DB]无法获取评论信息", zap.Error(err))
 			return
 		}
 		for row.Next() {
 			var Comm CommStruct
-			row.Scan(&Comm.LinkID, &Comm.CommentID, &Comm.RootID, &Comm.Text, &Comm.Uid)
+			row.Scan(&Comm.MsgID, &Comm.LinkID, &Comm.CommentID, &Comm.RootID, &Comm.Text, &Comm.Uid)
 			CommArr = append(CommArr, Comm)
 		}
 		return
 	}
 	if cfg.Type == "sqlite" {
-		row, err := sqlite.Db.Query("SELECT link_id,comment_a_id,comment_root_id,comment_text,user_a_id FROM at WHERE reply=false LIMIT 3")
+		row, err := sqlite.Db.Query("SELECT msg_id,link_id,comment_a_id,comment_root_id,comment_text,user_a_id FROM at WHERE reply=false LIMIT 3")
 		if err != nil {
 			loger.Loger.Error("[DB]无法获取评论信息", zap.Error(err))
 			return
 		}
 		for row.Next() {
 			var Comm CommStruct
-			row.Scan(&Comm.LinkID, &Comm.CommentID, &Comm.RootID, &Comm.Text, &Comm.Uid)
+			row.Scan(&Comm.MsgID, &Comm.LinkID, &Comm.CommentID, &Comm.RootID, &Comm.Text, &Comm.Uid)
 			CommArr = append(CommArr, Comm)
 		}
 	}
