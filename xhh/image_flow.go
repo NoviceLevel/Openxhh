@@ -172,7 +172,7 @@ func buildImageReplyText(linkID, rootID, commentID, userID int, originalText str
 	}
 	contents = appendOwnerContext(contents, userID)
 	instruction := "用户请求生成的图片已经成功附在本条评论里。请只输出一句自然简短的中文回复，最多20个字；不要复述用户的图片要求；不要出现“已生成”“prompt”“提示词”“生图指令”。用户原话仅供理解语气：" + originalText
-	return normalizeImageReplyText(ai.GetAiReply(contents, instruction, topics, tags))
+	return normalizeImageReplyText(ai.GetAiReply(contents, instruction, topics, tags, zap.Int("comment_id", commentID), zap.Int("link_id", linkID), zap.Int("user_id", userID), zap.String("question", originalText)))
 }
 
 func normalizeImageReplyText(text string) string {

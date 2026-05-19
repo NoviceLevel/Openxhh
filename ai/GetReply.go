@@ -16,8 +16,9 @@ type Tags struct {
 	Name string `json:"name"`
 }
 
-func GetAiReply(Contents []Content, UserSay string, Topics []Topics, Tags []Tags) string {
-	loger.Loger.Info("[Ai]正在询问Ai", zap.Any("Content", Contents))
+func GetAiReply(Contents []Content, UserSay string, Topics []Topics, Tags []Tags, logFields ...zap.Field) string {
+	askFields := append([]zap.Field{zap.Any("Content", Contents)}, logFields...)
+	loger.Loger.Info("[Ai]正在询问Ai", askFields...)
 	var SMsg Messages[string]
 	var UMsg Messages[[]Content]
 	var Msgs []any
@@ -53,6 +54,7 @@ func GetAiReply(Contents []Content, UserSay string, Topics []Topics, Tags []Tags
 	}
 	text := resp.Choices[0].Msg.Content
 	appendTokenRecord(aiModel, resp.Usage.TotalToken)
-	loger.Loger.Info("[Ai]Ai说：", zap.String("text", text), zap.Int("本次消耗token", resp.Usage.TotalToken))
+	replyFields := append([]zap.Field{zap.String("text", text), zap.Int("本次消耗token", resp.Usage.TotalToken)}, logFields...)
+	loger.Loger.Info("[Ai]Ai说：", replyFields...)
 	return text
 }

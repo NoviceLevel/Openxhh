@@ -324,7 +324,7 @@ func replyComment(v db.CommStruct) {
 		mentionTrigger := ShouldMentionTarget(v.Text)
 		mentionTarget := mention != "" && mentionTrigger
 		loger.Loger.Info("[XHH]Mention decision", zap.Bool("trigger", mentionTrigger), zap.Bool("hasMention", mention != ""))
-		ReplyText := ai.GetAiReply(Info, v.Text, top, tags)
+		ReplyText := ai.GetAiReply(Info, v.Text, top, tags, zap.Int("msg_id", v.MsgID), zap.Int("comment_id", v.CommentID), zap.Int("link_id", v.LinkID), zap.Int("user_id", v.Uid), zap.String("user_name", v.UserName), zap.String("question", v.Text))
 		if ReplyText == "" {
 			loger.Loger.Info("[XHH]Ai返回错误")
 			IsErr()
