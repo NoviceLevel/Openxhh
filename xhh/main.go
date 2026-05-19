@@ -307,6 +307,8 @@ func replyComment(v db.CommStruct) {
 		return
 	}
 
+	loger.Loger.Info("[XHH]正在处理@消息", zap.Int("msg_id", v.MsgID), zap.Int("comment_id", v.CommentID), zap.Int("link_id", v.LinkID), zap.Int("user_id", v.Uid), zap.String("user_name", v.UserName), zap.String("text", v.Text))
+
 	var isok bool
 	handledImage, imageOK := HandleImageGenerationComment(v.LinkID, v.CommentID, v.RootID, v.Uid, v.UserName, v.Text)
 	if handledImage {
