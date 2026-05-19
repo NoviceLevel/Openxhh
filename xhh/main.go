@@ -1,6 +1,7 @@
 package xhh
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -312,44 +313,34 @@ func replyComment(v db.CommStruct) {
 	loger.Loger.Info("[XHH]正在处理@消息", zap.Int("msg_id", v.MsgID), zap.Int("comment_id", v.CommentID), zap.Int("link_id", v.LinkID), zap.Int("user_id", v.Uid), zap.String("user_name", v.UserName), zap.String("text", mentionControl.CleanedText), zap.String("raw_text", v.Text), zap.String("mention_target", mentionControl.TargetText))
 
 	var isok bool
-	imageResult := ProcessImageGenerationComment(v.LinkID, v.CommentID, v.RootID, v.Uid, mentionControl.CleanedText, ImageCommentOptions{TriggerUserName: v.UserName, MentionTargetText: mentionControl.TargetText})
-	if imageResult.Err != nil {
-		loger.Loger.Error("[XHH]图片评论处理失败", zap.Error(imageResult.Err), zap.Int("comment_id", v.CommentID), zap.Int("link_id", v.LinkID))
-		if imageResult.Handled {
-			isok = true
+	route, routed := routeCommentIntent(v, userText, mentionControl)
+	if routed {
+		if route.MentionTarget != "" {
+			mentionControl.TargetText = route.MentionTarget
+			mentionControl.HasExplicitTarget = true
 		}
-	} else if imageResult.Handled {
-		isok = imageResult.OK
-	} else {
-		Info, top, tags, mention := GetLinkInfo(v.LinkID, v.RootID, v.CommentID, v.Uid)
-		if len(Info) <= 1 {
-			loger.Loger.Info("[XHH]无法整理@消息，已标记完成避免阻塞", zap.Int("comment_id", v.CommentID), zap.Int("link_id", v.LinkID))
+		loger.Loger.Info("[XHH]AI路由完成", zap.Int("msg_id", v.MsgID), zap.String("action", route.Action), zap.String("reason", route.Reason), zap.String("image_prompt", route.ImagePrompt), zap.String("mention_target", route.MentionTarget))
+		switch route.Action {
+		case ai.CommentRouteActionImage:
+			isok = processRoutedImageComment(v, mentionControl, &route)
+		case ai.CommentRouteActionIgnore, ai.CommentRouteActionRegenerate:
 			db.ReplyedMsg(v.MsgID)
 			return
+		default:
+			isok = replyWithAiComment(v, mentionControl)
 		}
-		Info = appendOwnerContext(Info, v.Uid)
-		mentionTrigger := ShouldMentionTarget(v.Text)
-		mentionTarget := mention != "" && mentionTrigger
-		loger.Loger.Info("[XHH]Mention decision", zap.Bool("trigger", mentionTrigger), zap.Bool("hasMention", mention != ""))
-		ReplyText := ai.GetAiReply(Info, mentionControl.CleanedText, top, tags, zap.Int("msg_id", v.MsgID), zap.Int("comment_id", v.CommentID), zap.Int("link_id", v.LinkID), zap.Int("user_id", v.Uid), zap.String("user_name", v.UserName), zap.String("question", mentionControl.CleanedText), zap.String("raw_question", v.Text))
-		if ReplyText == "" {
-			loger.Loger.Info("[XHH]Ai返回错误")
-			IsErr()
-			return
+	} else {
+		imageResult := ProcessImageGenerationComment(v.LinkID, v.CommentID, v.RootID, v.Uid, mentionControl.CleanedText, ImageCommentOptions{TriggerUserName: v.UserName, MentionTargetText: mentionControl.TargetText})
+		if imageResult.Err != nil {
+			loger.Loger.Error("[XHH]图片评论处理失败", zap.Error(imageResult.Err), zap.Int("comment_id", v.CommentID), zap.Int("link_id", v.LinkID))
+			if imageResult.Handled {
+				isok = true
+			}
+		} else if imageResult.Handled {
+			isok = imageResult.OK
+		} else {
+			isok = replyWithAiComment(v, mentionControl)
 		}
-		explicitMention := ""
-		if mentionControl.TargetText != "" {
-			explicitMention = GetExplicitMentionFromPost(v.LinkID, "艾特"+mentionControl.TargetText, v.Uid)
-		}
-		if explicitMention == "" {
-			explicitMention = GetExplicitMentionFromPost(v.LinkID, mentionControl.CleanedText, v.Uid)
-		}
-		if explicitMention != "" {
-			ReplyText = explicitMention + " " + ReplyText
-		} else if mentionTarget {
-			ReplyText = mention + " " + ReplyText
-		}
-		isok = Reply(ReplyText, strconv.Itoa(v.LinkID), strconv.Itoa(v.CommentID), strconv.Itoa(v.RootID), "")
 	}
 
 	if isok {
@@ -358,4 +349,91 @@ func replyComment(v db.CommStruct) {
 		IsErr()
 		loger.Loger.Error("[XHH]无法回复评论")
 	}
+}
+
+func routeCommentIntent(v db.CommStruct, userText string, mentionControl MentionControl) (ai.CommentRouteResult, bool) {
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	defer cancel()
+
+	routeReq := buildCommentRouteRequest(v, userText, mentionControl)
+	route, err := ai.RouteCommentIntent(ctx, routeReq)
+	if err != nil {
+		loger.Loger.Warn("[XHH]文本模型路由失败，使用规则兜底", zap.Error(err), zap.Int("msg_id", v.MsgID), zap.Int("comment_id", v.CommentID), zap.Int("link_id", v.LinkID))
+		return ai.CommentRouteResult{}, false
+	}
+	return route, true
+}
+
+func buildCommentRouteRequest(v db.CommStruct, userText string, mentionControl MentionControl) ai.CommentRouteRequest {
+	textForRules := mentionControl.CleanedText
+	if textForRules == "" {
+		textForRules = userText
+	}
+	routeReq := ai.CommentRouteRequest{
+		RawComment:        v.Text,
+		NormalizedText:    userText,
+		CleanedText:       mentionControl.CleanedText,
+		MentionTarget:     mentionControl.TargetText,
+		HasExplicitTarget: mentionControl.HasExplicitTarget,
+	}
+	if command, ok := ParseImageCommand(textForRules); ok && !looksLikeImageDiscussion(textForRules) {
+		routeReq.RuleImageCandidate = true
+		routeReq.RuleImagePrompt = command.Prompt
+		if command.UsePostContext || command.UseCommentContext || command.UseImageInput {
+			routeReq.RuleImagePrompt = defaultContextImagePrompt(command)
+		}
+		routeReq.RuleNeedsPostContext = command.UsePostContext
+		routeReq.RuleNeedsCommentContext = command.UseCommentContext
+		routeReq.RuleNeedsImageInput = command.UseImageInput
+		return routeReq
+	}
+	routeReq.RuleNeedsPostContext = wantsPostContext(textForRules)
+	routeReq.RuleNeedsCommentContext = wantsCommentContext(textForRules)
+	routeReq.RuleNeedsImageInput = wantsImageInput(textForRules)
+	return routeReq
+}
+
+func processRoutedImageComment(v db.CommStruct, mentionControl MentionControl, route *ai.CommentRouteResult) bool {
+	result := ProcessImageGenerationComment(v.LinkID, v.CommentID, v.RootID, v.Uid, mentionControl.CleanedText, ImageCommentOptions{TriggerUserName: v.UserName, MentionTargetText: mentionControl.TargetText, Route: route})
+	if result.Err != nil {
+		loger.Loger.Error("[XHH]图片评论处理失败", zap.Error(result.Err), zap.Int("comment_id", v.CommentID), zap.Int("link_id", v.LinkID))
+		if result.Handled {
+			return true
+		}
+		return replyWithAiComment(v, mentionControl)
+	}
+	if result.Handled {
+		return result.OK
+	}
+	return replyWithAiComment(v, mentionControl)
+}
+
+func replyWithAiComment(v db.CommStruct, mentionControl MentionControl) bool {
+	Info, top, tags, mention := GetLinkInfo(v.LinkID, v.RootID, v.CommentID, v.Uid)
+	if len(Info) <= 1 {
+		loger.Loger.Info("[XHH]无法整理@消息，已标记完成避免阻塞", zap.Int("comment_id", v.CommentID), zap.Int("link_id", v.LinkID))
+		return true
+	}
+	Info = appendOwnerContext(Info, v.Uid)
+	mentionTrigger := ShouldMentionTarget(v.Text)
+	mentionTarget := mention != "" && mentionTrigger
+	loger.Loger.Info("[XHH]Mention decision", zap.Bool("trigger", mentionTrigger), zap.Bool("hasMention", mention != ""))
+	ReplyText := ai.GetAiReply(Info, mentionControl.CleanedText, top, tags, zap.Int("msg_id", v.MsgID), zap.Int("comment_id", v.CommentID), zap.Int("link_id", v.LinkID), zap.Int("user_id", v.Uid), zap.String("user_name", v.UserName), zap.String("question", mentionControl.CleanedText), zap.String("raw_question", v.Text))
+	if ReplyText == "" {
+		loger.Loger.Info("[XHH]Ai返回错误")
+		return false
+	}
+	explicitMention := ""
+	if mentionControl.TargetText != "" {
+		explicitMention = GetExplicitMentionFromPost(v.LinkID, "艾特"+mentionControl.TargetText, v.Uid)
+	}
+	if explicitMention == "" {
+		explicitMention = GetExplicitMentionFromPost(v.LinkID, mentionControl.CleanedText, v.Uid)
+	}
+	if explicitMention != "" {
+		ReplyText = explicitMention + " " + ReplyText
+	} else if mentionTarget {
+		ReplyText = mention + " " + ReplyText
+	}
+	return Reply(ReplyText, strconv.Itoa(v.LinkID), strconv.Itoa(v.CommentID), strconv.Itoa(v.RootID), "")
 }

@@ -104,6 +104,13 @@ func TestParseImageCommand(t *testing.T) {
 			wantCommentCtx: true,
 		},
 		{
+			name:           "current floor with comment details",
+			text:           "@小猫娘喵喵 根据这层楼生成一张图片，要求有评论内的昵称以及掐架环节",
+			wantOK:         true,
+			wantPrompt:     "要求有评论内的昵称以及掐架环节",
+			wantCommentCtx: true,
+		},
+		{
 			name:           "similar image input",
 			text:           "@小猫娘喵喵 根据这张图片生成类似的图片",
 			wantOK:         true,

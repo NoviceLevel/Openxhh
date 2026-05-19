@@ -20,6 +20,7 @@ type ImageCommentOptions struct {
 	MockImage         bool
 	TriggerUserName   string
 	MentionTargetText string
+	Route             *ai.CommentRouteResult
 }
 
 type ImageCommentResult struct {
@@ -44,12 +45,49 @@ func HandleImageGenerationComment(linkID, commentID, rootID, userID int, userNam
 	return result.Handled, result.OK
 }
 
+func imageCommandFromRoute(route *ai.CommentRouteResult) (ImageCommand, bool) {
+	if route == nil || route.Action != ai.CommentRouteActionImage || strings.TrimSpace(route.ImagePrompt) == "" {
+		return ImageCommand{}, false
+	}
+	prompt := strings.TrimSpace(route.ImagePrompt)
+	return ImageCommand{
+		Prompt:            prompt,
+		RawPrompt:         prompt,
+		Trigger:           "ai_route",
+		UsePostContext:    route.NeedsPostContext,
+		UseCommentContext: route.NeedsCommentContext,
+		UseImageInput:     route.NeedsImageInput || route.WantsSimilarImage,
+		MentionTargetText: route.MentionTarget,
+	}, true
+}
+
+func applyRouteToImageCommand(command *ImageCommand, route *ai.CommentRouteResult) {
+	if command == nil || route == nil || route.Action != ai.CommentRouteActionImage {
+		return
+	}
+	if prompt := strings.TrimSpace(route.ImagePrompt); prompt != "" {
+		command.Prompt = prompt
+		command.RawPrompt = prompt
+	}
+	if route.MentionTarget != "" {
+		command.MentionTargetText = route.MentionTarget
+	}
+	command.UsePostContext = command.UsePostContext || route.NeedsPostContext
+	command.UseCommentContext = command.UseCommentContext || route.NeedsCommentContext
+	command.UseImageInput = command.UseImageInput || route.NeedsImageInput || route.WantsSimilarImage
+}
+
 func ProcessImageGenerationComment(linkID, commentID, rootID, userID int, text string, options ImageCommentOptions) ImageCommentResult {
 	command, ok := ParseImageCommand(text)
 	if !ok {
-		return ImageCommentResult{}
+		command, ok = imageCommandFromRoute(options.Route)
+		if !ok {
+			return ImageCommentResult{}
+		}
+	} else {
+		applyRouteToImageCommand(&command, options.Route)
 	}
-	if options.MentionTargetText != "" {
+	if command.MentionTargetText == "" && options.MentionTargetText != "" {
 		command.MentionTargetText = options.MentionTargetText
 	}
 	prompt := command.Prompt
@@ -64,33 +102,35 @@ func ProcessImageGenerationComment(linkID, commentID, rootID, userID int, text s
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
-	intent, err := ai.UnderstandImageIntent(ctx, ai.ImageIntentRequest{
-		RawComment:        text,
-		NormalizedText:    text,
-		CleanedText:       text,
-		MentionTarget:     options.MentionTargetText,
-		UsePostContext:    command.UsePostContext,
-		UseCommentContext: command.UseCommentContext,
-		UseImageInput:     command.UseImageInput,
-	})
-	if err != nil {
-		loger.Loger.Warn("[XHH]文本模型理解生图意图失败，使用规则兜底", zap.Error(err))
-	} else if !intent.IsImageRequest {
-		if !shouldFallbackImageIntent(command, text) {
-			return ImageCommentResult{}
+	if options.Route == nil || options.Route.Action != ai.CommentRouteActionImage {
+		intent, err := ai.UnderstandImageIntent(ctx, ai.ImageIntentRequest{
+			RawComment:        text,
+			NormalizedText:    text,
+			CleanedText:       text,
+			MentionTarget:     command.MentionTargetText,
+			UsePostContext:    command.UsePostContext,
+			UseCommentContext: command.UseCommentContext,
+			UseImageInput:     command.UseImageInput,
+		})
+		if err != nil {
+			loger.Loger.Warn("[XHH]文本模型理解生图意图失败，使用规则兜底", zap.Error(err))
+		} else if !intent.IsImageRequest {
+			if !shouldFallbackImageIntent(command, text) {
+				return ImageCommentResult{}
+			}
+			loger.Loger.Warn("[XHH]文本模型未判定为生图，但规则判断为明确生图请求，使用规则兜底", zap.String("reason", intent.Reason))
+		} else {
+			if strings.TrimSpace(intent.ImagePrompt) != "" {
+				prompt = intent.ImagePrompt
+				generationPrompt = intent.ImagePrompt
+			}
+			if intent.MentionTarget != "" {
+				command.MentionTargetText = intent.MentionTarget
+			}
+			command.UsePostContext = command.UsePostContext || intent.NeedsPostContext
+			command.UseCommentContext = command.UseCommentContext || intent.NeedsCommentContext
+			command.UseImageInput = command.UseImageInput || intent.NeedsImageInput || intent.WantsSimilarImage
 		}
-		loger.Loger.Warn("[XHH]文本模型未判定为生图，但规则判断为明确生图请求，使用规则兜底", zap.String("reason", intent.Reason))
-	} else {
-		if strings.TrimSpace(intent.ImagePrompt) != "" {
-			prompt = intent.ImagePrompt
-			generationPrompt = intent.ImagePrompt
-		}
-		if intent.MentionTarget != "" {
-			command.MentionTargetText = intent.MentionTarget
-		}
-		command.UsePostContext = command.UsePostContext || intent.NeedsPostContext
-		command.UseCommentContext = command.UseCommentContext || intent.NeedsCommentContext
-		command.UseImageInput = command.UseImageInput || intent.NeedsImageInput || intent.WantsSimilarImage
 	}
 
 	started := time.Now()
@@ -100,8 +140,13 @@ func ProcessImageGenerationComment(linkID, commentID, rootID, userID int, text s
 	}
 	generationPrompt = BuildContextualImagePrompt(generationPrompt, command, contents)
 	if command.UseImageInput {
+		if len(contents) == 0 {
+			loger.Loger.Warn("[XHH]用户要求参考图片，但没有获取到图片内容")
+			return ImageCommentResult{}
+		}
 		if visionText, visionErr := ai.DescribeImagesForGeneration(ctx, contents, generationPrompt); visionErr != nil {
-			loger.Loger.Warn("[XHH]图片理解失败，继续使用文本 prompt", zap.Error(visionErr))
+			loger.Loger.Warn("[XHH]图片理解失败，回落普通文本回复", zap.Error(visionErr))
+			return ImageCommentResult{}
 		} else if strings.TrimSpace(visionText) != "" {
 			generationPrompt = generationPrompt + "\n图片理解内容：" + visionText
 		}

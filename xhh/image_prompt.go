@@ -29,11 +29,18 @@ func BuildContextualImagePrompt(basePrompt string, command ImageCommand, content
 
 func selectImageContextText(contents []ai.Content, command ImageCommand) string {
 	var parts []string
+	seenCommentContext := false
 	for _, content := range contents {
 		if content.Type != "text" || strings.TrimSpace(content.Text) == "" {
 			continue
 		}
 		text := strings.TrimSpace(content.Text)
+		if isCommentContextText(text) {
+			seenCommentContext = true
+		}
+		if command.UseCommentContext && !command.UsePostContext && !seenCommentContext {
+			continue
+		}
 		if !command.UseCommentContext && isCommentContextText(text) {
 			continue
 		}

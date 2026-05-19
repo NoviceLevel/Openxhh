@@ -107,19 +107,20 @@ func extractImagePromptWithTrigger(text string) (string, string, bool) {
 }
 
 func looksLikeImageIntent(text string, prompt string) bool {
-	textTaskWords := []string{"回复", "文案", "文章", "摘要", "总结", "代码", "脚本", "表格", "清单", "标题", "评论"}
+	imageWords := []string{"图", "图片", "画像", "照片", "海报", "插画", "壁纸", "头像", "表情包", "梗图", "封面", "猫", "狗", "猫娘", "角色", "人物", "女孩", "男孩", "少女", "少年", "机器人", "怪物", "动物"}
+	for _, word := range imageWords {
+		if strings.Contains(text, word) || strings.Contains(prompt, word) {
+			return true
+		}
+	}
+
+	textTaskWords := []string{"回复", "文案", "摘要", "总结", "代码", "脚本", "表格", "清单", "标题"}
 	for _, word := range textTaskWords {
 		if strings.Contains(prompt, word) {
 			return false
 		}
 	}
 
-	imageWords := []string{"图", "图片", "画像", "照片", "海报", "插画", "壁纸", "头像", "表情包", "梗图", "封面", "画", "猫", "狗", "猫娘", "角色", "人物", "女孩", "男孩", "少女", "少年", "机器人", "怪物", "动物"}
-	for _, word := range imageWords {
-		if strings.Contains(text, word) || strings.Contains(prompt, word) {
-			return true
-		}
-	}
 	measureWords := []string{"一张", "一幅", "一只", "一位", "张", "幅", "只", "位"}
 	for _, word := range measureWords {
 		if strings.Contains(text, word) {

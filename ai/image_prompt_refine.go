@@ -76,6 +76,25 @@ func RefineImagePrompt(ctx context.Context, req ImagePromptRefineRequest) (Image
 	}
 
 	started := time.Now()
+	var lastErr error
+	for attempt := 1; attempt <= chatCompletionAttempts; attempt++ {
+		result, err := refineImagePromptOnce(ctx, payload)
+		if err == nil {
+			loger.Loger.Info("[Image]文本模型已优化生图 prompt", zap.Int("prompt_chars", len([]rune(result.ImagePrompt))), zap.Duration("duration", time.Since(started)))
+			return result, nil
+		}
+		lastErr = err
+		if !shouldRetryChatCompletionError(err) || attempt == chatCompletionAttempts {
+			return ImagePromptRefineResult{}, fmt.Errorf("prompt refine request failed after %s: %w", time.Since(started).Round(time.Second), err)
+		}
+		if err := waitForChatCompletionRetry(ctx, attempt); err != nil {
+			return ImagePromptRefineResult{}, err
+		}
+	}
+	return ImagePromptRefineResult{}, lastErr
+}
+
+func refineImagePromptOnce(ctx context.Context, payload []byte) (ImagePromptRefineResult, error) {
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", promptRefineBaseURL(), bytes.NewReader(payload))
 	if err != nil {
 		return ImagePromptRefineResult{}, err
@@ -87,7 +106,7 @@ func RefineImagePrompt(ctx context.Context, req ImagePromptRefineRequest) (Image
 
 	resp, err := http.DefaultClient.Do(httpReq)
 	if err != nil {
-		return ImagePromptRefineResult{}, fmt.Errorf("prompt refine request failed after %s: %w", time.Since(started).Round(time.Second), err)
+		return ImagePromptRefineResult{}, err
 	}
 	defer resp.Body.Close()
 
@@ -96,7 +115,7 @@ func RefineImagePrompt(ctx context.Context, req ImagePromptRefineRequest) (Image
 		return ImagePromptRefineResult{}, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return ImagePromptRefineResult{}, fmt.Errorf("prompt refine request failed: status=%d body=%s", resp.StatusCode, limitRefineString(string(data), 300))
+		return ImagePromptRefineResult{}, chatCompletionStatusError{statusCode: resp.StatusCode, body: limitRefineString(string(data), 300)}
 	}
 
 	var parsed promptRefineResponse
@@ -106,13 +125,7 @@ func RefineImagePrompt(ctx context.Context, req ImagePromptRefineRequest) (Image
 	if len(parsed.Choices) == 0 || strings.TrimSpace(parsed.Choices[0].Message.Content) == "" {
 		return ImagePromptRefineResult{}, errors.New("prompt refine response has no content")
 	}
-
-	result, err := ParseImagePromptRefineContent(parsed.Choices[0].Message.Content)
-	if err != nil {
-		return ImagePromptRefineResult{}, err
-	}
-	loger.Loger.Info("[Image]文本模型已优化生图 prompt", zap.Int("prompt_chars", len([]rune(result.ImagePrompt))), zap.Duration("duration", time.Since(started)))
-	return result, nil
+	return ParseImagePromptRefineContent(parsed.Choices[0].Message.Content)
 }
 
 func ParseImagePromptRefineContent(content string) (ImagePromptRefineResult, error) {
