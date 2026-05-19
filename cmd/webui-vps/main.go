@@ -3,9 +3,11 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
+	"database/sql"
 	_ "embed"
 	"encoding/base64"
 	"encoding/hex"
@@ -17,6 +19,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -25,6 +28,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+	_ "github.com/mattn/go-sqlite3"
 )
 
 const defaultAddr = ":29173"
@@ -151,6 +157,7 @@ func main() {
 	mux.HandleFunc("/api/start", state.requireAuth(state.handleStart))
 	mux.HandleFunc("/api/stop", state.requireAuth(state.handleStop))
 	mux.HandleFunc("/api/restart", state.requireAuth(state.handleRestart))
+	mux.HandleFunc("/api/messages/regenerate", state.requireAuth(state.handleRegenerateMessage))
 	mux.HandleFunc("/api/logs", state.requireAuth(state.handleLogs))
 	mux.HandleFunc("/api/logs/read", state.requireAuth(state.handleReadLog))
 
@@ -817,18 +824,19 @@ function setPath(obj,path,value){const parts=path.split('.');let cur=obj;for(let
 async function loadLogs(){const data=await api('/api/logs');const files=data.files||[];const previous=currentLog;logSelect.innerHTML='';for(const file of files){const option=document.createElement('option');option.value=file.name;option.textContent=(file.label||file.name)+(file.size?' · '+formatBytes(file.size):'')+(file.modTime?' · '+file.modTime:'');logSelect.appendChild(option)}currentLog=files.some(file=>file.name===previous)?previous:(files[0]?.name||'');logSelect.value=currentLog;currentLogLabel=logSelect.selectedOptions[0]?.textContent||currentLog;await loadCurrentLog()}
 async function loadCurrentLog(){if(logPaused||hasLogSelection())return;if(!currentLog){renderLog('');return}try{const data=await api('/api/logs/read?file='+encodeURIComponent(currentLog));renderLog(data.content||'')}catch(err){renderLog('日志读取失败: '+err.message)}}
 
-function renderLog(content){rawLogContent=content||'';const box=logOutput.parentElement;const scrollTop=box.scrollTop;const shouldScrollLatest=logScrollLatestOnce;logScrollLatestOnce=false;document.querySelector('#currentSource').textContent=currentLogLabel||'暂无日志源';renderLogLines(filterLogContent(rawLogContent));box.scrollTop=shouldScrollLatest?box.scrollHeight:Math.min(scrollTop,box.scrollHeight);const lines=rawLogContent?rawLogContent.split('\n').filter(Boolean):[];const interactions=dedupeInteractions(parseInteractions(lines));const completed=interactions.filter(item=>item.status==='已回复'&&item.question&&item.reply);const failed=interactions.filter(item=>item.status==='失败'&&item.question&&item.reply).length;const pending=interactions.filter(item=>item.status==='待回复'||item.status==='待重试').length;const records=interactions.filter(item=>(item.status==='已回复'||item.status==='失败')&&item.question&&item.reply);document.querySelector('#metricStatus').textContent=interactions.length;document.querySelector('#metricLines').textContent=completed.length;document.querySelector('#metricErrors').textContent=failed;document.querySelector('#metricFiles').textContent=pending;renderRecords(records.slice(-20).reverse());renderTrend(completed);renderTokenRecords(completed)}
-function renderRecords(items){recordsBody.innerHTML='';if(!items.length){const row=document.createElement('tr');const cell=document.createElement('td');cell.colSpan=5;cell.textContent='暂无可识别的用户提问/机器人回复记录';row.appendChild(cell);recordsBody.appendChild(row);return}for(const item of items){const row=document.createElement('tr');appendCell(row,item.time);appendCell(row,item.user||'未知用户');appendCell(row,item.question,'content-cell');appendCell(row,item.reply||'—','content-cell');const statusCell=document.createElement('td');const badge=document.createElement('span');badge.className='badge '+(item.status==='已回复'?'ok':item.status==='失败'?'error':'warn');badge.textContent=item.status;statusCell.appendChild(badge);const copyBtn=document.createElement('button');copyBtn.type='button';copyBtn.className='copy-btn';copyBtn.textContent='复制';copyBtn.addEventListener('click',async()=>{await copyText(recordText(item));copyBtn.textContent='已复制';setTimeout(()=>copyBtn.textContent='复制',900)});statusCell.appendChild(copyBtn);row.appendChild(statusCell);recordsBody.appendChild(row)}}
+function renderLog(content){rawLogContent=content||'';const box=logOutput.parentElement;const scrollTop=box.scrollTop;const shouldScrollLatest=logScrollLatestOnce;logScrollLatestOnce=false;document.querySelector('#currentSource').textContent=currentLogLabel||'暂无日志源';renderLogLines(filterLogContent(rawLogContent));box.scrollTop=shouldScrollLatest?box.scrollHeight:Math.min(scrollTop,box.scrollHeight);const lines=rawLogContent?rawLogContent.split('\n').filter(Boolean):[];const interactions=dedupeInteractions(parseInteractions(lines));const completed=interactions.filter(item=>item.status==='已回复'&&item.question&&item.reply);const failed=interactions.filter(item=>isErrorStatus(item.status)&&item.question&&item.reply).length;const pending=interactions.filter(item=>item.status==='待回复'||item.status==='待重试').length;const records=interactions.filter(item=>(item.status==='已回复'||isErrorStatus(item.status))&&item.question&&item.reply);document.querySelector('#metricStatus').textContent=interactions.length;document.querySelector('#metricLines').textContent=completed.length;document.querySelector('#metricErrors').textContent=failed;document.querySelector('#metricFiles').textContent=pending;renderRecords(records.slice(-20).reverse());renderTrend(completed);renderTokenRecords(interactions.filter(item=>item.tokens))}
+function renderRecords(items){recordsBody.innerHTML='';if(!items.length){const row=document.createElement('tr');const cell=document.createElement('td');cell.colSpan=5;cell.textContent='暂无可识别的用户提问/机器人回复记录';row.appendChild(cell);recordsBody.appendChild(row);return}for(const item of items){const row=document.createElement('tr');appendCell(row,item.time);appendCell(row,item.user||'未知用户');appendCell(row,item.question,'content-cell');appendCell(row,item.reply||'—','content-cell');const statusCell=document.createElement('td');const badge=document.createElement('span');badge.className='badge '+(item.status==='已回复'?'ok':isErrorStatus(item.status)?'error':'warn');badge.textContent=item.status;statusCell.appendChild(badge);const copyBtn=document.createElement('button');copyBtn.type='button';copyBtn.className='copy-btn';copyBtn.textContent='复制';copyBtn.addEventListener('click',async()=>{await copyText(recordText(item));copyBtn.textContent='已复制';setTimeout(()=>copyBtn.textContent='复制',900)});statusCell.appendChild(copyBtn);row.appendChild(statusCell);recordsBody.appendChild(row)}}
 function renderLogLines(content){const selectedLines=selectedLogLineIndexes();logOutput.innerHTML='';logOutput.dataset.raw=content||'';logOutput.classList.toggle('empty',!content);if(!content){logOutput.textContent='暂无日志。';lastSelectedLogLine=-1;return}content.split('\n').forEach((line,index)=>{const item=document.createElement('span');item.className='log-line';item.dataset.index=String(index);item.textContent=line||' ';item.title='点击选择这一行，Shift 点击选择范围，再点复制选中';item.classList.toggle('selected',selectedLines.has(index));item.addEventListener('click',event=>toggleLogLineSelection(index,event.shiftKey));logOutput.appendChild(item)})}
 function rerenderCurrentLog(){clearLogLineSelection();window.getSelection()?.removeAllRanges();renderLog(rawLogContent)}
 function filterLogContent(content){if(!content)return'';const mode=logFilter?.value||'all';const keyword=(logKeyword?.value||'').trim().toLowerCase();return content.split('\n').filter(line=>matchesLogFilter(line,mode)&&(!keyword||line.toLowerCase().includes(keyword))).join('\n')}
 function matchesLogFilter(line,mode){switch(mode){case'error':return isFailureLine(line);case'ask':return line.includes('[Ai]正在询问Ai');case'reply':return line.includes('[Ai]Ai说：');case'image':return /图片|生图|画图|生成图片|image|upload|imgs/i.test(line);default:return true}}
 function appendCell(row,text,className){const cell=document.createElement('td');if(className){cell.className=className;const inner=document.createElement('div');inner.className='clip-cell';inner.textContent=text||'—';cell.appendChild(inner)}else{cell.textContent=text||'—'}row.appendChild(cell)}
 function renderTokenRecords(items){const totalEl=document.querySelector('#tokenTotal');const hourEl=document.querySelector('#tokenHour');const dayEl=document.querySelector('#tokenDay');const now=Date.now();let total=0;let hour=0;let day=0;for(const item of items){if(!item.tokens)continue;total+=item.tokens;const time=parseItemTime(item.time);if(!time)continue;const age=now-time.getTime();if(age>=0&&age<=3600000)hour+=item.tokens;if(age>=0&&age<=86400000)day+=item.tokens}if(totalEl)totalEl.textContent=formatCount(total);if(hourEl)hourEl.textContent=formatCount(hour);if(dayEl)dayEl.textContent=formatCount(day)}
-function parseInteractions(lines){const items=[];let pending=null;for(const line of lines){if(line.includes('[Ai]正在询问Ai')){const next=parseQuestionLine(line);if(pending&&pending.question){if(sameInteraction(pending,next))continue;items.push(finalizePending(pending))}pending=next;continue}if(line.includes('[Ai]Ai说：')){if(!pending||!pending.question){pending=null;continue}pending.reply=extractJsonField(line,'text')||stripLogPrefix(line);pending.tokens=extractToken(line);pending.status='已回复';items.push(pending);pending=null;continue}if(isFailureLine(line)&&pending&&pending.question&&!pending.lastError){pending.lastError=stripLogPrefix(line);pending.status='待重试'}}if(pending&&pending.question)items.push(finalizePending(pending));return items}
+function parseInteractions(lines){const items=[];let pending=null;let lastAnswered=null;for(const line of lines){if(line.includes('[Ai]正在询问Ai')){const next=parseQuestionLine(line);if(pending&&pending.question){if(sameInteraction(pending,next))continue;items.push(finalizePending(pending))}pending=next;continue}if(line.includes('[Ai]Ai说：')){if(!pending||!pending.question){pending=null;continue}pending.reply=extractJsonField(line,'text')||stripLogPrefix(line);pending.tokens=extractToken(line);pending.status='已回复';items.push(pending);lastAnswered=pending;pending=null;continue}if(isSendAnomalyLine(line)&&lastAnswered&&lastAnswered.status==='已回复'){lastAnswered.status='异常发送';lastAnswered.lastError=stripLogPrefix(line);continue}if(isFailureLine(line)&&pending&&pending.question&&!pending.lastError){pending.lastError=stripLogPrefix(line);pending.status='待重试'}}if(pending&&pending.question)items.push(finalizePending(pending));return items}
 function dedupeInteractions(items){const result=[];for(const item of items){const last=result[result.length-1];if(last&&sameInteraction(last,item)){if(last.status==='失败'&&item.status==='已回复'){result[result.length-1]=item;continue}if(last.status===item.status){last.reply=item.reply||last.reply;last.tokens=item.tokens||last.tokens;last.time=item.time||last.time;continue}}result.push(item)}return result}
 function sameInteraction(a,b){return normalizeText(a?.user)===normalizeText(b?.user)&&normalizeText(a?.question)===normalizeText(b?.question)}
 function finalizePending(item){if(item.status==='待重试'||item.lastError){item.reply=item.lastError||item.reply||'AI 回复失败';item.status='失败'}return item}
+function isErrorStatus(status){return status==='失败'||status==='异常发送'}
 function parseQuestionLine(line){const content=extractContentArray(line);const userQuestion=extractUserQuestion(content);return{time:extractTime(line),user:userQuestion.user,question:userQuestion.question,reply:'',status:'待回复'}}
 function extractUserQuestion(content){const candidates=[];for(const item of content){const text=item&&item.text;if(!text||!/评论.*上下文/.test(text))continue;for(const line of text.split('\n')){const parsed=parseContextLine(line);if(parsed)candidates.push(parsed)}}if(!candidates.length)return{user:'未知用户',question:''};const mentioned=[...candidates].reverse().find(item=>item.text.includes('@'));const picked=mentioned||candidates[candidates.length-1];return{user:picked.user||'未知用户',question:picked.text||''}}
 function extractContentArray(line){const obj=parseZapJSON(line);if(obj&&Array.isArray(obj.Content))return obj.Content;return[]}
@@ -838,6 +846,7 @@ function extractUserFromContent(content,question){let fallback='未知用户';co
 function parseContextLine(line){const trimmed=cleanText(line);let match=trimmed.match(/^(.+?) 回复 .+?：(.+)$/);if(match)return{user:match[1],text:match[2]};match=trimmed.match(/^(.+?)：(.+)$/);if(match)return{user:match[1],text:match[2]};return null}
 function extractJsonField(line,field){const obj=parseZapJSON(line);if(!obj)return'';return cleanText(obj[field]||'')}
 function extractToken(line){const obj=parseZapJSON(line);if(!obj)return 0;const value=obj['本次消耗token']??obj.total_tokens??obj.totalToken??obj.tokens;const token=Number(value);return Number.isFinite(token)&&token>0?token:0}
+function isSendAnomalyLine(line){return /异常发送|因为无法评论|评论发送失败|comment\/create image reply failed/i.test(line)&&!line.includes('[Ai]正在询问Ai')}
 function isFailureLine(line){return /Ai返回错误|无法回复评论|评论发送失败|图片评论处理失败|无法整理@消息|comment\/create image reply failed|error|failed|panic|fatal|错误|失败|异常/i.test(line)&&!line.includes('[Ai]正在询问Ai')}
 function extractTime(line){const match=line.match(/(20\d{2}-\d{2}-\d{2})(?:[ T](\d{2}:\d{2}:\d{2}))?/);return match?match[1]+(match[2]?' '+match[2]:''):'—'}
 function stripLogPrefix(line){return cleanText(line.replace(/^.*?\]\s*/,''))}

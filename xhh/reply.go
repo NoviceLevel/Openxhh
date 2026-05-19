@@ -73,7 +73,7 @@ func createComment(text, link_id, reply_id, root_id, iscy, imageURL string) (iso
 				loger.Loger.Fatal("[XHH]不可能发生的事", zap.Error(err), zap.Any("info", resps), zap.Any("errs", reply_id))
 			}
 			db.Replyed(CommentID)
-			loger.Loger.Info("[XHH]因为无法评论，所以已标记为完成", zap.Any("Resp", resps))
+			loger.Loger.Warn("[XHH]异常发送：AI回复已生成但评论发送失败，已标记完成避免重复发送", zap.Any("Resp", resps), zap.String("link_id", link_id), zap.String("reply_id", reply_id), zap.String("root_id", root_id))
 			time.Sleep(5 * time.Second)
 			return true
 		}
