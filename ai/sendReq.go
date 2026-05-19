@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"openxhh/config"
 	"openxhh/loger"
+	"strings"
 
 	"go.uber.org/zap"
 )
@@ -27,9 +28,38 @@ type SysMsg struct {
 	Content string `json:"content"`
 }
 type BodyStruct struct {
-	Model  string `json:"model"`
-	Msgs   []any  `json:"messages"`
-	Stream bool   `json:"stream"`
+	Model            string            `json:"model"`
+	Msgs             []any             `json:"messages,omitempty"`
+	Stream           bool              `json:"stream"`
+	WebSearchOptions *webSearchOptions `json:"web_search_options,omitempty"`
+}
+
+type webSearchOptions struct {
+	SearchContextSize string `json:"search_context_size,omitempty"`
+}
+
+type responsesBodyStruct struct {
+	Model      string              `json:"model"`
+	Input      []responsesInputMsg `json:"input"`
+	Tools      []responsesWebTool  `json:"tools,omitempty"`
+	ToolChoice string              `json:"tool_choice,omitempty"`
+	Stream     bool                `json:"stream"`
+}
+
+type responsesInputMsg struct {
+	Role    string `json:"role"`
+	Content any    `json:"content"`
+}
+
+type responsesInputContent struct {
+	Type     string `json:"type"`
+	Text     string `json:"text,omitempty"`
+	ImageURL string `json:"image_url,omitempty"`
+}
+
+type responsesWebTool struct {
+	Type              string `json:"type"`
+	SearchContextSize string `json:"search_context_size,omitempty"`
 }
 
 type choice struct {
@@ -48,15 +78,32 @@ type respStruct struct {
 	} `json:"usage"`
 }
 
+type rawMsg struct {
+	Role    string          `json:"role"`
+	Content json.RawMessage `json:"content"`
+}
+
+type responsesRespStruct struct {
+	OutputText string `json:"output_text"`
+	Output     []struct {
+		Type    string `json:"type"`
+		Role    string `json:"role"`
+		Content []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"content"`
+	} `json:"output"`
+	Usage struct {
+		TotalToken int `json:"total_tokens"`
+	} `json:"usage"`
+}
+
 func SendReq(Model string, Msg []any) (Jresp respStruct) {
 	if Model == "" {
 		loger.Loger.Fatal("[Ai]请确保配置文件中的模型是存在的")
 	}
-	var body BodyStruct
-	body.Model = Model
-	body.Msgs = Msg
 	cfg := config.ConfigStruct.Ai
-	reqbody, err := json.Marshal(body)
+	reqbody, err := buildReqBody(Model, Msg)
 	if err != nil {
 		loger.Loger.Error("[AI]无法序列化JSON", zap.Error(err))
 		return
@@ -74,9 +121,22 @@ func SendReq(Model string, Msg []any) (Jresp respStruct) {
 		loger.Loger.Error("[AI]请求失败！", zap.Error(err))
 		return
 	}
+	defer resp.Body.Close()
 
 	Dresp, err := io.ReadAll(resp.Body)
-	err = json.Unmarshal(Dresp, &Jresp)
+	if err != nil {
+		loger.Loger.Error("[AI]无法读取响应", zap.Error(err))
+		return
+	}
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		loger.Loger.Error("[Ai]Ai返回HTTP错误", zap.Int("status", resp.StatusCode), zap.String("body", limitRefineString(string(Dresp), 500)))
+		return
+	}
+	if useResponsesAPI(cfg.BaseUrl) {
+		Jresp, err = parseResponsesResp(Dresp)
+	} else {
+		err = json.Unmarshal(Dresp, &Jresp)
+	}
 	if err != nil {
 		loger.Loger.Error("[Ai]无法反序列化JSON", zap.Error(err), zap.String("body", string(Dresp)))
 		return
@@ -87,4 +147,155 @@ func SendReq(Model string, Msg []any) (Jresp respStruct) {
 	}
 	return Jresp
 
+}
+
+func buildReqBody(Model string, Msg []any) ([]byte, error) {
+	cfg := config.ConfigStruct.Ai
+	if useResponsesAPI(cfg.BaseUrl) {
+		input, err := toResponsesInput(Msg)
+		if err != nil {
+			return nil, err
+		}
+		body := responsesBodyStruct{
+			Model:  Model,
+			Input:  input,
+			Stream: false,
+		}
+		if aiWebSearchEnabled() {
+			body.Tools = []responsesWebTool{{Type: "web_search", SearchContextSize: aiSearchContextSize()}}
+			if aiForceWebSearchEnabled() {
+				body.ToolChoice = "required"
+			}
+		}
+		return json.Marshal(body)
+	}
+
+	body := BodyStruct{
+		Model:  Model,
+		Msgs:   Msg,
+		Stream: false,
+	}
+	if aiWebSearchEnabled() {
+		body.WebSearchOptions = &webSearchOptions{SearchContextSize: aiSearchContextSize()}
+	}
+	return json.Marshal(body)
+}
+
+func useResponsesAPI(baseURL string) bool {
+	return strings.Contains(strings.ToLower(baseURL), "/responses")
+}
+
+func aiWebSearchEnabled() bool {
+	value := config.ConfigStruct.Ai.WebSearch
+	return value == nil || *value
+}
+
+func aiForceWebSearchEnabled() bool {
+	value := config.ConfigStruct.Ai.ForceWebSearch
+	return value != nil && *value
+}
+
+func aiSearchContextSize() string {
+	size := strings.ToLower(strings.TrimSpace(config.ConfigStruct.Ai.SearchContextSize))
+	switch size {
+	case "low", "medium", "high":
+		return size
+	default:
+		return "medium"
+	}
+}
+
+func toResponsesInput(Msg []any) ([]responsesInputMsg, error) {
+	input := make([]responsesInputMsg, 0, len(Msg))
+	for _, msg := range Msg {
+		data, err := json.Marshal(msg)
+		if err != nil {
+			return nil, err
+		}
+		var raw rawMsg
+		if err := json.Unmarshal(data, &raw); err != nil {
+			return nil, err
+		}
+		role := raw.Role
+		if role == "system" {
+			role = "developer"
+		}
+		content, err := toResponsesContent(raw.Content)
+		if err != nil {
+			return nil, err
+		}
+		input = append(input, responsesInputMsg{
+			Role:    role,
+			Content: content,
+		})
+	}
+	return input, nil
+}
+
+func toResponsesContent(raw json.RawMessage) (any, error) {
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil {
+		return []responsesInputContent{{Type: "input_text", Text: text}}, nil
+	}
+
+	var contents []Content
+	if err := json.Unmarshal(raw, &contents); err != nil {
+		return nil, err
+	}
+	responseContents := make([]responsesInputContent, 0, len(contents))
+	for _, content := range contents {
+		switch content.Type {
+		case "text":
+			responseContents = append(responseContents, responsesInputContent{Type: "input_text", Text: content.Text})
+		case "image_url":
+			if content.ImgUrl.Url != "" {
+				responseContents = append(responseContents, responsesInputContent{Type: "input_image", ImageURL: content.ImgUrl.Url})
+			}
+		default:
+			if content.Text != "" {
+				responseContents = append(responseContents, responsesInputContent{Type: "input_text", Text: content.Text})
+			}
+		}
+	}
+	return responseContents, nil
+}
+
+func parseResponsesResp(data []byte) (respStruct, error) {
+	var responsesResp responsesRespStruct
+	if err := json.Unmarshal(data, &responsesResp); err != nil {
+		return respStruct{}, err
+	}
+
+	text := responsesResp.OutputText
+	if text == "" {
+		var builder strings.Builder
+		for _, output := range responsesResp.Output {
+			if output.Type != "" && output.Type != "message" {
+				continue
+			}
+			for _, content := range output.Content {
+				if content.Text == "" {
+					continue
+				}
+				if content.Type != "" && content.Type != "output_text" && content.Type != "text" {
+					continue
+				}
+				if builder.Len() > 0 {
+					builder.WriteString("\n")
+				}
+				builder.WriteString(content.Text)
+			}
+		}
+		text = builder.String()
+	}
+	if text == "" {
+		return respStruct{}, nil
+	}
+
+	var resp respStruct
+	resp.Choices = []choice{{Index: 0}}
+	resp.Choices[0].Msg.Role = "assistant"
+	resp.Choices[0].Msg.Content = text
+	resp.Usage.TotalToken = responsesResp.Usage.TotalToken
+	return resp, nil
 }

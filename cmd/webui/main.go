@@ -63,10 +63,13 @@ type appConfig struct {
 		Passwd string `json:"passwd"`
 	} `json:"database"`
 	AI struct {
-		Model   string `json:"model"`
-		Prompt  string `json:"prompt"`
-		BaseURL string `json:"baseUrl"`
-		Token   string `json:"token"`
+		Model             string `json:"model"`
+		Prompt            string `json:"prompt"`
+		BaseURL           string `json:"baseUrl"`
+		Token             string `json:"token"`
+		WebSearch         *bool  `json:"webSearch,omitempty"`
+		ForceWebSearch    *bool  `json:"forceWebSearch,omitempty"`
+		SearchContextSize string `json:"searchContextSize"`
 	} `json:"ai"`
 	Image struct {
 		Model           string `json:"model"`
@@ -538,6 +541,14 @@ func applyConfigDefaults(cfg *appConfig) bool {
 		cfg.AI.Prompt = "请根据评论内容自然回复。"
 		changed = true
 	}
+	if cfg.AI.WebSearch == nil {
+		cfg.AI.WebSearch = boolPtr(true)
+		changed = true
+	}
+	if cfg.AI.SearchContextSize == "" {
+		cfg.AI.SearchContextSize = "medium"
+		changed = true
+	}
 	if cfg.Image.Model == "" {
 		cfg.Image.Model = "gpt-image-2"
 		changed = true
@@ -563,6 +574,10 @@ func applyConfigDefaults(cfg *appConfig) bool {
 		changed = true
 	}
 	return changed
+}
+
+func boolPtr(v bool) *bool {
+	return &v
 }
 
 func (s *serverState) handleStart(w http.ResponseWriter, r *http.Request) {
@@ -1174,7 +1189,10 @@ const indexHTML = `<!doctype html>
               <h3>AI 回复</h3>
               <div class="field"><label>模型</label><input class="input" data-path="ai.model"></div>
               <div class="field"><label>Token</label><input class="input" data-path="ai.token" type="password"></div>
-              <div class="field wide"><label>Chat Completions URL</label><input class="input" data-path="ai.baseUrl"><small class="hint">例如：https://xxx.com/v1/chat/completions</small></div>
+              <div class="field wide"><label>Chat Completions / Responses URL</label><input class="input" data-path="ai.baseUrl"><small class="hint">例如：https://xxx.com/v1/chat/completions 或 https://xxx.com/v1/responses</small></div>
+              <label class="switch field wide"><span>启用模型联网搜索</span><input data-path="ai.webSearch" data-type="bool" type="checkbox"></label>
+              <label class="switch field wide"><span>强制每次回复使用联网搜索</span><input data-path="ai.forceWebSearch" data-type="bool" type="checkbox"></label>
+              <div class="field"><label>搜索上下文大小</label><select data-path="ai.searchContextSize"><option value="low">low</option><option value="medium">medium</option><option value="high">high</option></select></div>
               <div class="field wide"><label>回复策略 Prompt</label><textarea data-path="ai.prompt"></textarea></div>
             </div>
             <div class="form-group">

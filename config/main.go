@@ -29,10 +29,13 @@ var ConfigStruct struct {
 		Passwd string `json:"passwd"`
 	} `json:"database"`
 	Ai struct {
-		Model   string `json:"model"`
-		Prompt  string `json:"prompt"`
-		BaseUrl string `json:"baseUrl"`
-		Token   string `json:"token"`
+		Model             string `json:"model"`
+		Prompt            string `json:"prompt"`
+		BaseUrl           string `json:"baseUrl"`
+		Token             string `json:"token"`
+		WebSearch         *bool  `json:"webSearch,omitempty"`
+		ForceWebSearch    *bool  `json:"forceWebSearch,omitempty"`
+		SearchContextSize string `json:"searchContextSize"`
 	} `json:"ai"`
 	Image struct {
 		Model           string `json:"model"`
@@ -120,6 +123,14 @@ func applyDefaults() bool {
 		ConfigStruct.DataBase.Type = "sqlite"
 		changed = true
 	}
+	if ConfigStruct.Ai.WebSearch == nil {
+		ConfigStruct.Ai.WebSearch = boolPtr(true)
+		changed = true
+	}
+	if ConfigStruct.Ai.SearchContextSize == "" {
+		ConfigStruct.Ai.SearchContextSize = "medium"
+		changed = true
+	}
 	if ConfigStruct.Image.Model == "" {
 		ConfigStruct.Image.Model = "gpt-image-2"
 		changed = true
@@ -145,4 +156,8 @@ func applyDefaults() bool {
 		changed = true
 	}
 	return changed
+}
+
+func boolPtr(v bool) *bool {
+	return &v
 }
