@@ -315,11 +315,12 @@ func replyComment(v db.CommStruct) {
 	var isok bool
 	route, routed := routeCommentIntent(v, userText, mentionControl)
 	if routed {
+		route.MentionTarget = resolveRouteMentionTarget(route.MentionTarget, mentionControl.TargetText, userText)
 		if route.MentionTarget != "" {
 			mentionControl.TargetText = route.MentionTarget
 			mentionControl.HasExplicitTarget = true
 		}
-		loger.Loger.Info("[XHH]AI路由完成", zap.Int("msg_id", v.MsgID), zap.String("action", route.Action), zap.String("reason", route.Reason), zap.String("image_prompt", route.ImagePrompt), zap.String("mention_target", route.MentionTarget))
+		loger.Loger.Info("[XHH]AI路由完成", zap.Int("msg_id", v.MsgID), zap.Int("comment_id", v.CommentID), zap.Int("link_id", v.LinkID), zap.Int("user_id", v.Uid), zap.String("user_name", v.UserName), zap.String("action", route.Action), zap.String("reason", route.Reason), zap.String("image_prompt", route.ImagePrompt), zap.String("mention_target", route.MentionTarget), zap.Bool("needs_post_context", route.NeedsPostContext), zap.Bool("needs_comment_context", route.NeedsCommentContext), zap.Bool("needs_image_input", route.NeedsImageInput), zap.Bool("wants_similar_image", route.WantsSimilarImage))
 		switch route.Action {
 		case ai.CommentRouteActionImage:
 			isok = processRoutedImageComment(v, mentionControl, &route)
@@ -358,10 +359,38 @@ func routeCommentIntent(v db.CommStruct, userText string, mentionControl Mention
 	routeReq := buildCommentRouteRequest(v, userText, mentionControl)
 	route, err := ai.RouteCommentIntent(ctx, routeReq)
 	if err != nil {
-		loger.Loger.Warn("[XHH]文本模型路由失败，使用规则兜底", zap.Error(err), zap.Int("msg_id", v.MsgID), zap.Int("comment_id", v.CommentID), zap.Int("link_id", v.LinkID))
+		loger.Loger.Warn("[XHH]文本模型路由失败，使用规则兜底", zap.Error(err), zap.Int("msg_id", v.MsgID), zap.Int("comment_id", v.CommentID), zap.Int("link_id", v.LinkID), zap.Int("user_id", v.Uid), zap.String("user_name", v.UserName), zap.String("raw_text", v.Text), zap.String("normalized_text", userText), zap.String("cleaned_text", mentionControl.CleanedText), zap.String("mention_target", mentionControl.TargetText), zap.Bool("rule_image_candidate", routeReq.RuleImageCandidate), zap.String("rule_image_prompt", routeReq.RuleImagePrompt), zap.Bool("rule_needs_post_context", routeReq.RuleNeedsPostContext), zap.Bool("rule_needs_comment_context", routeReq.RuleNeedsCommentContext), zap.Bool("rule_needs_image_input", routeReq.RuleNeedsImageInput))
 		return ai.CommentRouteResult{}, false
 	}
 	return route, true
+}
+
+func resolveRouteMentionTarget(routeTarget, ruleTarget, userText string) string {
+	ruleTarget = normalizeExplicitMentionTarget(ruleTarget)
+	if ruleTarget != "" {
+		return ruleTarget
+	}
+	routeTarget = normalizeExplicitMentionTarget(routeTarget)
+	if routeTarget == "" || isLeadingWakeMentionTarget(routeTarget, userText) {
+		return ""
+	}
+	return routeTarget
+}
+
+func isLeadingWakeMentionTarget(target, text string) bool {
+	target = normalizeMentionName(target)
+	remaining := strings.TrimSpace(NormalizeCommentText(text))
+	for strings.HasPrefix(remaining, "@") {
+		token := mentionTokenPattern.FindString(remaining)
+		if token == "" || !strings.HasPrefix(remaining, token) {
+			return false
+		}
+		if normalizeMentionName(strings.TrimPrefix(token, "@")) == target {
+			return true
+		}
+		remaining = strings.TrimSpace(strings.TrimPrefix(remaining, token))
+	}
+	return false
 }
 
 func buildCommentRouteRequest(v db.CommStruct, userText string, mentionControl MentionControl) ai.CommentRouteRequest {

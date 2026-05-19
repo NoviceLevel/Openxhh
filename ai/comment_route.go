@@ -59,7 +59,7 @@ func RouteCommentIntent(ctx context.Context, req CommentRouteRequest) (CommentRo
 	}
 	result, err := ParseCommentRouteContent(content, req.MentionTarget)
 	if err != nil {
-		return CommentRouteResult{}, err
+		return CommentRouteResult{}, fmt.Errorf("parse comment route response failed: %w content=%s", err, limitIntentContext(content))
 	}
 	return applyCommentRouteRuleHints(result, req), nil
 }
@@ -146,10 +146,11 @@ func commentRouteSystemPrompt() string {
 3. 如果用户要求“根据正文/文章/帖子/原帖/评论区/这层楼/这张图片”，对应 needs_post_context、needs_comment_context、needs_image_input 必须为 true。
 4. 看图生图、图生图、参考这张图、类似这张图、把这张图改成，都选 image 且 needs_image_input=true。
 5. “艾特谁来看、给谁看、让谁看、回复谁、喊谁来看”属于 mention_target，不要写进 image_prompt。
-6. action=image 时，image_prompt 必须是适合图片生成模型的画面描述，主体优先来自用户指定的上下文来源。
-7. 如果用户要求根据帖子/评论/图片生成，当前路由阶段看不到完整上下文，不要凭空编造主体；image_prompt 应保留“根据帖子内容/当前评论楼层/参考图片生成...”这类上下文指向，后续 prompt refine 会填入细节。
-8. 用户附带的祝福、吐槽、夸奖、安慰、整活短句只作为画面情绪、立场或用途，不要覆盖上下文主体。
-9. 输出 JSON 格式：{"action":"reply","image_prompt":"","mention_target":"","needs_post_context":false,"needs_comment_context":false,"needs_image_input":false,"wants_similar_image":false,"reason":"..."}`
+6. 机器人自己的 @ 只是唤醒标记，绝不能作为 mention_target；mention_target 只能来自用户明确要求艾特、给、让、回复、喊的人名。
+7. action=image 时，image_prompt 必须是适合图片生成模型的画面描述，主体优先来自用户指定的上下文来源。
+8. 如果用户要求根据帖子/评论/图片生成，当前路由阶段看不到完整上下文，不要凭空编造主体；image_prompt 应保留“根据帖子内容/当前评论楼层/参考图片生成...”这类上下文指向，后续 prompt refine 会填入细节。
+9. 用户附带的祝福、吐槽、夸奖、安慰、整活短句只作为画面情绪、立场或用途，不要覆盖上下文主体。
+10. 输出 JSON 格式：{"action":"reply","image_prompt":"","mention_target":"","needs_post_context":false,"needs_comment_context":false,"needs_image_input":false,"wants_similar_image":false,"reason":"..."}`
 }
 
 func buildCommentRoutePrompt(req CommentRouteRequest) string {

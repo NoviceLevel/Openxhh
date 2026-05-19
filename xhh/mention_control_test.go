@@ -40,6 +40,12 @@ func TestParseMentionControl(t *testing.T) {
 			wantTarget:  "张三",
 		},
 		{
+			name:        "target contains me inside username",
+			text:        "生成一只猫，并艾特麻溜转我五块查看",
+			wantCleaned: "生成一只猫",
+			wantTarget:  "麻溜转我五块",
+		},
+		{
 			name:        "do not treat me as target",
 			text:        "@机器人 告诉我这个是什么意思",
 			wantCleaned: "告诉我这个是什么意思",

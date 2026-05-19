@@ -91,6 +91,9 @@ func TestExtractExplicitMentionTargetConversationCommands(t *testing.T) {
 		{text: "@机器人 生图 一只猫，顺便艾特小明看看[cube_点赞]", want: "小明"},
 		{text: "@机器人 并给他看@小猫娘喵喵", want: "小猫娘喵喵"},
 		{text: "@机器人 生成一张图，并艾特小明看@小猫娘喵喵", want: "小明"},
+		{text: "@机器人 生成一只黑丝冷白皮嫌弃颜奶龙，并艾特麻溜转我五块查看", want: "麻溜转我五块"},
+		{text: `<a data-user-id="93872966" href="https://api.xiaoheihe.cn/open_inapp/#heybox://%7B%22protocol_type%22%3A%22openUser%22%2C%22user_id%22%3A%2293872966%22%7D" target="_blank">@小猫娘喵喵</a>要艾特麻溜转我五块查看`, want: "麻溜转我五块"},
+		{text: "@机器人 告诉我这个是什么意思", want: ""},
 		{text: "@机器人 反驳他", want: ""},
 	}
 

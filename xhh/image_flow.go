@@ -87,7 +87,7 @@ func ProcessImageGenerationComment(linkID, commentID, rootID, userID int, text s
 	} else {
 		applyRouteToImageCommand(&command, options.Route)
 	}
-	if command.MentionTargetText == "" && options.MentionTargetText != "" {
+	if options.MentionTargetText != "" {
 		command.MentionTargetText = options.MentionTargetText
 	}
 	prompt := command.Prompt
@@ -124,8 +124,8 @@ func ProcessImageGenerationComment(linkID, commentID, rootID, userID int, text s
 				prompt = intent.ImagePrompt
 				generationPrompt = intent.ImagePrompt
 			}
-			if intent.MentionTarget != "" {
-				command.MentionTargetText = intent.MentionTarget
+			if command.MentionTargetText == "" {
+				command.MentionTargetText = resolveRouteMentionTarget(intent.MentionTarget, "", text)
 			}
 			command.UsePostContext = command.UsePostContext || intent.NeedsPostContext
 			command.UseCommentContext = command.UseCommentContext || intent.NeedsCommentContext
@@ -165,7 +165,7 @@ func ProcessImageGenerationComment(linkID, commentID, rootID, userID int, text s
 		} else {
 			generationPrompt = refined.ImagePrompt
 			if command.MentionTargetText == "" {
-				command.MentionTargetText = refined.MentionTarget
+				command.MentionTargetText = resolveRouteMentionTarget(refined.MentionTarget, "", text)
 			}
 		}
 	}

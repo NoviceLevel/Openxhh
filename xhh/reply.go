@@ -52,13 +52,18 @@ func createComment(text, link_id, reply_id, root_id, iscy, imageURL string) (iso
 		loger.Loger.Error("[XHH]链接发送失败了")
 		return
 	}
+	defer resp.Body.Close()
 	var resps struct {
 		Status string `json:"status"`
 		Msg    string `json:"msg"`
 	}
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
-		loger.Loger.Error("[XHH]无法解析Body", zap.Error(err))
+		loger.Loger.Error("[XHH]无法解析Body", zap.Error(err), zap.Int("status", resp.StatusCode), zap.String("link_id", link_id), zap.String("reply_id", reply_id), zap.String("root_id", root_id), zap.Bool("has_image", imageURL != ""))
+		return false
+	}
+	if !isHTTPSuccess(resp.StatusCode) {
+		loger.Loger.Error("[XHH]评论发送 HTTP 失败", zap.Int("status", resp.StatusCode), zap.String("link_id", link_id), zap.String("reply_id", reply_id), zap.String("root_id", root_id), zap.Bool("has_image", imageURL != ""), zap.String("body", limitXHHResponseBody(string(data))))
 		return false
 	}
 	err = json.Unmarshal(data, &resps)

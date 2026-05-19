@@ -86,9 +86,22 @@ var explicitMentionTargetPatterns = []*regexp.Regexp{
 
 var xhhEmojiPattern = regexp.MustCompile(`\[[^\[\]\s]{1,32}\]`)
 
+const maxXHHResponseLogBytes = 300
+
 func buildMention(uid int, username string) string {
 	id := strconv.Itoa(uid)
 	return `<a data-user-id="` + html.EscapeString(id) + `" href="https://api.xiaoheihe.cn/open_inapp/#heybox://%7B%22protocol_type%22%3A%22openUser%22%2C%22user_id%22%3A%22` + id + `%22%7D" target="_blank">@` + html.EscapeString(username) + `</a> `
+}
+
+func isHTTPSuccess(statusCode int) bool {
+	return statusCode >= 200 && statusCode < 300
+}
+
+func limitXHHResponseBody(body string) string {
+	if len(body) <= maxXHHResponseLogBytes {
+		return body
+	}
+	return body[:maxXHHResponseLogBytes]
 }
 
 func GetLinkInfo(LinkID int, RootCommentID int, CommentID int, CurrentUserID int) (Contents []ai.Content, Topics []ai.Topics, Tags []ai.Tags, Mention string) {
@@ -170,7 +183,11 @@ func fetchLinkInfoPage(linkID int, page int) (LinkInfoS, bool) {
 
 	Dbyte, err := io.ReadAll(resp.Body)
 	if err != nil {
-		loger.Loger.Error("[XHH]无法读取响应体", zap.Error(err))
+		loger.Loger.Error("[XHH]无法读取响应体", zap.Error(err), zap.Int("link_id", linkID), zap.Int("page", page), zap.Int("status", resp.StatusCode))
+		return data, false
+	}
+	if !isHTTPSuccess(resp.StatusCode) {
+		loger.Loger.Warn("[XHH]获取帖子详情 HTTP 失败", zap.Int("link_id", linkID), zap.Int("page", page), zap.Int("status", resp.StatusCode), zap.String("body", limitXHHResponseBody(string(Dbyte))))
 		return data, false
 	}
 
@@ -224,7 +241,11 @@ func fetchMoreSubComments(rootCommentID int, targetCommentID int, comments []Com
 		Dbyte, err := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		if err != nil {
-			loger.Loger.Error("[XHH]无法读取子评论响应体", zap.Error(err))
+			loger.Loger.Error("[XHH]无法读取子评论响应体", zap.Error(err), zap.Int("root_comment_id", rootCommentID), zap.Int("target_comment_id", targetCommentID), zap.Int("status", resp.StatusCode))
+			return comments
+		}
+		if !isHTTPSuccess(resp.StatusCode) {
+			loger.Loger.Warn("[XHH]获取子评论 HTTP 失败", zap.Int("root_comment_id", rootCommentID), zap.Int("target_comment_id", targetCommentID), zap.Int("status", resp.StatusCode), zap.String("body", limitXHHResponseBody(string(Dbyte))))
 			return comments
 		}
 
@@ -322,9 +343,13 @@ func isAmbiguousMentionTarget(target string) bool {
 	switch lower {
 	case "他", "她", "ta", "我", "你", "咱", "自己", "对方", "那个人", "这个人", "楼上", "上面":
 		return true
-	default:
-		return strings.Contains(lower, "我") || strings.Contains(lower, "你") || strings.Contains(lower, "咱") || strings.Contains(lower, "自己")
 	}
+	for _, prefix := range []string{"我", "你", "咱", "自己"} {
+		if strings.HasPrefix(lower, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 const (
@@ -433,7 +458,11 @@ func fetchAllSubComments(rootCommentID int, comments []CommentInfo, subCommentPa
 		Dbyte, err := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		if err != nil {
-			loger.Loger.Error("[XHH]无法读取子评论响应体", zap.Error(err))
+			loger.Loger.Error("[XHH]无法读取子评论响应体", zap.Error(err), zap.Int("root_comment_id", rootCommentID), zap.Int("status", resp.StatusCode))
+			return comments
+		}
+		if !isHTTPSuccess(resp.StatusCode) {
+			loger.Loger.Warn("[XHH]获取子评论 HTTP 失败", zap.Int("root_comment_id", rootCommentID), zap.Int("status", resp.StatusCode), zap.String("body", limitXHHResponseBody(string(Dbyte))))
 			return comments
 		}
 
