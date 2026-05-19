@@ -63,6 +63,18 @@ func TestMsgUnmarshalAtComment(t *testing.T) {
 	}
 }
 
+func TestShouldMentionTarget(t *testing.T) {
+	if ShouldMentionTarget("告诉我这个是什么意思") {
+		t.Fatal("ShouldMentionTarget should not trigger for 告诉我")
+	}
+	if ShouldMentionTarget("其他方案呢") {
+		t.Fatal("ShouldMentionTarget should not trigger for 其他")
+	}
+	if !ShouldMentionTarget("反驳他") {
+		t.Fatal("ShouldMentionTarget should trigger for 反驳他")
+	}
+}
+
 func TestExtractExplicitMentionTargetConversationCommands(t *testing.T) {
 	cases := []struct {
 		text string
@@ -77,6 +89,8 @@ func TestExtractExplicitMentionTargetConversationCommands(t *testing.T) {
 		{text: "@机器人 问问小周怎么看", want: "小周"},
 		{text: "@机器人 生成一张小菲的画像，并艾特小菲来看[cube_喜欢]", want: "小菲"},
 		{text: "@机器人 生图 一只猫，顺便艾特小明看看[cube_点赞]", want: "小明"},
+		{text: "@机器人 并给他看@小猫娘喵喵", want: "小猫娘喵喵"},
+		{text: "@机器人 生成一张图，并艾特小明看@小猫娘喵喵", want: "小明"},
 		{text: "@机器人 反驳他", want: ""},
 	}
 

@@ -27,9 +27,11 @@ func main() {
 	config.InitConfig()
 	xhh.Init()
 
-	result := xhh.ProcessImageGenerationComment(*linkID, *commentID, *rootID, *userID, *text, xhh.ImageCommentOptions{
-		DryRun:    true,
-		MockImage: *mockImage,
+	mentionControl := xhh.ParseMentionControl(*text)
+	result := xhh.ProcessImageGenerationComment(*linkID, *commentID, *rootID, *userID, mentionControl.CleanedText, xhh.ImageCommentOptions{
+		DryRun:            true,
+		MockImage:         *mockImage,
+		MentionTargetText: mentionControl.TargetText,
 	})
 	if !result.Handled {
 		fmt.Println("dry-run: comment is not an image generation command")

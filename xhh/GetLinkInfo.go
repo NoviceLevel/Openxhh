@@ -76,6 +76,8 @@ const (
 )
 
 var explicitMentionTargetPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?:给|让|发给|拿给)\s*(?:他|她|ta|TA|对方|那个人|这个人)?\s*(?:看|看看|查看|看下|来看)\s*` + explicitMentionTargetPattern),
+	regexp.MustCompile(`(?:给|让|发给|拿给)\s*` + explicitMentionTargetPattern + `\s*(?:看|看看|查看|看下|来看)?`),
 	regexp.MustCompile(`(?:艾特|提到|喊|叫)\s*` + explicitMentionTargetPattern),
 	regexp.MustCompile(`(?:帮我|请|顺便|可以|能不能)\s*@([^\s，,。.!！?？:：、@]{1,24})`),
 	regexp.MustCompile(`(?:向|给|跟|和|对)\s*` + explicitMentionTargetPatternLazy + `\s*(?:打(?:个)?招呼|问(?:个)?好|说(?:说|两句|几句|一下)?|聊(?:聊|两句|几句|一下)?|讲(?:两句|几句|一下)?)`),
@@ -302,7 +304,7 @@ func trimExplicitMentionControls(target string) string {
 		previous := target
 		target = xhhEmojiPattern.ReplaceAllString(target, "")
 		target = strings.Trim(target, "：:，,。.!！?？、")
-		for _, suffix := range []string{"打个招呼", "打招呼", "问个好", "问好", "说说", "说两句", "说几句", "说一下", "聊聊", "聊两句", "聊几句", "聊一下", "讲两句", "讲几句", "怎么看", "怎么想", "什么看法", "的观点", "的说法", "的评论", "的话", "看看", "查看", "看下", "来看", "评价", "一下", "一口"} {
+		for _, suffix := range []string{"打个招呼", "打招呼", "问个好", "问好", "说说", "说两句", "说几句", "说一下", "聊聊", "聊两句", "聊几句", "聊一下", "讲两句", "讲几句", "怎么看", "怎么想", "什么看法", "的观点", "的说法", "的评论", "的话", "看看", "查看", "看下", "来看", "评价", "一下", "一口", "看"} {
 			target = strings.TrimSuffix(target, suffix)
 		}
 		target = strings.Trim(target, "：:，,。.!！?？、")
@@ -316,11 +318,12 @@ func isAmbiguousMentionTarget(target string) bool {
 	if target == "" {
 		return true
 	}
-	switch strings.ToLower(target) {
-	case "他", "她", "ta", "对方", "那个人", "这个人", "楼上", "上面":
+	lower := strings.ToLower(target)
+	switch lower {
+	case "他", "她", "ta", "我", "你", "咱", "自己", "对方", "那个人", "这个人", "楼上", "上面":
 		return true
 	default:
-		return false
+		return strings.Contains(lower, "我") || strings.Contains(lower, "你") || strings.Contains(lower, "咱") || strings.Contains(lower, "自己")
 	}
 }
 

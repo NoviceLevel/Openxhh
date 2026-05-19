@@ -38,7 +38,7 @@ const messageTypeAtPost = 16
 const messageTypeAtComment = 17
 
 func ShouldMentionTarget(text string) bool {
-	triggers := []string{"他", "她", "对方", "那个人", "这个人", "楼上", "上面", "反驳", "告诉", "问问", "回复他", "回复她", "怼"}
+	triggers := []string{"对方", "那个人", "这个人", "楼上", "上面", "回复他", "回复她", "反驳他", "反驳她", "怼他", "怼她", "问问他", "问问她", "告诉他", "告诉她", "安慰他", "安慰她"}
 	for _, trigger := range triggers {
 		if strings.Contains(text, trigger) {
 			return true
@@ -308,12 +308,18 @@ func replyComment(v db.CommStruct) {
 	}
 
 	userText := NormalizeCommentText(v.Text)
-	loger.Loger.Info("[XHH]正在处理@消息", zap.Int("msg_id", v.MsgID), zap.Int("comment_id", v.CommentID), zap.Int("link_id", v.LinkID), zap.Int("user_id", v.Uid), zap.String("user_name", v.UserName), zap.String("text", userText), zap.String("raw_text", v.Text))
+	mentionControl := ParseMentionControl(userText)
+	loger.Loger.Info("[XHH]正在处理@消息", zap.Int("msg_id", v.MsgID), zap.Int("comment_id", v.CommentID), zap.Int("link_id", v.LinkID), zap.Int("user_id", v.Uid), zap.String("user_name", v.UserName), zap.String("text", mentionControl.CleanedText), zap.String("raw_text", v.Text), zap.String("mention_target", mentionControl.TargetText))
 
 	var isok bool
-	handledImage, imageOK := HandleImageGenerationComment(v.LinkID, v.CommentID, v.RootID, v.Uid, v.UserName, userText)
-	if handledImage {
-		isok = imageOK
+	imageResult := ProcessImageGenerationComment(v.LinkID, v.CommentID, v.RootID, v.Uid, mentionControl.CleanedText, ImageCommentOptions{TriggerUserName: v.UserName, MentionTargetText: mentionControl.TargetText})
+	if imageResult.Err != nil {
+		loger.Loger.Error("[XHH]图片评论处理失败", zap.Error(imageResult.Err), zap.Int("comment_id", v.CommentID), zap.Int("link_id", v.LinkID))
+		if imageResult.Handled {
+			isok = true
+		}
+	} else if imageResult.Handled {
+		isok = imageResult.OK
 	} else {
 		Info, top, tags, mention := GetLinkInfo(v.LinkID, v.RootID, v.CommentID, v.Uid)
 		if len(Info) <= 1 {
@@ -322,16 +328,22 @@ func replyComment(v db.CommStruct) {
 			return
 		}
 		Info = appendOwnerContext(Info, v.Uid)
-		mentionTrigger := ShouldMentionTarget(userText)
+		mentionTrigger := ShouldMentionTarget(v.Text)
 		mentionTarget := mention != "" && mentionTrigger
 		loger.Loger.Info("[XHH]Mention decision", zap.Bool("trigger", mentionTrigger), zap.Bool("hasMention", mention != ""))
-		ReplyText := ai.GetAiReply(Info, userText, top, tags, zap.Int("msg_id", v.MsgID), zap.Int("comment_id", v.CommentID), zap.Int("link_id", v.LinkID), zap.Int("user_id", v.Uid), zap.String("user_name", v.UserName), zap.String("question", userText), zap.String("raw_question", v.Text))
+		ReplyText := ai.GetAiReply(Info, mentionControl.CleanedText, top, tags, zap.Int("msg_id", v.MsgID), zap.Int("comment_id", v.CommentID), zap.Int("link_id", v.LinkID), zap.Int("user_id", v.Uid), zap.String("user_name", v.UserName), zap.String("question", mentionControl.CleanedText), zap.String("raw_question", v.Text))
 		if ReplyText == "" {
 			loger.Loger.Info("[XHH]Ai返回错误")
 			IsErr()
 			return
 		}
-		explicitMention := GetExplicitMentionFromPost(v.LinkID, userText, v.Uid)
+		explicitMention := ""
+		if mentionControl.TargetText != "" {
+			explicitMention = GetExplicitMentionFromPost(v.LinkID, "艾特"+mentionControl.TargetText, v.Uid)
+		}
+		if explicitMention == "" {
+			explicitMention = GetExplicitMentionFromPost(v.LinkID, mentionControl.CleanedText, v.Uid)
+		}
 		if explicitMention != "" {
 			ReplyText = explicitMention + " " + ReplyText
 		} else if mentionTarget {

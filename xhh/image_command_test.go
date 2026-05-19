@@ -97,6 +97,27 @@ func TestParseImageCommand(t *testing.T) {
 			wantImageInput: true,
 		},
 		{
+			name:           "current floor context",
+			text:           "@小猫娘喵喵 根据这层楼生成一张图片",
+			wantOK:         true,
+			wantPrompt:     "根据当前评论楼层内容生成图片",
+			wantCommentCtx: true,
+		},
+		{
+			name:           "similar image input",
+			text:           "@小猫娘喵喵 根据这张图片生成类似的图片",
+			wantOK:         true,
+			wantPrompt:     "根据参考图片生成类似图片",
+			wantImageInput: true,
+		},
+		{
+			name:              "mention control is not prompt",
+			text:              "帮我生成一张猫图，并给他看@张三 @小猫娘喵喵",
+			wantOK:            true,
+			wantPrompt:        "猫图",
+			wantMentionTarget: "张三",
+		},
+		{
 			name:   "not text generation",
 			text:   "@机器人 生成一段回复",
 			wantOK: false,

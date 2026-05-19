@@ -10,12 +10,11 @@ import (
 
 const imageContextMaxChars = 1200
 
-func BuildContextualImagePrompt(basePrompt string, command ImageCommand, linkID int, rootID int, commentID int, userID int) string {
+func BuildContextualImagePrompt(basePrompt string, command ImageCommand, contents []ai.Content) string {
 	if !command.UsePostContext && !command.UseCommentContext {
 		return basePrompt
 	}
 
-	contents, _, _, _ := GetLinkInfo(linkID, rootID, commentID, userID)
 	contextText := selectImageContextText(contents, command)
 	if contextText == "" {
 		return basePrompt
@@ -35,7 +34,7 @@ func selectImageContextText(contents []ai.Content, command ImageCommand) string 
 			continue
 		}
 		text := strings.TrimSpace(content.Text)
-		if !command.UseCommentContext && strings.HasPrefix(text, "以下是评论区") {
+		if !command.UseCommentContext && isCommentContextText(text) {
 			continue
 		}
 		parts = append(parts, text)
@@ -51,6 +50,16 @@ func imageContextLabel(command ImageCommand) string {
 		return "评论区内容"
 	}
 	return "帖子正文内容"
+}
+
+func isCommentContextText(text string) bool {
+	prefixes := []string{"以下是评论区", "以下是当前评论楼层上下文", "以下是当前评论楼层", "以下是评论楼层上下文", "以下是楼层上下文", "下面这张图片来自评论用户"}
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(text, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func limitImageContext(text string, maxChars int) string {

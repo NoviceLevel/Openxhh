@@ -11,6 +11,7 @@ func TestSelectImageContextText(t *testing.T) {
 		{Type: "text", Text: "以下是帖子内容：\n标题：猫猫新闻"},
 		{Type: "text", Text: "正文里说小菲很喜欢机械朋克猫。"},
 		{Type: "text", Text: "以下是评论区上下文：小菲说想看画像。"},
+		{Type: "text", Text: "以下是当前评论楼层上下文，请结合这些内容理解当前用户的问题：楼主说想看猫。"},
 		{Type: "image_url"},
 	}
 
@@ -18,12 +19,12 @@ func TestSelectImageContextText(t *testing.T) {
 	if !strings.Contains(postOnly, "猫猫新闻") || !strings.Contains(postOnly, "机械朋克猫") {
 		t.Fatalf("post context missing expected text: %q", postOnly)
 	}
-	if strings.Contains(postOnly, "评论区上下文") {
+	if strings.Contains(postOnly, "评论区上下文") || strings.Contains(postOnly, "当前评论楼层上下文") {
 		t.Fatalf("post-only context should not include comment context: %q", postOnly)
 	}
 
 	withComments := selectImageContextText(contents, ImageCommand{UsePostContext: true, UseCommentContext: true})
-	if !strings.Contains(withComments, "评论区上下文") {
+	if !strings.Contains(withComments, "评论区上下文") || !strings.Contains(withComments, "当前评论楼层上下文") {
 		t.Fatalf("combined context should include comment context: %q", withComments)
 	}
 }

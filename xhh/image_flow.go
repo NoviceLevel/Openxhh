@@ -16,9 +16,10 @@ import (
 )
 
 type ImageCommentOptions struct {
-	DryRun          bool
-	MockImage       bool
-	TriggerUserName string
+	DryRun            bool
+	MockImage         bool
+	TriggerUserName   string
+	MentionTargetText string
 }
 
 type ImageCommentResult struct {
@@ -48,6 +49,9 @@ func ProcessImageGenerationComment(linkID, commentID, rootID, userID int, text s
 	if !ok {
 		return ImageCommentResult{}
 	}
+	if options.MentionTargetText != "" {
+		command.MentionTargetText = options.MentionTargetText
+	}
 	prompt := command.Prompt
 	generationPrompt := prompt
 	if !Check(userID) {
@@ -60,8 +64,48 @@ func ProcessImageGenerationComment(linkID, commentID, rootID, userID int, text s
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
+	intent, err := ai.UnderstandImageIntent(ctx, ai.ImageIntentRequest{
+		RawComment:        text,
+		NormalizedText:    text,
+		CleanedText:       text,
+		MentionTarget:     options.MentionTargetText,
+		UsePostContext:    command.UsePostContext,
+		UseCommentContext: command.UseCommentContext,
+		UseImageInput:     command.UseImageInput,
+	})
+	if err != nil {
+		loger.Loger.Warn("[XHH]文本模型理解生图意图失败，使用规则兜底", zap.Error(err))
+	} else if !intent.IsImageRequest {
+		if !shouldFallbackImageIntent(command, text) {
+			return ImageCommentResult{}
+		}
+		loger.Loger.Warn("[XHH]文本模型未判定为生图，但规则判断为明确生图请求，使用规则兜底", zap.String("reason", intent.Reason))
+	} else {
+		if strings.TrimSpace(intent.ImagePrompt) != "" {
+			prompt = intent.ImagePrompt
+			generationPrompt = intent.ImagePrompt
+		}
+		if intent.MentionTarget != "" {
+			command.MentionTargetText = intent.MentionTarget
+		}
+		command.UsePostContext = command.UsePostContext || intent.NeedsPostContext
+		command.UseCommentContext = command.UseCommentContext || intent.NeedsCommentContext
+		command.UseImageInput = command.UseImageInput || intent.NeedsImageInput || intent.WantsSimilarImage
+	}
+
 	started := time.Now()
-	generationPrompt = BuildContextualImagePrompt(prompt, command, linkID, rootID, commentID, userID)
+	var contents []ai.Content
+	if command.UsePostContext || command.UseCommentContext || command.UseImageInput {
+		contents, _, _, _ = GetLinkInfo(linkID, rootID, commentID, userID)
+	}
+	generationPrompt = BuildContextualImagePrompt(generationPrompt, command, contents)
+	if command.UseImageInput {
+		if visionText, visionErr := ai.DescribeImagesForGeneration(ctx, contents, generationPrompt); visionErr != nil {
+			loger.Loger.Warn("[XHH]图片理解失败，继续使用文本 prompt", zap.Error(visionErr))
+		} else if strings.TrimSpace(visionText) != "" {
+			generationPrompt = generationPrompt + "\n图片理解内容：" + visionText
+		}
+	}
 	if ai.ShouldRefineImagePrompt() {
 		refined, err := ai.RefineImagePrompt(ctx, ai.ImagePromptRefineRequest{
 			OriginalText:      text,

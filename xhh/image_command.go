@@ -25,8 +25,8 @@ var imageWeakTriggerPatterns = []*regexp.Regexp{
 }
 var mentionControlPattern = regexp.MustCompile(`(?:并|，|,|。|、|\s)*(?:顺便|帮我|请|可以|能不能)?(?:艾特|提到|喊|叫)\s*(?:她|他|ta|TA|@?[^\s，,。.!！?？:：、@]{1,24})?(?:看看|查看|看下|来看|评价|一下)?`)
 var atControlPattern = regexp.MustCompile(`(?:并|，|,|。|、|\s)*(?:顺便|帮我|请|可以|能不能)\s*@[^\s，,。.!！?？:：、@]{1,24}(?:看看|查看|看下|来看|评价|一下)?`)
-var contextControlPattern = regexp.MustCompile(`(?:根据|基于|按照|按)(?:这个|这篇|这条|本条|当前|该|本)?(?:正文|文章|帖子|原帖|评论区|评论|楼里|楼上)(?:内容)?`)
-var imageInputControlPattern = regexp.MustCompile(`(?:参考|按照|按|基于)?(?:这张图|这个图|图片|原图|评论里的图|楼里的图)|图生图|改图`)
+var contextControlPattern = regexp.MustCompile(`(?:根据|基于|按照|按)(?:这个|这篇|这条|这层|本条|本层|当前|该|本)?(?:正文|文章|帖子|原帖|评论区|评论|楼里|楼上|楼层|楼中楼)(?:内容)?`)
+var imageInputControlPattern = regexp.MustCompile(`(?:参考|按照|按|基于|根据|照着)?(?:这张图片|这张图|这个图|图片|原图|评论里的图|楼里的图)|(?:类似|像)(?:这张图片|这张图)|图生图|改图`)
 var pronounMentionPattern = regexp.MustCompile(`(?:艾特|提到|喊|叫)\s*(她|他|ta|TA)`)
 var portraitSubjectPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?:一张|一幅|张|幅)?\s*([^\s，,。.!！?？:：、@]{1,24})的(?:画像|照片|头像|图|插画|肖像)`),
@@ -39,12 +39,16 @@ func ExtractImagePrompt(text string) (string, bool) {
 }
 
 func ParseImageCommand(text string) (ImageCommand, bool) {
-	cleaned := normalizeImageCommandText(text)
+	mention := ParseMentionControl(text)
+	cleaned := mention.CleanedText
 	command := ImageCommand{
 		UsePostContext:    wantsPostContext(cleaned),
 		UseCommentContext: wantsCommentContext(cleaned),
 		UseImageInput:     wantsImageInput(cleaned),
-		MentionTargetText: extractImageMentionTarget(cleaned),
+		MentionTargetText: mention.TargetText,
+	}
+	if command.MentionTargetText == "" {
+		command.MentionTargetText = extractImageMentionTarget(text)
 	}
 
 	prompt, trigger, ok := extractImagePromptWithTrigger(cleaned)
@@ -54,7 +58,10 @@ func ParseImageCommand(text string) (ImageCommand, bool) {
 	command.RawPrompt = strings.TrimSpace(prompt)
 	command.Trigger = trigger
 	command.Prompt = cleanupImagePrompt(prompt)
-	if shouldUseContextForPortrait(command.Prompt) {
+	if isVagueContextImagePrompt(command.Prompt) && (command.UsePostContext || command.UseCommentContext || command.UseImageInput) {
+		command.Prompt = defaultContextImagePrompt(command)
+	}
+	if !command.UseImageInput && shouldUseContextForPortrait(command.Prompt) {
 		command.UsePostContext = true
 		command.UseCommentContext = true
 	}
@@ -72,9 +79,7 @@ func NormalizeCommentText(text string) string {
 }
 
 func normalizeImageCommandText(text string) string {
-	cleaned := NormalizeCommentText(text)
-	cleaned = leadingMentionPattern.ReplaceAllString(cleaned, "")
-	return strings.TrimSpace(cleaned)
+	return ParseMentionControl(text).CleanedText
 }
 
 func extractImagePromptWithTrigger(text string) (string, string, bool) {
@@ -138,6 +143,56 @@ func cleanupImagePrompt(prompt string) string {
 	return cleaned
 }
 
+func isVagueContextImagePrompt(prompt string) bool {
+	prompt = strings.TrimSpace(prompt)
+	prompt = strings.Trim(prompt, "：:，,。.!！?？、 ")
+	switch prompt {
+	case "", "图", "图片", "图像", "一张", "类似", "类似的":
+		return true
+	default:
+		return false
+	}
+}
+
+func shouldFallbackImageIntent(command ImageCommand, text string) bool {
+	if strings.TrimSpace(command.Prompt) == "" || looksLikeImageDiscussion(text) {
+		return false
+	}
+	clearTriggers := []string{"生图", "生成图片", "画图", "生成", "画", "来", "做", "出"}
+	for _, trigger := range clearTriggers {
+		if command.Trigger == trigger {
+			return true
+		}
+	}
+	return false
+}
+
+func looksLikeImageDiscussion(text string) bool {
+	markers := []string{"是什么意思", "是什么", "为什么", "怎么", "如何", "区别", "原理", "失败", "报错", "参数", "功能", "能不能", "可以吗"}
+	for _, marker := range markers {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func defaultContextImagePrompt(command ImageCommand) string {
+	if command.UseImageInput && command.UseCommentContext {
+		return "根据参考图片和当前评论楼层内容生成图片"
+	}
+	if command.UseImageInput && command.UsePostContext {
+		return "根据参考图片和帖子内容生成图片"
+	}
+	if command.UseImageInput {
+		return "根据参考图片生成类似图片"
+	}
+	if command.UseCommentContext {
+		return "根据当前评论楼层内容生成图片"
+	}
+	return "根据帖子内容生成图片"
+}
+
 func wantsPostContext(text string) bool {
 	triggers := []string{"根据正文", "根据文章", "根据文章内容", "根据帖子", "根据原帖", "基于正文", "基于文章", "基于帖子", "按这个帖子", "按照这个帖子", "按这篇文章", "按照这篇文章"}
 	for _, trigger := range triggers {
@@ -149,7 +204,7 @@ func wantsPostContext(text string) bool {
 }
 
 func wantsCommentContext(text string) bool {
-	triggers := []string{"根据评论区", "根据评论", "根据这条评论", "根据本条评论", "根据当前评论", "根据楼里", "根据楼上", "基于评论区", "基于评论", "按评论区", "按照评论区"}
+	triggers := []string{"根据评论区", "根据评论", "根据这条评论", "根据本条评论", "根据当前评论", "根据这层楼", "根据本层楼", "根据当前楼层", "根据这个楼层", "根据楼层", "根据楼中楼", "根据这层评论", "基于评论区", "基于评论", "基于这层楼", "按评论区", "按照评论区", "按这层楼", "按照这层楼", "这层楼", "当前楼层", "这楼"}
 	for _, trigger := range triggers {
 		if strings.Contains(text, trigger) {
 			return true
@@ -159,7 +214,7 @@ func wantsCommentContext(text string) bool {
 }
 
 func wantsImageInput(text string) bool {
-	triggers := []string{"参考这张图", "参考图片", "按图", "按照图", "图生图", "改图", "把这张图改成", "根据这张图"}
+	triggers := []string{"参考这张图", "参考这张图片", "参考图片", "按图", "按照图", "按照这张图", "按照这张图片", "图生图", "改图", "把这张图改成", "根据这张图", "根据这张图片", "类似这张图", "类似这张图片", "照着这张图", "照着这张图片", "像这张图", "像这张图片", "图片里", "图中"}
 	for _, trigger := range triggers {
 		if strings.Contains(text, trigger) {
 			return true
