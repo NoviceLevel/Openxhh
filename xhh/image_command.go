@@ -47,8 +47,10 @@ func ParseImageCommand(text string) (ImageCommand, bool) {
 		UseImageInput:     wantsImageInput(cleaned),
 		MentionTargetText: mention.TargetText,
 	}
-	if command.MentionTargetText == "" {
-		command.MentionTargetText = extractImageMentionTarget(text)
+	if command.MentionTargetText == "" || isWholePostReferenceTarget(command.MentionTargetText) {
+		if target := extractImageMentionTarget(text); target != "" {
+			command.MentionTargetText = target
+		}
 	}
 
 	prompt, trigger, ok := extractImagePromptWithTrigger(cleaned)

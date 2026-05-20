@@ -85,6 +85,7 @@ var explicitMentionTargetPatterns = []*regexp.Regexp{
 }
 
 var xhhEmojiPattern = regexp.MustCompile(`\[[^\[\]\s]{1,32}\]`)
+var mentionAnchorPattern = regexp.MustCompile(`data-user-id="(\d+)"[^>]*>\s*@?([^<]+)</a>`)
 
 const maxXHHResponseLogBytes = 300
 
@@ -283,12 +284,23 @@ func findComment(comments []CommentInfo, commentID int) *CommentInfo {
 }
 
 func GetExplicitMentionFromPost(linkID int, text string, currentUserID int) string {
+	if referenceTarget := extractMentionReferenceTarget(text); isWholePostReferenceTarget(referenceTarget) {
+		mention := resolveReferenceMentionInPost(linkID, referenceTarget, currentUserID)
+		loger.Loger.Info("[XHH]Reference mention search", zap.String("target", referenceTarget), zap.Bool("found", mention != ""))
+		return mention
+	}
+
 	targetName := extractExplicitMentionTarget(text)
 	if targetName == "" {
 		return ""
 	}
 
 	mention := findUserMentionInPost(linkID, targetName, currentUserID)
+	if mention == "" {
+		if trimmed := trimNonReferenceMentionParticle(targetName); trimmed != targetName {
+			mention = findUserMentionInPost(linkID, trimmed, currentUserID)
+		}
+	}
 	loger.Loger.Info("[XHH]Explicit mention search", zap.String("target", targetName), zap.Bool("found", mention != ""))
 	return mention
 }
@@ -309,11 +321,47 @@ func extractExplicitMentionTarget(text string) string {
 	return ""
 }
 
+func extractMentionReferenceTarget(text string) string {
+	cleaned := html.UnescapeString(htmlTagPattern.ReplaceAllString(text, " "))
+	for _, pattern := range explicitMentionTargetPatterns {
+		match := pattern.FindStringSubmatch(cleaned)
+		if len(match) < 2 {
+			continue
+		}
+		target := normalizeMentionReferenceTarget(match[1])
+		if target == "" {
+			continue
+		}
+		return target
+	}
+	return ""
+}
+
+func normalizeMentionControlTarget(target string) string {
+	if referenceTarget := normalizeMentionReferenceTarget(target); referenceTarget != "" {
+		return referenceTarget
+	}
+	return normalizeExplicitMentionTarget(target)
+}
+
+func normalizeMentionReferenceTarget(target string) string {
+	target = strings.TrimSpace(target)
+	target = strings.TrimPrefix(target, "@")
+	target = strings.Trim(target, "：:，,。.!！?？、")
+	target = trimExplicitMentionControls(target)
+	target = trimMentionReferenceParticles(target)
+	if isMentionReferenceTarget(target) {
+		return target
+	}
+	return ""
+}
+
 func normalizeExplicitMentionTarget(target string) string {
 	target = strings.TrimSpace(target)
 	target = strings.TrimPrefix(target, "@")
 	target = strings.Trim(target, "：:，,。.!！?？、")
 	target = trimExplicitMentionControls(target)
+	target = trimMentionReferenceParticles(target)
 	if isAmbiguousMentionTarget(target) || strings.Contains(target, "机器人") {
 		return ""
 	}
@@ -332,6 +380,51 @@ func trimExplicitMentionControls(target string) string {
 		if target == previous {
 			return target
 		}
+	}
+}
+
+func trimMentionReferenceParticles(target string) string {
+	particles := []string{"啦", "了", "啊", "呀", "吧", "呢", "嘛", "哦"}
+	for _, reference := range []string{"他", "她", "ta", "TA", "对方", "那个人", "这个人", "楼上", "上面"} {
+		if strings.EqualFold(target, reference) {
+			return strings.ToLower(reference)
+		}
+		for _, particle := range particles {
+			if strings.EqualFold(target, reference+particle) {
+				return strings.ToLower(reference)
+			}
+		}
+	}
+	return target
+}
+
+func trimNonReferenceMentionParticle(target string) string {
+	for _, particle := range []string{"啦", "了", "啊", "呀", "吧", "呢", "嘛", "哦"} {
+		if strings.HasSuffix(target, particle) {
+			trimmed := strings.TrimSpace(strings.TrimSuffix(target, particle))
+			if trimmed != "" {
+				return trimmed
+			}
+		}
+	}
+	return target
+}
+
+func isMentionReferenceTarget(target string) bool {
+	switch strings.ToLower(strings.TrimSpace(target)) {
+	case "他", "她", "ta", "对方", "那个人", "这个人", "楼上", "上面":
+		return true
+	default:
+		return false
+	}
+}
+
+func isWholePostReferenceTarget(target string) bool {
+	switch strings.ToLower(strings.TrimSpace(target)) {
+	case "他", "她", "ta":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -407,6 +500,68 @@ func findUserMentionInPost(linkID int, targetName string, currentUserID int) str
 		return buildMention(uid, username)
 	}
 	return ""
+}
+
+func resolveReferenceMentionInPost(linkID int, _ string, currentUserID int) string {
+	firstResp, ok := fetchLinkInfoPage(linkID, 1)
+	if !ok {
+		return ""
+	}
+
+	if mention := findPostAuthorMention(firstResp, currentUserID); mention != "" {
+		return mention
+	}
+	if mention := findUniquePostLinkedMention(firstResp, currentUserID); mention != "" {
+		return mention
+	}
+	return ""
+}
+
+func findPostAuthorMention(resp LinkInfoS, currentUserID int) string {
+	uid := jsonInt(resp.Result.Link.UserID)
+	if uid == 0 {
+		uid = jsonInt(resp.Result.Link.User.UserID)
+	}
+	username := strings.TrimSpace(resp.Result.Link.User.UserName)
+	if !canMentionUser(uid, username, currentUserID) {
+		return ""
+	}
+	return buildMention(uid, username)
+}
+
+func findUniquePostLinkedMention(resp LinkInfoS, currentUserID int) string {
+	unique := map[int]string{}
+	collectLinkedMentions(unique, resp.Result.Link.Text, currentUserID)
+	var details []TextDetail
+	if err := json.Unmarshal([]byte(resp.Result.Link.Text), &details); err == nil {
+		for _, detail := range details {
+			collectLinkedMentions(unique, detail.Text, currentUserID)
+		}
+	}
+	if len(unique) != 1 {
+		return ""
+	}
+	for uid, username := range unique {
+		return buildMention(uid, username)
+	}
+	return ""
+}
+
+func collectLinkedMentions(unique map[int]string, text string, currentUserID int) {
+	for _, match := range mentionAnchorPattern.FindAllStringSubmatch(html.UnescapeString(text), -1) {
+		if len(match) < 3 {
+			continue
+		}
+		uid, err := strconv.Atoi(strings.TrimSpace(match[1]))
+		if err != nil {
+			continue
+		}
+		username := strings.TrimSpace(match[2])
+		if !canMentionUser(uid, username, currentUserID) {
+			continue
+		}
+		unique[uid] = username
+	}
 }
 
 func findLinkAuthorMention(resp LinkInfoS, targetName string, currentUserID int) string {
@@ -499,8 +654,12 @@ func collectUserMentionMatches(comments []CommentInfo, targetName string, curren
 	return matches
 }
 
+func canMentionUser(userID int, username string, currentUserID int) bool {
+	return userID != 0 && userID != currentUserID && strings.TrimSpace(username) != "" && strconv.Itoa(userID) != Info.HeyBoxId
+}
+
 func mentionUserMatches(userID int, username string, targetName string, currentUserID int) bool {
-	if userID == 0 || userID == currentUserID || username == "" || strconv.Itoa(userID) == Info.HeyBoxId {
+	if !canMentionUser(userID, username, currentUserID) {
 		return false
 	}
 	target := normalizeMentionName(targetName)

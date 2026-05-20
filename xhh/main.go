@@ -39,7 +39,7 @@ const messageTypeAtPost = 16
 const messageTypeAtComment = 17
 
 func ShouldMentionTarget(text string) bool {
-	triggers := []string{"对方", "那个人", "这个人", "楼上", "上面", "回复他", "回复她", "反驳他", "反驳她", "怼他", "怼她", "问问他", "问问她", "告诉他", "告诉她", "安慰他", "安慰她"}
+	triggers := []string{"对方", "那个人", "这个人", "楼上", "上面", "艾特他", "艾特她", "提到他", "提到她", "喊他", "喊她", "叫他", "叫她", "回复他", "回复她", "反驳他", "反驳她", "怼他", "怼她", "问问他", "问问她", "告诉他", "告诉她", "安慰他", "安慰她"}
 	for _, trigger := range triggers {
 		if strings.Contains(text, trigger) {
 			return true

@@ -30,7 +30,7 @@ func ParseMentionControl(text string) MentionControl {
 		if len(match) < 2 {
 			continue
 		}
-		candidate := normalizeExplicitMentionTarget(match[1])
+		candidate := normalizeMentionControlTarget(match[1])
 		if candidate == "" {
 			continue
 		}
