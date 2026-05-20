@@ -254,8 +254,7 @@ func shouldQueueMessage(v Msg) bool {
 
 func AutoReply() {
 	for {
-		candidates := db.GetComm(replyCandidateLimit())
-		Arr := selectReplyBatch(candidates)
+		Arr := nextReplyBatch()
 		if len(Arr) == 0 {
 			fmt.Println("[XHH]无可回复", time.Now().Format("2006-01-02 15:04:05"))
 			time.Sleep(time.Duration(ReplyTime) * time.Second)
@@ -265,7 +264,7 @@ func AutoReply() {
 		workerCount := replyWorkerCount(Arr)
 		jobs := make(chan db.CommStruct)
 		var wg sync.WaitGroup
-		loger.Loger.Info("[XHH]正在回复评论", zap.Int("评论数", len(Arr)), zap.Int("最高回复线程", workerCount))
+		loger.Loger.Info("[XHH]正在处理回复批次", zap.String("批次类型", replyBatchType(Arr)), zap.Int("评论数", len(Arr)), zap.Int("实际回复线程", workerCount), zap.Int("owner线程上限", replyThreadLimit()))
 		for i := 0; i < workerCount; i++ {
 			wg.Add(1)
 			go func() {
@@ -284,12 +283,12 @@ func AutoReply() {
 	}
 }
 
-func replyCandidateLimit() int {
-	limit := MaxPendingReplies
-	if limit <= 0 {
-		limit = defaultMaxPendingReplies
+func nextReplyBatch() []db.CommStruct {
+	ownerReplies := selectReplyBatch(db.GetCommByUserIDs(ownerIDs(), replyThreadLimit()))
+	if len(ownerReplies) > 0 {
+		return ownerReplies
 	}
-	return limit + replyThreadLimit()
+	return selectReplyBatch(db.GetCommExcludingUserIDs(ownerIDs(), 1))
 }
 
 func replyThreadLimit() int {
@@ -335,6 +334,15 @@ func replyWorkerCount(replies []db.CommStruct) int {
 	return workerCount
 }
 
+func replyBatchType(replies []db.CommStruct) string {
+	for _, reply := range replies {
+		if IsOwner(reply.Uid) {
+			return "owner"
+		}
+	}
+	return "普通用户"
+}
+
 func appendOwnerContext(contents []ai.Content, userID int) []ai.Content {
 	if !IsOwner(userID) {
 		return contents
@@ -355,11 +363,12 @@ func replyComment(v db.CommStruct) {
 
 	userText := NormalizeCommentText(v.Text)
 	mentionControl := ParseMentionControl(userText)
-	loger.Loger.Info("[XHH]正在处理@消息", zap.Int("msg_id", v.MsgID), zap.Int("comment_id", v.CommentID), zap.Int("link_id", v.LinkID), zap.Int("user_id", v.Uid), zap.String("user_name", v.UserName), zap.String("text", mentionControl.CleanedText), zap.String("raw_text", v.Text), zap.String("mention_target", mentionControl.TargetText))
+	loger.Loger.Info("[XHH]正在处理@消息", zap.Int("msg_id", v.MsgID), zap.Int("comment_id", v.CommentID), zap.Int("link_id", v.LinkID), zap.Int("user_id", v.Uid), zap.String("user_name", v.UserName), zap.String("text", mentionQuestionText(mentionControl)), zap.String("cleaned_text", mentionControl.CleanedText), zap.String("raw_text", v.Text), zap.String("mention_target", mentionControl.TargetText), zap.Bool("wake_only", mentionControl.WakeOnly))
 
 	var isok bool
-	route, routed := routeCommentIntent(v, userText, mentionControl)
-	if routed {
+	if mentionControl.WakeOnly {
+		isok = replyWithAiComment(v, mentionControl)
+	} else if route, routed := routeCommentIntent(v, userText, mentionControl); routed {
 		route.MentionTarget = resolveRouteMentionTarget(route.MentionTarget, mentionControl.TargetText, userText)
 		if route.MentionTarget != "" {
 			mentionControl.TargetText = route.MentionTarget
@@ -411,15 +420,15 @@ func routeCommentIntent(v db.CommStruct, userText string, mentionControl Mention
 }
 
 func resolveRouteMentionTarget(routeTarget, ruleTarget, userText string) string {
-	ruleTarget = normalizeExplicitMentionTarget(ruleTarget)
+	routeTarget = normalizeMentionControlTarget(routeTarget)
+	if routeTarget != "" && !isLeadingWakeMentionTarget(routeTarget, userText) {
+		return routeTarget
+	}
+	ruleTarget = normalizeMentionControlTarget(ruleTarget)
 	if ruleTarget != "" {
 		return ruleTarget
 	}
-	routeTarget = normalizeExplicitMentionTarget(routeTarget)
-	if routeTarget == "" || isLeadingWakeMentionTarget(routeTarget, userText) {
-		return ""
-	}
-	return routeTarget
+	return ""
 }
 
 func isLeadingWakeMentionTarget(target, text string) bool {
@@ -443,10 +452,11 @@ func buildCommentRouteRequest(v db.CommStruct, userText string, mentionControl M
 	if textForRules == "" {
 		textForRules = userText
 	}
+	semanticText := mentionQuestionText(mentionControl)
 	routeReq := ai.CommentRouteRequest{
 		RawComment:        v.Text,
 		NormalizedText:    userText,
-		CleanedText:       mentionControl.CleanedText,
+		CleanedText:       semanticText,
 		MentionTarget:     mentionControl.TargetText,
 		HasExplicitTarget: mentionControl.HasExplicitTarget,
 	}
@@ -484,15 +494,15 @@ func processRoutedImageComment(v db.CommStruct, mentionControl MentionControl, r
 
 func replyWithAiComment(v db.CommStruct, mentionControl MentionControl) bool {
 	Info, top, tags, mention := GetLinkInfo(v.LinkID, v.RootID, v.CommentID, v.Uid)
-	if len(Info) <= 1 {
-		loger.Loger.Info("[XHH]无法整理@消息，已标记完成避免阻塞", zap.Int("comment_id", v.CommentID), zap.Int("link_id", v.LinkID))
-		return true
+	if len(Info) == 0 {
+		loger.Loger.Warn("[XHH]无法整理@消息上下文，使用原评论直接回复", zap.Int("comment_id", v.CommentID), zap.Int("link_id", v.LinkID))
 	}
 	Info = appendOwnerContext(Info, v.Uid)
 	mentionTrigger := ShouldMentionTarget(v.Text)
 	mentionTarget := mention != "" && mentionTrigger
 	loger.Loger.Info("[XHH]Mention decision", zap.Bool("trigger", mentionTrigger), zap.Bool("hasMention", mention != ""))
-	ReplyText := ai.GetAiReply(Info, mentionControl.CleanedText, top, tags, zap.Int("msg_id", v.MsgID), zap.Int("comment_id", v.CommentID), zap.Int("link_id", v.LinkID), zap.Int("user_id", v.Uid), zap.String("user_name", v.UserName), zap.String("question", mentionControl.CleanedText), zap.String("raw_question", v.Text))
+	questionText := mentionQuestionText(mentionControl)
+	ReplyText := ai.GetAiReply(Info, questionText, top, tags, zap.Int("msg_id", v.MsgID), zap.Int("comment_id", v.CommentID), zap.Int("link_id", v.LinkID), zap.Int("user_id", v.Uid), zap.String("user_name", v.UserName), zap.String("question", questionText), zap.String("raw_question", v.Text))
 	if ReplyText == "" {
 		loger.Loger.Info("[XHH]Ai返回错误")
 		return false

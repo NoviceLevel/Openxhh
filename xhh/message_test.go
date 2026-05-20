@@ -86,6 +86,25 @@ func TestParseMentionControlReferenceTarget(t *testing.T) {
 	if got.CleanedText != "要" {
 		t.Fatalf("CleanedText = %q, want 要", got.CleanedText)
 	}
+	if got.SemanticText != "要艾特她啦" {
+		t.Fatalf("SemanticText = %q, want 要艾特她啦", got.SemanticText)
+	}
+	if mentionQuestionText(got) != "要艾特她啦" {
+		t.Fatalf("mentionQuestionText = %q, want 要艾特她啦", mentionQuestionText(got))
+	}
+}
+
+func TestParseMentionControlWakeOnly(t *testing.T) {
+	got := ParseMentionControl(`<a data-user-id="93872966" href="https://api.xiaoheihe.cn/open_inapp/#heybox://%7B%22protocol_type%22%3A%22openUser%22%2C%22user_id%22%3A%2293872966%22%7D" target="_blank">@小猫娘喵喵</a>`)
+	if !got.WakeOnly {
+		t.Fatal("WakeOnly should be true")
+	}
+	if got.CleanedText != "" || got.SemanticText != "" {
+		t.Fatalf("CleanedText/SemanticText = %q/%q, want empty", got.CleanedText, got.SemanticText)
+	}
+	if mentionQuestionText(got) == "" {
+		t.Fatal("mentionQuestionText should provide an empty-mention prompt")
+	}
 }
 
 func TestExtractExplicitMentionTargetConversationCommands(t *testing.T) {

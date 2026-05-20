@@ -160,7 +160,7 @@ func GetComm(limit int) (CommArr []CommStruct) {
 	}
 	ctx := context.Background()
 	if cfg.Type == "pg" {
-		row, err := pg.Conn.Query(ctx, "SELECT msg_id,link_id,comment_a_id,comment_root_id,comment_text,user_a_id,user_a_name FROM at WHERE reply=false LIMIT $1", limit)
+		row, err := pg.Conn.Query(ctx, "SELECT msg_id,link_id,comment_a_id,comment_root_id,comment_text,user_a_id,user_a_name FROM at WHERE reply=false ORDER BY msg_id ASC LIMIT $1", limit)
 		if err != nil {
 			loger.Loger.Error("[DB]无法获取评论信息", zap.Error(err))
 			return
@@ -174,7 +174,7 @@ func GetComm(limit int) (CommArr []CommStruct) {
 		return
 	}
 	if cfg.Type == "sqlite" {
-		row, err := sqlite.Db.Query("SELECT msg_id,link_id,comment_a_id,comment_root_id,comment_text,user_a_id,user_a_name FROM at WHERE reply=false LIMIT ?", limit)
+		row, err := sqlite.Db.Query("SELECT msg_id,link_id,comment_a_id,comment_root_id,comment_text,user_a_id,user_a_name FROM at WHERE reply=false ORDER BY msg_id ASC LIMIT ?", limit)
 		if err != nil {
 			loger.Loger.Error("[DB]无法获取评论信息", zap.Error(err))
 			return
@@ -188,6 +188,78 @@ func GetComm(limit int) (CommArr []CommStruct) {
 	}
 
 	return
+}
+
+func GetCommByUserIDs(userIDs []int, limit int) []CommStruct {
+	return getCommByUserFilter(userIDs, limit, false)
+}
+
+func GetCommExcludingUserIDs(userIDs []int, limit int) []CommStruct {
+	return getCommByUserFilter(userIDs, limit, true)
+}
+
+func getCommByUserFilter(userIDs []int, limit int, exclude bool) (CommArr []CommStruct) {
+	if limit <= 0 {
+		limit = 1
+	}
+	if len(userIDs) == 0 {
+		if exclude {
+			return GetComm(limit)
+		}
+		return nil
+	}
+	ctx := context.Background()
+	if cfg.Type == "pg" {
+		ids := int64UserIDs(userIDs)
+		condition := "user_a_id = ANY($1::bigint[])"
+		if exclude {
+			condition = "NOT (user_a_id = ANY($1::bigint[]))"
+		}
+		row, err := pg.Conn.Query(ctx, "SELECT msg_id,link_id,comment_a_id,comment_root_id,comment_text,user_a_id,user_a_name FROM at WHERE reply=false AND "+condition+" ORDER BY msg_id ASC LIMIT $2", ids, limit)
+		if err != nil {
+			loger.Loger.Error("[DB]无法获取评论信息", zap.Error(err))
+			return
+		}
+		defer row.Close()
+		for row.Next() {
+			var Comm CommStruct
+			row.Scan(&Comm.MsgID, &Comm.LinkID, &Comm.CommentID, &Comm.RootID, &Comm.Text, &Comm.Uid, &Comm.UserName)
+			CommArr = append(CommArr, Comm)
+		}
+		return
+	}
+	if cfg.Type == "sqlite" {
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(userIDs)), ",")
+		condition := "user_a_id IN (" + placeholders + ")"
+		if exclude {
+			condition = "user_a_id NOT IN (" + placeholders + ")"
+		}
+		args := make([]any, 0, len(userIDs)+1)
+		for _, id := range userIDs {
+			args = append(args, id)
+		}
+		args = append(args, limit)
+		row, err := sqlite.Db.Query("SELECT msg_id,link_id,comment_a_id,comment_root_id,comment_text,user_a_id,user_a_name FROM at WHERE reply=false AND "+condition+" ORDER BY msg_id ASC LIMIT ?", args...)
+		if err != nil {
+			loger.Loger.Error("[DB]无法获取评论信息", zap.Error(err))
+			return
+		}
+		defer row.Close()
+		for row.Next() {
+			var Comm CommStruct
+			row.Scan(&Comm.MsgID, &Comm.LinkID, &Comm.CommentID, &Comm.RootID, &Comm.Text, &Comm.Uid, &Comm.UserName)
+			CommArr = append(CommArr, Comm)
+		}
+	}
+	return
+}
+
+func int64UserIDs(userIDs []int) []int64 {
+	ids := make([]int64, 0, len(userIDs))
+	for _, id := range userIDs {
+		ids = append(ids, int64(id))
+	}
+	return ids
 }
 
 func IsNew() bool {

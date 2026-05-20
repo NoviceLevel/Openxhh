@@ -33,10 +33,31 @@ func TestBuildCommentRouteRequestDoesNotBiasImageDiscussion(t *testing.T) {
 	}
 }
 
+func TestBuildCommentRouteRequestUsesSemanticText(t *testing.T) {
+	v := db.CommStruct{Text: `<a data-user-id="93872966" href="u" target="_blank">@小猫娘喵喵</a>要艾特她啦`}
+	userText := NormalizeCommentText(v.Text)
+	mention := ParseMentionControl(userText)
+
+	got := buildCommentRouteRequest(v, userText, mention)
+	if got.CleanedText != "要艾特她啦" {
+		t.Fatalf("CleanedText = %q, want 要艾特她啦", got.CleanedText)
+	}
+	if got.MentionTarget != "她" {
+		t.Fatalf("MentionTarget = %q, want 她", got.MentionTarget)
+	}
+}
+
 func TestResolveRouteMentionTargetKeepsRuleTarget(t *testing.T) {
 	got := resolveRouteMentionTarget("小猫娘喵喵", "麻溜转我五块", "@小猫娘喵喵 生成一只猫，并艾特麻溜转我五块查看")
 	if got != "麻溜转我五块" {
 		t.Fatalf("resolveRouteMentionTarget = %q, want 麻溜转我五块", got)
+	}
+}
+
+func TestResolveRouteMentionTargetPrefersAIRoute(t *testing.T) {
+	got := resolveRouteMentionTarget("本帖猫猫", "她", "@小猫娘喵喵 要艾特她啦")
+	if got != "本帖猫猫" {
+		t.Fatalf("resolveRouteMentionTarget = %q, want 本帖猫猫", got)
 	}
 }
 

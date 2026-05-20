@@ -7,8 +7,10 @@ import (
 
 type MentionControl struct {
 	CleanedText       string
+	SemanticText      string
 	TargetText        string
 	HasExplicitTarget bool
+	WakeOnly          bool
 }
 
 const mentionNamePattern = `([^\s，,。.!！?？:：、@]{1,24})`
@@ -23,7 +25,9 @@ var mentionControlPatterns = []*regexp.Regexp{
 }
 
 func ParseMentionControl(text string) MentionControl {
-	cleaned := NormalizeCommentText(text)
+	normalized := NormalizeCommentText(text)
+	semantic := normalizeSemanticMentionText(normalized)
+	cleaned := normalized
 	target := ""
 	for _, pattern := range mentionControlPatterns {
 		match := pattern.FindStringSubmatch(cleaned)
@@ -42,7 +46,19 @@ func ParseMentionControl(text string) MentionControl {
 	cleaned = leadingMentionPattern.ReplaceAllString(cleaned, "")
 	cleaned = mentionTokenPattern.ReplaceAllString(cleaned, " ")
 	cleaned = normalizeControlTextSpacing(cleaned)
-	return MentionControl{CleanedText: cleaned, TargetText: target, HasExplicitTarget: target != ""}
+	return MentionControl{CleanedText: cleaned, SemanticText: semantic, TargetText: target, HasExplicitTarget: target != "", WakeOnly: semantic == ""}
+}
+
+func normalizeSemanticMentionText(text string) string {
+	text = leadingMentionPattern.ReplaceAllString(text, "")
+	return normalizeControlTextSpacing(text)
+}
+
+func mentionQuestionText(mention MentionControl) string {
+	if mention.SemanticText != "" {
+		return mention.SemanticText
+	}
+	return "用户只艾特了机器人，没有附加内容"
 }
 
 func normalizeControlTextSpacing(text string) string {

@@ -9,6 +9,12 @@ func TestExtractMentionReferenceTargetTrimsParticle(t *testing.T) {
 	if got := extractMentionReferenceTarget("@机器人 要艾特她啦"); got != "她" {
 		t.Fatalf("extractMentionReferenceTarget = %q, want 她", got)
 	}
+	if got := extractMentionReferenceTarget("@机器人 要艾特本帖猫猫啦"); got != "本帖猫猫" {
+		t.Fatalf("extractMentionReferenceTarget = %q, want 本帖猫猫", got)
+	}
+	if !isWholePostReferenceTarget("本帖猫猫") {
+		t.Fatal("本帖猫猫 should be a whole-post reference")
+	}
 }
 
 func TestFindPostAuthorMention(t *testing.T) {

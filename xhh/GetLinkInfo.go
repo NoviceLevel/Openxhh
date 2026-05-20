@@ -385,7 +385,7 @@ func trimExplicitMentionControls(target string) string {
 
 func trimMentionReferenceParticles(target string) string {
 	particles := []string{"啦", "了", "啊", "呀", "吧", "呢", "嘛", "哦"}
-	for _, reference := range []string{"他", "她", "ta", "TA", "对方", "那个人", "这个人", "楼上", "上面"} {
+	for _, reference := range []string{"他", "她", "ta", "TA", "对方", "那个人", "这个人", "楼上", "上面", "楼主", "作者", "帖主", "本帖作者", "原帖作者", "本帖猫猫", "本帖的猫猫", "本帖猫娘", "本帖的猫娘", "本帖这位", "本帖的人"} {
 		if strings.EqualFold(target, reference) {
 			return strings.ToLower(reference)
 		}
@@ -412,7 +412,7 @@ func trimNonReferenceMentionParticle(target string) string {
 
 func isMentionReferenceTarget(target string) bool {
 	switch strings.ToLower(strings.TrimSpace(target)) {
-	case "他", "她", "ta", "对方", "那个人", "这个人", "楼上", "上面":
+	case "他", "她", "ta", "对方", "那个人", "这个人", "楼上", "上面", "楼主", "作者", "帖主", "本帖作者", "原帖作者", "本帖猫猫", "本帖的猫猫", "本帖猫娘", "本帖的猫娘", "本帖这位", "本帖的人":
 		return true
 	default:
 		return false
@@ -421,7 +421,7 @@ func isMentionReferenceTarget(target string) bool {
 
 func isWholePostReferenceTarget(target string) bool {
 	switch strings.ToLower(strings.TrimSpace(target)) {
-	case "他", "她", "ta":
+	case "他", "她", "ta", "楼主", "作者", "帖主", "本帖作者", "原帖作者", "本帖猫猫", "本帖的猫猫", "本帖猫娘", "本帖的猫娘", "本帖这位", "本帖的人":
 		return true
 	default:
 		return false

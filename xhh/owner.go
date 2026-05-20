@@ -8,6 +8,7 @@ import (
 )
 
 var Owners []int
+var ownerIDsLoaded bool
 
 func Check(UID int) bool {
 	cfg := config.ConfigStruct.Xhh
@@ -15,7 +16,15 @@ func Check(UID int) bool {
 		return true
 	}
 	if strings.TrimSpace(cfg.Owner) == "" {
-		loger.Loger.Fatal("您已启用白名单，但未在配置中设置 xhh.owner")
+		if loger.Loger != nil {
+			loger.Loger.Fatal("您已启用白名单，但未在配置中设置 xhh.owner")
+		}
+		return false
+	}
+	if len(ownerIDs()) == 0 {
+		if loger.Loger != nil {
+			loger.Loger.Fatal("您已启用白名单，但 xhh.owner 中没有有效 UID")
+		}
 		return false
 	}
 	return IsOwner(UID)
@@ -31,9 +40,10 @@ func IsOwner(UID int) bool {
 }
 
 func ownerIDs() []int {
-	if len(Owners) > 0 {
+	if ownerIDsLoaded {
 		return Owners
 	}
+	ownerIDsLoaded = true
 	OwnArr := strings.Split(config.ConfigStruct.Xhh.Owner, ",")
 	for _, v := range OwnArr {
 		v = strings.TrimSpace(v)
@@ -42,7 +52,9 @@ func ownerIDs() []int {
 		}
 		i, err := strconv.Atoi(v)
 		if err != nil {
-			loger.Loger.Error("[XHH]您的 owner 配置->" + v + "<-似乎并非数字")
+			if loger.Loger != nil {
+				loger.Loger.Error("[XHH]您的 owner 配置->" + v + "<-似乎并非数字")
+			}
 			continue
 		}
 		Owners = append(Owners, i)
