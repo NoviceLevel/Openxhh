@@ -51,8 +51,11 @@ func TestSaveInboundMessageDedupesByMessageID(t *testing.T) {
 	second := first
 	second.Text = "second"
 	second.CreatedAt = 20
-	if !SaveInboundMessage(first) || !SaveInboundMessage(second) {
-		t.Fatal("SaveInboundMessage returned false")
+	if !SaveInboundMessage(first) {
+		t.Fatal("first SaveInboundMessage returned false")
+	}
+	if SaveInboundMessage(second) {
+		t.Fatal("duplicate SaveInboundMessage returned true")
 	}
 	var count int
 	var text string

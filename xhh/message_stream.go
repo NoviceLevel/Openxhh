@@ -108,6 +108,9 @@ type trackedFloorCandidate struct {
 }
 
 func trackOutboundReplies(outbound db.OutboundMessage) messageStreamTrackResult {
+	if result, ok := trackBotPostReplies(outbound); ok {
+		return result
+	}
 	comments, rootID, botCommentID, ok := trackedFloorComments(outbound)
 	if !ok || rootID <= 0 {
 		if shouldLogMessageStreamMiss(outbound) {
@@ -148,6 +151,58 @@ func trackOutboundReplies(outbound db.OutboundMessage) messageStreamTrackResult 
 		loger.Loger.Info("[MessageStream]已保存评论我的消息", append(messageStreamOutboundFields(outbound, rootID, botCommentID), zap.Int("saved", result.Saved))...)
 	}
 	return result
+}
+
+func trackBotPostReplies(outbound db.OutboundMessage) (messageStreamTrackResult, bool) {
+	if outbound.LinkID <= 0 {
+		return messageStreamTrackResult{}, false
+	}
+	botID, ok := messageStreamBotID()
+	if !ok {
+		return messageStreamTrackResult{}, false
+	}
+	maxPage := 1
+	result := messageStreamTrackResult{Located: true}
+	for page := 1; page <= maxPage && page <= maxMessagePages; page++ {
+		resp, ok := fetchLinkInfoPage(int(outbound.LinkID), page)
+		if !ok {
+			continue
+		}
+		if page == 1 && !linkAuthorIsBot(resp, botID) {
+			return messageStreamTrackResult{}, false
+		}
+		if resp.Result.TotalPage > maxPage {
+			maxPage = resp.Result.TotalPage
+		}
+		for _, group := range resp.Result.Comments {
+			comments, rootID := trackedGroupComments(group)
+			if rootID <= 0 {
+				continue
+			}
+			for _, comment := range comments {
+				if !isTrackableInboundComment(comment, 0, outbound) {
+					continue
+				}
+				if db.SaveInboundMessage(db.InboundMessage{
+					Source:         inboundMessageStreamPostSource(comment),
+					LinkID:         outbound.LinkID,
+					RootCommentID:  int64(rootID),
+					ReplyCommentID: int64(comment.ReplyID),
+					CommentID:      int64(comment.CommentID),
+					UserID:         int64(comment.UserID),
+					UserName:       CleanXHHRichText(comment.User.UserName),
+					Text:           CleanXHHRichText(comment.Text),
+					CreatedAt:      time.Now().Unix(),
+				}) {
+					result.Saved++
+				}
+			}
+		}
+	}
+	if result.Saved > 0 {
+		loger.Loger.Info("[MessageStream]已保存评论我的消息", append(messageStreamOutboundFields(outbound, 0, 0), zap.Int("saved", result.Saved), zap.String("mode", "bot_post"))...)
+	}
+	return result, true
 }
 
 func trackedFloorComments(outbound db.OutboundMessage) ([]CommentInfo, int, int, bool) {
@@ -306,6 +361,17 @@ func shouldSaveTrackedInbound(comment CommentInfo, rootID int, botCommentID int,
 	return trackedInboundCommentIDs([]CommentInfo{comment}, rootID, botCommentID, outbound)[comment.CommentID]
 }
 
+func linkAuthorIsBot(resp LinkInfoS, botID int) bool {
+	if botID <= 0 {
+		return false
+	}
+	uid := jsonInt(resp.Result.Link.UserID)
+	if uid == 0 {
+		uid = jsonInt(resp.Result.Link.User.UserID)
+	}
+	return uid == botID
+}
+
 func inboundMessageStreamSource(comment CommentInfo, rootID int, botCommentID int) string {
 	if rootID == botCommentID {
 		return "comment_on_bot_floor"
@@ -314,6 +380,13 @@ func inboundMessageStreamSource(comment CommentInfo, rootID int, botCommentID in
 		return "reply_to_bot"
 	}
 	return "nested_reply_to_bot"
+}
+
+func inboundMessageStreamPostSource(comment CommentInfo) string {
+	if comment.ReplyID > 0 {
+		return "nested_comment_on_bot_post"
+	}
+	return "comment_on_bot_post"
 }
 
 func isTrackableInboundComment(comment CommentInfo, botCommentID int, outbound db.OutboundMessage) bool {

@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"strings"
 
@@ -160,6 +161,11 @@ func SaveInboundMessage(record InboundMessage) bool {
 	record.Text = strings.TrimSpace(record.Text)
 	record.RawResponse = strings.TrimSpace(record.RawResponse)
 	record.UniqueKey = inboundUniqueKey(record)
+	inserted, err := inboundMessageIsNew(record.UniqueKey)
+	if err != nil {
+		loger.Loger.Warn("[DB]无法检查收到消息是否存在", zap.Error(err), zap.String("source", record.Source), zap.Int64("comment_id", record.CommentID))
+		return false
+	}
 	ctx := context.Background()
 	if cfg.Type == "pg" {
 		_, err := pg.Conn.Exec(ctx, `INSERT INTO inbound_messages (source,message_id,link_id,root_comment_id,reply_comment_id,comment_id,user_id,user_name,text,created_at,raw_response,unique_key)
@@ -170,7 +176,7 @@ func SaveInboundMessage(record InboundMessage) bool {
 			loger.Loger.Warn("[DB]无法保存收到消息", zap.Error(err), zap.String("source", record.Source), zap.Int64("comment_id", record.CommentID))
 			return false
 		}
-		return true
+		return inserted
 	}
 	if cfg.Type == "sqlite" {
 		_, err := sqlite.Db.Exec(`INSERT INTO inbound_messages (source,message_id,link_id,root_comment_id,reply_comment_id,comment_id,user_id,user_name,text,created_at,raw_response,unique_key)
@@ -181,9 +187,37 @@ func SaveInboundMessage(record InboundMessage) bool {
 			loger.Loger.Warn("[DB]无法保存收到消息", zap.Error(err), zap.String("source", record.Source), zap.Int64("comment_id", record.CommentID))
 			return false
 		}
-		return true
+		return inserted
 	}
 	return false
+}
+
+func inboundMessageIsNew(uniqueKey string) (bool, error) {
+	if strings.TrimSpace(uniqueKey) == "" {
+		return false, nil
+	}
+	var exists int
+	if cfg.Type == "pg" {
+		err := pg.Conn.QueryRow(context.Background(), "SELECT 1 FROM inbound_messages WHERE unique_key=$1 LIMIT 1", uniqueKey).Scan(&exists)
+		if err != nil {
+			if err == sql.ErrNoRows {
+				return true, nil
+			}
+			return false, err
+		}
+		return false, nil
+	}
+	if cfg.Type == "sqlite" {
+		err := sqlite.Db.QueryRow("SELECT 1 FROM inbound_messages WHERE unique_key=? LIMIT 1", uniqueKey).Scan(&exists)
+		if err != nil {
+			if err == sql.ErrNoRows {
+				return true, nil
+			}
+			return false, err
+		}
+		return false, nil
+	}
+	return false, nil
 }
 
 func RecentOutboundMessages(since int64, limit int) []OutboundMessage {
