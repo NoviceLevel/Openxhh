@@ -59,8 +59,12 @@ func TestSaveInboundMessageDedupesByMessageID(t *testing.T) {
 	if err := sqlite.Db.QueryRow("SELECT COUNT(*), MAX(text) FROM inbound_messages WHERE message_id=?", 100).Scan(&count, &text); err != nil {
 		t.Fatalf("query inbound_messages: %v", err)
 	}
-	if count != 1 || text != "second" {
-		t.Fatalf("inbound row = (%d,%q), want (1,second)", count, text)
+	var createdAt int64
+	if err := sqlite.Db.QueryRow("SELECT created_at FROM inbound_messages WHERE message_id=?", 100).Scan(&createdAt); err != nil {
+		t.Fatalf("query inbound created_at: %v", err)
+	}
+	if count != 1 || text != "second" || createdAt != 10 {
+		t.Fatalf("inbound row = (%d,%q,%d), want (1,second,10)", count, text, createdAt)
 	}
 }
 

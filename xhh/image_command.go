@@ -74,9 +74,14 @@ func ParseImageCommand(text string) (ImageCommand, bool) {
 }
 
 func NormalizeCommentText(text string) string {
-	cleaned := html.UnescapeString(htmlTagPattern.ReplaceAllString(text, " "))
+	cleaned := CleanXHHRichText(text)
 	cleaned = xhhEmojiPattern.ReplaceAllString(cleaned, "")
 	cleaned = strings.Join(strings.Fields(cleaned), " ")
+	return strings.TrimSpace(cleaned)
+}
+
+func CleanXHHRichText(text string) string {
+	cleaned := html.UnescapeString(htmlTagPattern.ReplaceAllString(text, " "))
 	return strings.TrimSpace(cleaned)
 }
 

@@ -52,8 +52,8 @@ func trackOutboundReplies(outbound db.OutboundMessage) {
 			ReplyCommentID: int64(comment.ReplyID),
 			CommentID:      int64(comment.CommentID),
 			UserID:         int64(comment.UserID),
-			UserName:       NormalizeCommentText(comment.User.UserName),
-			Text:           NormalizeCommentText(comment.Text),
+			UserName:       CleanXHHRichText(comment.User.UserName),
+			Text:           CleanXHHRichText(comment.Text),
 			CreatedAt:      time.Now().Unix(),
 		})
 	}

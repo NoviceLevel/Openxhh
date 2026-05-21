@@ -98,6 +98,7 @@ type Msg struct {
 	UserID        int
 	MessageType   int
 	UserName      string
+	CreatedAt     int64
 	IsPost        bool
 }
 
@@ -110,6 +111,11 @@ func (m *Msg) UnmarshalJSON(data []byte) error {
 		LinkID        int             `json:"linkid"`
 		UserID        json.RawMessage `json:"userid_a"`
 		MessageType   int             `json:"message_type"`
+		CreatedAt     json.RawMessage `json:"created_at"`
+		CreateAt      json.RawMessage `json:"create_at"`
+		Time          json.RawMessage `json:"time"`
+		Dateline      json.RawMessage `json:"dateline"`
+		MessageTime   json.RawMessage `json:"message_time"`
 		User          struct {
 			UserID   json.RawMessage `json:"userid"`
 			UserName string          `json:"username"`
@@ -134,6 +140,7 @@ func (m *Msg) UnmarshalJSON(data []byte) error {
 	}
 	m.MessageType = aux.MessageType
 	m.UserName = aux.User.UserName
+	m.CreatedAt = firstJSONInt64(aux.CreatedAt, aux.CreateAt, aux.Time, aux.Dateline, aux.MessageTime)
 	m.IsPost = aux.MessageType == messageTypeAtPost
 	if m.IsPost {
 		m.CommentID = -1
@@ -149,10 +156,23 @@ func (m *Msg) UnmarshalJSON(data []byte) error {
 }
 
 func jsonInt(raw json.RawMessage) int {
+	return int(jsonRawInt64(raw))
+}
+
+func firstJSONInt64(values ...json.RawMessage) int64 {
+	for _, value := range values {
+		if number := jsonRawInt64(value); number > 0 {
+			return number
+		}
+	}
+	return 0
+}
+
+func jsonRawInt64(raw json.RawMessage) int64 {
 	if len(raw) == 0 {
 		return 0
 	}
-	var number int
+	var number int64
 	if err := json.Unmarshal(raw, &number); err == nil {
 		return number
 	}
@@ -160,7 +180,7 @@ func jsonInt(raw json.RawMessage) int {
 	if err := json.Unmarshal(raw, &text); err != nil {
 		return 0
 	}
-	number, _ = strconv.Atoi(text)
+	number, _ = strconv.ParseInt(text, 10, 64)
 	return number
 }
 
@@ -251,10 +271,17 @@ func saveInboundMessageFromApp(v Msg) {
 		RootCommentID: int64(v.RootCommentID),
 		CommentID:     int64(v.CommentID),
 		UserID:        int64(v.UserID),
-		UserName:      NormalizeCommentText(v.UserName),
-		Text:          NormalizeCommentText(v.CommentText),
-		CreatedAt:     time.Now().Unix(),
+		UserName:      CleanXHHRichText(v.UserName),
+		Text:          CleanXHHRichText(v.CommentText),
+		CreatedAt:     inboundMessageCreatedAt(v),
 	})
+}
+
+func inboundMessageCreatedAt(v Msg) int64 {
+	if v.CreatedAt > 0 {
+		return v.CreatedAt
+	}
+	return time.Now().Unix()
 }
 
 func shouldQueueMessage(v Msg) bool {
