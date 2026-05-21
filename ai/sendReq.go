@@ -59,6 +59,7 @@ type responsesInputContent struct {
 }
 
 const responsesWebSearchToolType = "web_search_preview"
+const legacyResponsesWebSearchToolType = "web_search"
 
 type responsesWebTool struct {
 	Type              string `json:"type"`
@@ -86,6 +87,11 @@ type rawMsg struct {
 	Content json.RawMessage `json:"content"`
 }
 
+type aiRequestPayload struct {
+	Name string
+	Body []byte
+}
+
 type responsesRespStruct struct {
 	OutputText string `json:"output_text"`
 	Output     []struct {
@@ -106,72 +112,78 @@ func SendReq(Model string, Msg []any) (Jresp respStruct) {
 		loger.Loger.Fatal("[Ai]请确保配置文件中的模型是存在的")
 	}
 	cfg := config.ConfigStruct.Ai
-	reqbody, err := buildReqBody(Model, Msg)
+	payloads, err := buildReqPayloads(Model, Msg)
 	if err != nil {
 		loger.Loger.Error("[AI]无法序列化JSON", zap.Error(err))
 		return
 	}
-	req, err := http.NewRequest("POST", cfg.BaseUrl, bytes.NewReader(reqbody))
-	if err != nil {
-		loger.Loger.Error("[AI]无法创建请求", zap.Error(err))
-		return
-	}
-	req.Header.Set("Authorization", "Bearer "+cfg.Token)
-	req.Header.Set("Content-Type", "application/json")
-	client := http.DefaultClient
-	resp, err := client.Do(req)
-	if err != nil {
-		loger.Loger.Error("[AI]请求失败！", zap.Error(err))
-		return
-	}
-	defer resp.Body.Close()
+	for i, payload := range payloads {
+		req, err := http.NewRequest("POST", cfg.BaseUrl, bytes.NewReader(payload.Body))
+		if err != nil {
+			loger.Loger.Error("[AI]无法创建请求", zap.Error(err), zap.String("variant", payload.Name))
+			return
+		}
+		req.Header.Set("Authorization", "Bearer "+cfg.Token)
+		req.Header.Set("Content-Type", "application/json")
+		client := http.DefaultClient
+		resp, err := client.Do(req)
+		if err != nil {
+			loger.Loger.Error("[AI]请求失败！", zap.Error(err), zap.String("variant", payload.Name))
+			return
+		}
 
-	Dresp, err := io.ReadAll(resp.Body)
-	if err != nil {
-		loger.Loger.Error("[AI]无法读取响应", zap.Error(err))
-		return
-	}
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		loger.Loger.Error("[Ai]Ai返回HTTP错误", zap.Int("status", resp.StatusCode), zap.String("body", limitRefineString(string(Dresp), 500)))
-		return
-	}
-	if useResponsesAPI(cfg.BaseUrl) {
-		Jresp, err = parseResponsesResp(Dresp)
-	} else {
-		err = json.Unmarshal(Dresp, &Jresp)
-	}
-	if err != nil {
-		loger.Loger.Error("[Ai]无法反序列化JSON", zap.Error(err), zap.String("body", string(Dresp)))
-		return
-	}
-	if len(Jresp.Choices) == 0 {
-		loger.Loger.Error("[Ai]Ai返回错误", zap.Any("Resp", string(Dresp)))
-		return
+		Dresp, readErr := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if readErr != nil {
+			loger.Loger.Error("[AI]无法读取响应", zap.Error(readErr), zap.String("variant", payload.Name))
+			return
+		}
+		if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+			if i < len(payloads)-1 && shouldTryNextResponsesPayload(resp.StatusCode) {
+				loger.Loger.Warn("[Ai]Responses请求失败，尝试兼容格式", zap.String("variant", payload.Name), zap.Int("status", resp.StatusCode), zap.String("body", limitRefineString(string(Dresp), 500)))
+				continue
+			}
+			loger.Loger.Error("[Ai]Ai返回HTTP错误", zap.String("variant", payload.Name), zap.Int("status", resp.StatusCode), zap.String("body", limitRefineString(string(Dresp), 500)))
+			return
+		}
+		if useResponsesAPI(cfg.BaseUrl) {
+			Jresp, err = parseResponsesResp(Dresp)
+		} else {
+			err = json.Unmarshal(Dresp, &Jresp)
+		}
+		if err != nil {
+			loger.Loger.Error("[Ai]无法反序列化JSON", zap.Error(err), zap.String("variant", payload.Name), zap.String("body", string(Dresp)))
+			return
+		}
+		if len(Jresp.Choices) == 0 {
+			loger.Loger.Error("[Ai]Ai返回错误", zap.String("variant", payload.Name), zap.Any("Resp", string(Dresp)))
+			return
+		}
+		return Jresp
 	}
 	return Jresp
-
 }
 
 func buildReqBody(Model string, Msg []any) ([]byte, error) {
+	payloads, err := buildReqPayloads(Model, Msg)
+	if err != nil || len(payloads) == 0 {
+		return nil, err
+	}
+	return payloads[0].Body, nil
+}
+
+func buildReqPayloads(Model string, Msg []any) ([]aiRequestPayload, error) {
 	cfg := config.ConfigStruct.Ai
 	if useResponsesAPI(cfg.BaseUrl) {
-		instructions, input, err := toResponsesPayloadParts(Msg)
+		primary, err := buildResponsesReqBody(Model, Msg, false)
 		if err != nil {
 			return nil, err
 		}
-		body := responsesBodyStruct{
-			Model:        Model,
-			Instructions: instructions,
-			Input:        input,
-			Stream:       false,
+		legacy, err := buildResponsesReqBody(Model, Msg, true)
+		if err != nil {
+			return nil, err
 		}
-		if aiWebSearchEnabled() {
-			body.Tools = []responsesWebTool{{Type: responsesWebSearchToolType, SearchContextSize: aiSearchContextSize()}}
-			if aiForceWebSearchEnabled() {
-				body.ToolChoice = "required"
-			}
-		}
-		return json.Marshal(body)
+		return []aiRequestPayload{{Name: "responses", Body: primary}, {Name: "responses_compat", Body: legacy}}, nil
 	}
 
 	body := BodyStruct{
@@ -182,7 +194,55 @@ func buildReqBody(Model string, Msg []any) ([]byte, error) {
 	if aiWebSearchEnabled() {
 		body.WebSearchOptions = &webSearchOptions{SearchContextSize: aiSearchContextSize()}
 	}
+	data, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	return []aiRequestPayload{{Name: "chat_completions", Body: data}}, nil
+}
+
+func buildResponsesReqBody(Model string, Msg []any, legacy bool) ([]byte, error) {
+	var body responsesBodyStruct
+	if legacy {
+		input, err := toResponsesInput(Msg)
+		if err != nil {
+			return nil, err
+		}
+		body = responsesBodyStruct{
+			Model:  Model,
+			Input:  input,
+			Stream: false,
+		}
+		if aiWebSearchEnabled() {
+			body.Tools = []responsesWebTool{{Type: legacyResponsesWebSearchToolType, SearchContextSize: aiSearchContextSize()}}
+			if aiForceWebSearchEnabled() {
+				body.ToolChoice = "required"
+			}
+		}
+		return json.Marshal(body)
+	}
+
+	instructions, input, err := toResponsesPayloadParts(Msg)
+	if err != nil {
+		return nil, err
+	}
+	body = responsesBodyStruct{
+		Model:        Model,
+		Instructions: instructions,
+		Input:        input,
+		Stream:       false,
+	}
+	if aiWebSearchEnabled() {
+		body.Tools = []responsesWebTool{{Type: responsesWebSearchToolType, SearchContextSize: aiSearchContextSize()}}
+		if aiForceWebSearchEnabled() {
+			body.ToolChoice = "required"
+		}
+	}
 	return json.Marshal(body)
+}
+
+func shouldTryNextResponsesPayload(status int) bool {
+	return status == http.StatusBadRequest || status == http.StatusUnprocessableEntity || status == http.StatusBadGateway
 }
 
 func useResponsesAPI(baseURL string) bool {
@@ -248,8 +308,33 @@ func toResponsesPayloadParts(Msg []any) (string, []responsesInputMsg, error) {
 }
 
 func toResponsesInput(Msg []any) ([]responsesInputMsg, error) {
-	_, input, err := toResponsesPayloadParts(Msg)
-	return input, err
+	input := make([]responsesInputMsg, 0, len(Msg))
+	for _, msg := range Msg {
+		data, err := json.Marshal(msg)
+		if err != nil {
+			return nil, err
+		}
+		var raw rawMsg
+		if err := json.Unmarshal(data, &raw); err != nil {
+			return nil, err
+		}
+		role := strings.ToLower(strings.TrimSpace(raw.Role))
+		if role == "system" {
+			role = "developer"
+		}
+		if role == "" {
+			role = "user"
+		}
+		content, err := toResponsesContent(raw.Content)
+		if err != nil {
+			return nil, err
+		}
+		input = append(input, responsesInputMsg{
+			Role:    role,
+			Content: content,
+		})
+	}
+	return input, nil
 }
 
 func responsesInstructionText(raw json.RawMessage) (string, error) {

@@ -6,7 +6,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"openxhh/config"
+	"openxhh/loger"
 	"testing"
+
+	"go.uber.org/zap"
 )
 
 func TestBuildReqBodyAddsChatCompletionsWebSearchByDefault(t *testing.T) {
@@ -114,6 +117,95 @@ func TestBuildReqBodyResponsesWebSearch(t *testing.T) {
 	if got.ToolChoice != "required" {
 		t.Fatalf("tool_choice = %q", got.ToolChoice)
 	}
+}
+
+func TestSendReqResponsesFallsBackToCompatPayload(t *testing.T) {
+	restoreAIConfig(t)
+	oldLogger := loger.Loger
+	loger.Loger = zap.NewNop()
+	t.Cleanup(func() { loger.Loger = oldLogger })
+	config.ConfigStruct.Ai.WebSearch = testBoolPtr(true)
+	config.ConfigStruct.Ai.SearchContextSize = "medium"
+
+	attempts := 0
+	var bodies []map[string]json.RawMessage
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		attempts++
+		var body map[string]json.RawMessage
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		bodies = append(bodies, body)
+		w.Header().Set("Content-Type", "application/json")
+		if attempts == 1 {
+			w.WriteHeader(http.StatusBadGateway)
+			_, _ = w.Write([]byte(`{"error":{"message":"openai_error","type":"bad_response_status_code"}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"output_text":"compat-ok","usage":{"total_tokens":9}}`))
+	}))
+	defer server.Close()
+
+	config.ConfigStruct.Ai.BaseUrl = server.URL + "/v1/responses"
+	resp := SendReq("test-model", []any{
+		Messages[string]{Role: "system", Content: "system prompt"},
+		Messages[string]{Role: "user", Content: "hello"},
+	})
+	if len(resp.Choices) != 1 || resp.Choices[0].Msg.Content != "compat-ok" {
+		t.Fatalf("response = %+v", resp)
+	}
+	if attempts != 2 || len(bodies) != 2 {
+		t.Fatalf("attempts = %d, bodies = %d", attempts, len(bodies))
+	}
+
+	var first struct {
+		Instructions string `json:"instructions"`
+		Tools        []struct {
+			Type string `json:"type"`
+		} `json:"tools"`
+	}
+	if err := json.Unmarshal(mustRawMessage(t, bodies[0], "tools"), &first.Tools); err != nil {
+		t.Fatalf("first tools: %v", err)
+	}
+	_ = json.Unmarshal(bodies[0]["instructions"], &first.Instructions)
+	if first.Instructions != "system prompt" || len(first.Tools) != 1 || first.Tools[0].Type != responsesWebSearchToolType {
+		t.Fatalf("first body instructions=%q tools=%+v", first.Instructions, first.Tools)
+	}
+
+	var second struct {
+		Input []struct {
+			Role string `json:"role"`
+		} `json:"input"`
+		Tools []struct {
+			Type string `json:"type"`
+		} `json:"tools"`
+	}
+	if _, ok := bodies[1]["instructions"]; ok {
+		t.Fatalf("compat body should not include instructions: %s", string(bodies[1]["instructions"]))
+	}
+	if err := json.Unmarshal(mustRawMessage(t, bodies[1], "input"), &second.Input); err != nil {
+		t.Fatalf("compat input: %v", err)
+	}
+	if err := json.Unmarshal(mustRawMessage(t, bodies[1], "tools"), &second.Tools); err != nil {
+		t.Fatalf("compat tools: %v", err)
+	}
+	if len(second.Input) != 2 || second.Input[0].Role != "developer" || second.Input[1].Role != "user" {
+		t.Fatalf("compat input = %+v", second.Input)
+	}
+	if len(second.Tools) != 1 || second.Tools[0].Type != legacyResponsesWebSearchToolType {
+		t.Fatalf("compat tools = %+v", second.Tools)
+	}
+}
+
+func mustRawMessage(t *testing.T, body map[string]json.RawMessage, key string) json.RawMessage {
+	t.Helper()
+	value, ok := body[key]
+	if !ok {
+		t.Fatalf("missing %q in body: %+v", key, body)
+	}
+	return value
 }
 
 func TestParseResponsesResp(t *testing.T) {
