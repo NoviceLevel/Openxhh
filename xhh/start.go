@@ -1,6 +1,9 @@
 package xhh
 
-import "fmt"
+import (
+	"fmt"
+	"openxhh/config"
+)
 
 func Start() {
 	fmt.Println("[XHH] Starting")
@@ -10,4 +13,9 @@ func Start() {
 	go func() {
 		AutoReply()
 	}()
+	if config.ConfigStruct.FeedReply.Enabled {
+		go func() {
+			AutoFeedReply()
+		}()
+	}
 }

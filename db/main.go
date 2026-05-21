@@ -24,6 +24,7 @@ func Init() {
 		loger.Loger.Fatal("[DB]无效的数据库类型")
 	}
 	migrateAtTable()
+	migrateFeedReplyTable()
 }
 
 func migrateAtTable() {

@@ -17,27 +17,19 @@ type Tags struct {
 }
 
 func GetAiReply(Contents []Content, UserSay string, Topics []Topics, Tags []Tags, logFields ...zap.Field) string {
+	return GetAiReplyWithPrompt(config.ConfigStruct.Ai.Prompt, Contents, UserSay, Topics, Tags, logFields...)
+}
+
+func GetAiReplyWithPrompt(prompt string, Contents []Content, UserSay string, Topics []Topics, Tags []Tags, logFields ...zap.Field) string {
 	askFields := append([]zap.Field{zap.Any("Content", Contents)}, logFields...)
 	loger.Loger.Info("[Ai]正在询问Ai", askFields...)
 	var SMsg Messages[string]
 	var UMsg Messages[[]Content]
 	var Msgs []any
 	SMsg.Role = "system"
-	cfg := config.ConfigStruct.Ai
-	prompt := cfg.Prompt
-	var topStr strings.Builder
-	for _, v := range Topics {
-		topStr.WriteString(v.Name)
-	}
-	prompt = strings.ReplaceAll(prompt, "?!top!?", topStr.String())
-	var tagStr strings.Builder
-	for _, v := range Tags {
-		tagStr.WriteString(v.Name)
-	}
-	prompt = strings.ReplaceAll(prompt, "?!tag!?", tagStr.String())
+	prompt = applyPromptVariables(prompt, Topics, Tags)
 	fmt.Println(prompt)
 	SMsg.Content = prompt
-	//用户
 	UMsg.Role = "user"
 	var UserContent Content
 	UserContent.Text = "以上是帖子内容。\n用户整条评论：" + UserSay + "\n请结合整条评论理解用户意图；评论中的机器人 @ 只是唤醒标记，可能出现在开头、中间或结尾，不要把它当作问题起点。"
@@ -57,4 +49,18 @@ func GetAiReply(Contents []Content, UserSay string, Topics []Topics, Tags []Tags
 	replyFields := append([]zap.Field{zap.String("text", text), zap.Int("本次消耗token", resp.Usage.TotalToken)}, logFields...)
 	loger.Loger.Info("[Ai]Ai说：", replyFields...)
 	return text
+}
+
+func applyPromptVariables(prompt string, Topics []Topics, Tags []Tags) string {
+	var topStr strings.Builder
+	for _, v := range Topics {
+		topStr.WriteString(v.Name)
+	}
+	prompt = strings.ReplaceAll(prompt, "?!top!?", topStr.String())
+	var tagStr strings.Builder
+	for _, v := range Tags {
+		tagStr.WriteString(v.Name)
+	}
+	prompt = strings.ReplaceAll(prompt, "?!tag!?", tagStr.String())
+	return prompt
 }

@@ -6,6 +6,8 @@ import (
 	"os"
 )
 
+const defaultFeedReplyPrompt = "你正在作为小黑盒用户回复帖子。请结合帖子内容写一句自然、有信息量、不像机器人的短评论；如果帖子不适合回复，或容易引战、广告、抽奖、敏感内容，请只输出 SKIP。"
+
 var ConfigStruct struct {
 	Xhh struct {
 		CheckTime                int    `json:"checkTime"`
@@ -37,6 +39,14 @@ var ConfigStruct struct {
 		ForceWebSearch    *bool  `json:"forceWebSearch,omitempty"`
 		SearchContextSize string `json:"searchContextSize"`
 	} `json:"ai"`
+	FeedReply struct {
+		Enabled   bool   `json:"enabled"`
+		Interval  int    `json:"interval"`
+		MaxPerRun int    `json:"maxPerRun"`
+		MaxPerDay int    `json:"maxPerDay"`
+		DryRun    *bool  `json:"dryRun,omitempty"`
+		Prompt    string `json:"prompt"`
+	} `json:"feedReply"`
 	Image struct {
 		Model           string `json:"model"`
 		BaseUrl         string `json:"baseUrl"`
@@ -129,6 +139,26 @@ func applyDefaults() bool {
 	}
 	if ConfigStruct.Ai.SearchContextSize == "" {
 		ConfigStruct.Ai.SearchContextSize = "medium"
+		changed = true
+	}
+	if ConfigStruct.FeedReply.Interval <= 0 {
+		ConfigStruct.FeedReply.Interval = 900
+		changed = true
+	}
+	if ConfigStruct.FeedReply.MaxPerRun <= 0 {
+		ConfigStruct.FeedReply.MaxPerRun = 1
+		changed = true
+	}
+	if ConfigStruct.FeedReply.MaxPerDay <= 0 {
+		ConfigStruct.FeedReply.MaxPerDay = 10
+		changed = true
+	}
+	if ConfigStruct.FeedReply.DryRun == nil {
+		ConfigStruct.FeedReply.DryRun = boolPtr(true)
+		changed = true
+	}
+	if ConfigStruct.FeedReply.Prompt == "" {
+		ConfigStruct.FeedReply.Prompt = defaultFeedReplyPrompt
 		changed = true
 	}
 	if ConfigStruct.Image.Model == "" {

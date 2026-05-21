@@ -27,10 +27,11 @@ import (
 )
 
 const (
-	defaultAddr       = "127.0.0.1:29173"
-	windowsRunKey     = `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`
-	windowsRunValue   = "OpenxhhWebUI"
-	maxConfigBodySize = 1 << 20
+	defaultAddr            = "127.0.0.1:29173"
+	windowsRunKey          = `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`
+	windowsRunValue        = "OpenxhhWebUI"
+	maxConfigBodySize      = 1 << 20
+	defaultFeedReplyPrompt = "你正在作为小黑盒用户回复帖子。请结合帖子内容写一句自然、有信息量、不像机器人的短评论；如果帖子不适合回复，或容易引战、广告、抽奖、敏感内容，请只输出 SKIP。"
 )
 
 var indexTemplate = template.Must(template.New("index").Parse(indexHTML))
@@ -71,6 +72,14 @@ type appConfig struct {
 		ForceWebSearch    *bool  `json:"forceWebSearch,omitempty"`
 		SearchContextSize string `json:"searchContextSize"`
 	} `json:"ai"`
+	FeedReply struct {
+		Enabled   bool   `json:"enabled"`
+		Interval  int    `json:"interval"`
+		MaxPerRun int    `json:"maxPerRun"`
+		MaxPerDay int    `json:"maxPerDay"`
+		DryRun    *bool  `json:"dryRun,omitempty"`
+		Prompt    string `json:"prompt"`
+	} `json:"feedReply"`
 	Image struct {
 		Model           string `json:"model"`
 		BaseURL         string `json:"baseUrl"`
@@ -547,6 +556,26 @@ func applyConfigDefaults(cfg *appConfig) bool {
 	}
 	if cfg.AI.SearchContextSize == "" {
 		cfg.AI.SearchContextSize = "medium"
+		changed = true
+	}
+	if cfg.FeedReply.Interval <= 0 {
+		cfg.FeedReply.Interval = 900
+		changed = true
+	}
+	if cfg.FeedReply.MaxPerRun <= 0 {
+		cfg.FeedReply.MaxPerRun = 1
+		changed = true
+	}
+	if cfg.FeedReply.MaxPerDay <= 0 {
+		cfg.FeedReply.MaxPerDay = 10
+		changed = true
+	}
+	if cfg.FeedReply.DryRun == nil {
+		cfg.FeedReply.DryRun = boolPtr(true)
+		changed = true
+	}
+	if cfg.FeedReply.Prompt == "" {
+		cfg.FeedReply.Prompt = defaultFeedReplyPrompt
 		changed = true
 	}
 	if cfg.Image.Model == "" {
@@ -1194,6 +1223,15 @@ const indexHTML = `<!doctype html>
               <label class="switch field wide"><span>强制每次回复使用联网搜索</span><input data-path="ai.forceWebSearch" data-type="bool" type="checkbox"></label>
               <div class="field"><label>搜索上下文大小</label><select data-path="ai.searchContextSize"><option value="low">low</option><option value="medium">medium</option><option value="high">high</option></select></div>
               <div class="field wide"><label>回复策略 Prompt</label><textarea data-path="ai.prompt"></textarea></div>
+            </div>
+            <div class="form-group">
+              <h3>自动刷帖回复</h3>
+              <label class="switch field wide"><span>启用自动刷帖回复</span><input data-path="feedReply.enabled" data-type="bool" type="checkbox"></label>
+              <label class="switch field wide"><span>仅试运行，不真正发送评论</span><input data-path="feedReply.dryRun" data-type="bool" type="checkbox"></label>
+              <div class="field"><label>刷帖间隔/秒</label><input class="input" data-path="feedReply.interval" data-type="number"></div>
+              <div class="field"><label>每轮最多处理</label><input class="input" data-path="feedReply.maxPerRun" data-type="number"></div>
+              <div class="field"><label>每日最多处理</label><input class="input" data-path="feedReply.maxPerDay" data-type="number"></div>
+              <div class="field wide"><label>自动刷帖 Prompt</label><textarea data-path="feedReply.prompt"></textarea></div>
             </div>
             <div class="form-group">
               <h3>图片能力</h3>

@@ -39,6 +39,7 @@ const defaultAddr = ":29173"
 const journalName = "__journal__"
 const tokenRecordFileName = "token_records.jsonl"
 const maxConfigBodySize = 1 << 20
+const defaultFeedReplyPrompt = "你正在作为小黑盒用户回复帖子。请结合帖子内容写一句自然、有信息量、不像机器人的短评论；如果帖子不适合回复，或容易引战、广告、抽奖、敏感内容，请只输出 SKIP。"
 const maxRecordLinkLookupIDs = 300
 const webuiSessionCookieName = "xhh_vps_webui_session"
 const webuiSessionDuration = 7 * 24 * time.Hour
@@ -108,6 +109,19 @@ type regenerateMessageRequest struct {
 	Question  string `json:"question"`
 }
 
+type feedReplyRecord struct {
+	LinkID    int64  `json:"linkId"`
+	Title     string `json:"title"`
+	AuthorID  int64  `json:"authorId"`
+	Author    string `json:"author"`
+	PostText  string `json:"postText"`
+	ReplyText string `json:"replyText"`
+	Status    string `json:"status"`
+	Reason    string `json:"reason"`
+	CreatedAt int64  `json:"createdAt"`
+	RepliedAt int64  `json:"repliedAt"`
+}
+
 type appConfig struct {
 	Xhh struct {
 		CheckTime                int    `json:"checkTime"`
@@ -139,6 +153,14 @@ type appConfig struct {
 		ForceWebSearch    *bool  `json:"forceWebSearch,omitempty"`
 		SearchContextSize string `json:"searchContextSize"`
 	} `json:"ai"`
+	FeedReply struct {
+		Enabled   bool   `json:"enabled"`
+		Interval  int    `json:"interval"`
+		MaxPerRun int    `json:"maxPerRun"`
+		MaxPerDay int    `json:"maxPerDay"`
+		DryRun    *bool  `json:"dryRun,omitempty"`
+		Prompt    string `json:"prompt"`
+	} `json:"feedReply"`
 	Image struct {
 		Model           string `json:"model"`
 		BaseURL         string `json:"baseUrl"`
@@ -202,6 +224,7 @@ func main() {
 	mux.HandleFunc("/api/logs", state.requireAuth(state.handleLogs))
 	mux.HandleFunc("/api/logs/read", state.requireAuth(state.handleReadLog))
 	mux.HandleFunc("/api/records", state.requireAuth(state.handleRecords))
+	mux.HandleFunc("/api/feed-records", state.requireAuth(state.handleFeedRecords))
 
 	listener, err := net.Listen("tcp", *addr)
 	if err != nil {
@@ -588,6 +611,26 @@ func applyConfigDefaults(cfg *appConfig) bool {
 	}
 	if cfg.AI.SearchContextSize == "" {
 		cfg.AI.SearchContextSize = "medium"
+		changed = true
+	}
+	if cfg.FeedReply.Interval <= 0 {
+		cfg.FeedReply.Interval = 900
+		changed = true
+	}
+	if cfg.FeedReply.MaxPerRun <= 0 {
+		cfg.FeedReply.MaxPerRun = 1
+		changed = true
+	}
+	if cfg.FeedReply.MaxPerDay <= 0 {
+		cfg.FeedReply.MaxPerDay = 10
+		changed = true
+	}
+	if cfg.FeedReply.DryRun == nil {
+		cfg.FeedReply.DryRun = boolPtr(true)
+		changed = true
+	}
+	if cfg.FeedReply.Prompt == "" {
+		cfg.FeedReply.Prompt = defaultFeedReplyPrompt
 		changed = true
 	}
 	if cfg.Image.Model == "" {
@@ -995,6 +1038,26 @@ func (s *serverState) handleRecords(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "content": content, "sources": sources, "tokens": tokens, "links": links})
 }
 
+func (s *serverState) handleFeedRecords(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	window := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("window")))
+	recentOnly := window == "24h" || window == "recent"
+	cfg, err := s.readConfigForRecordLookup()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	records, err := s.readFeedReplyRecords(cfg, recentOnly)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "records": records})
+}
+
 func (s *serverState) readRecordLogs(recentOnly bool) (string, int, error) {
 	logFiles, _ := listLogFiles(filepath.Join(s.rootDir, "log"))
 	if len(logFiles) > 0 {
@@ -1074,6 +1137,95 @@ func (s *serverState) readConfigForRecordLookup() (appConfig, error) {
 	}
 	applyConfigDefaults(&cfg)
 	return cfg, nil
+}
+
+func (s *serverState) readFeedReplyRecords(cfg appConfig, recentOnly bool) ([]feedReplyRecord, error) {
+	switch strings.ToLower(strings.TrimSpace(cfg.DataBase.Type)) {
+	case "", "sqlite":
+		return s.readSQLiteFeedReplyRecords(recentOnly)
+	case "pg", "postgres", "postgresql":
+		return readPostgresFeedReplyRecords(cfg, recentOnly)
+	default:
+		return nil, fmt.Errorf("不支持的数据库类型: %s", cfg.DataBase.Type)
+	}
+}
+
+func (s *serverState) readSQLiteFeedReplyRecords(recentOnly bool) ([]feedReplyRecord, error) {
+	if _, err := os.Stat(filepath.Join(s.rootDir, "sql.db")); err != nil {
+		return []feedReplyRecord{}, nil
+	}
+	database, err := s.openSQLiteDatabase()
+	if err != nil {
+		return nil, err
+	}
+	defer database.Close()
+	query := "SELECT link_id,title,author_id,author_name,post_text,reply_text,status,reason,created_at,replied_at FROM feed_reply_records"
+	args := []any{}
+	if recentOnly {
+		query += " WHERE replied_at >= ?"
+		args = append(args, time.Now().Add(-24*time.Hour).Unix())
+	}
+	query += " ORDER BY replied_at DESC LIMIT 300"
+	rows, err := database.Query(query, args...)
+	if err != nil {
+		if isMissingFeedReplyTable(err) {
+			return []feedReplyRecord{}, nil
+		}
+		return nil, err
+	}
+	defer rows.Close()
+	return scanFeedReplyRows(rows)
+}
+
+func readPostgresFeedReplyRecords(cfg appConfig, recentOnly bool) ([]feedReplyRecord, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, postgresDSN(cfg))
+	if err != nil {
+		return nil, err
+	}
+	defer pool.Close()
+	query := "SELECT link_id,title,author_id,author_name,post_text,reply_text,status,reason,created_at,replied_at FROM feed_reply_records"
+	args := []any{}
+	if recentOnly {
+		query += " WHERE replied_at >= $1"
+		args = append(args, time.Now().Add(-24*time.Hour).Unix())
+	}
+	query += " ORDER BY replied_at DESC LIMIT 300"
+	rows, err := pool.Query(ctx, query, args...)
+	if err != nil {
+		if isMissingFeedReplyTable(err) {
+			return []feedReplyRecord{}, nil
+		}
+		return nil, err
+	}
+	defer rows.Close()
+	records := []feedReplyRecord{}
+	for rows.Next() {
+		var record feedReplyRecord
+		if err := rows.Scan(&record.LinkID, &record.Title, &record.AuthorID, &record.Author, &record.PostText, &record.ReplyText, &record.Status, &record.Reason, &record.CreatedAt, &record.RepliedAt); err != nil {
+			return nil, err
+		}
+		records = append(records, record)
+	}
+	return records, rows.Err()
+}
+
+func scanFeedReplyRows(rows *sql.Rows) ([]feedReplyRecord, error) {
+	records := []feedReplyRecord{}
+	for rows.Next() {
+		var record feedReplyRecord
+		if err := rows.Scan(&record.LinkID, &record.Title, &record.AuthorID, &record.Author, &record.PostText, &record.ReplyText, &record.Status, &record.Reason, &record.CreatedAt, &record.RepliedAt); err != nil {
+			return nil, err
+		}
+		records = append(records, record)
+	}
+	return records, rows.Err()
+}
+
+func isMissingFeedReplyTable(err error) bool {
+	text := strings.ToLower(err.Error())
+	return strings.Contains(text, "no such table") || strings.Contains(text, "does not exist")
 }
 
 func recordLinkLookupIDs(content string) ([]int64, []int64) {
@@ -1604,7 +1756,7 @@ const indexHTML = `<!doctype html>
   <main class="shell">
     <header class="topnav">
       <div class="brand"><div class="logo">猫</div><div><strong>小黑盒猫娘</strong><br><small>VPS 控制台</small></div></div>
-      <nav class="navlinks"><button class="nav active" data-view="home">主控台</button><button class="nav" data-view="records">聊天记录</button><button class="nav" data-view="logs">日志管理</button><button class="nav" data-view="config">配置管理</button><button class="nav" data-view="service">服务控制</button><button class="nav" data-view="status">系统状态</button></nav>
+      <nav class="navlinks"><button class="nav active" data-view="home">主控台</button><button class="nav" data-view="records">@ 回复记录</button><button class="nav" data-view="feed-records">自动刷帖记录</button><button class="nav" data-view="logs">日志管理</button><button class="nav" data-view="config">配置管理</button><button class="nav" data-view="service">服务控制</button><button class="nav" data-view="status">系统状态</button></nav>
       <div class="right-tools"><div id="topStatus" class="tool-pill"><span class="dot"></span><span>未连接</span></div><button id="adminMenuBtn" class="avatar-button" type="button" aria-label="打开管理员设置"><img src="/assets/admin-avatar.png" alt="管理员"></button></div>
     </header>
 
@@ -1620,31 +1772,37 @@ const indexHTML = `<!doctype html>
     </section>
 
     <section id="appView" class="hidden">
-      <div class="mobile-tabs"><select id="mobileNav"><option value="home">主控台</option><option value="records">聊天记录</option><option value="logs">日志管理</option><option value="config">配置管理</option><option value="service">服务控制</option><option value="status">系统状态</option></select></div>
+      <div class="mobile-tabs"><select id="mobileNav"><option value="home">主控台</option><option value="records">@ 回复记录</option><option value="feed-records">自动刷帖记录</option><option value="logs">日志管理</option><option value="config">配置管理</option><option value="service">服务控制</option><option value="status">系统状态</option></select></div>
       <div class="layout">
         <aside class="side">
           <button class="new-chat" data-view-button="home">主控首页</button>
-          <button class="side-link" data-view-button="records" type="button">最近24小时聊天记录</button>
-          <div class="side-card"><strong>猫娘面板</strong><p>主控台放首页，聊天记录可从左侧单独查看。</p></div>
+          <button class="side-link" data-view-button="records" type="button">最近24小时 @ 回复记录</button>
+          <button class="side-link" data-view-button="feed-records" type="button">自动刷帖记录</button>
+          <div class="side-card"><strong>猫娘面板</strong><p>主控台放首页，@ 回复记录和自动刷帖记录可从左侧单独查看。</p></div>
           <div class="side-card service-card"><strong>当前服务</strong><p>{{.Service}}</p></div>
         </aside>
         <div class="content">
           <section class="view active" id="view-home">
-            <div class="hero-card"><div class="hero-head"><div class="hero-title"><h1>主控台</h1><p>汇总所有可读取日志中的提问、回复、失败和 token 消耗。</p></div><div class="panel-actions"><button id="homeRefreshBtn" class="secondary" type="button">刷新</button><button class="secondary" data-view-button="records" type="button">查看聊天记录</button><button id="homeRestartBtn" class="warn" type="button">重启服务</button></div></div></div>
+            <div class="hero-card"><div class="hero-head"><div class="hero-title"><h1>主控台</h1><p>汇总所有可读取日志中的提问、回复、失败和 token 消耗。</p></div><div class="panel-actions"><button id="homeRefreshBtn" class="secondary" type="button">刷新</button><button class="secondary" data-view-button="records" type="button">查看 @ 回复记录</button><button id="homeRestartBtn" class="warn" type="button">重启服务</button></div></div></div>
             <section class="cards"><div class="card stat"><span>提问次数</span><strong id="metricStatus" class="violet">0</strong></div><div class="card stat"><span>回复成功</span><strong id="metricLines" class="green">0</strong></div><div class="card stat"><span>失败次数</span><strong id="metricErrors" class="red">0</strong></div><div class="card stat"><span>待处理</span><strong id="metricFiles" class="blue">0</strong></div><div class="card stat"><span>Web 端口</span><strong id="metricPort" class="amber">29173</strong></div></section>
-            <section class="grid-2"><div class="card panel"><div class="panel-head"><div><h2>Token 记录</h2><p>按全部记录、最近 1 小时和最近 24 小时汇总 AI token 消耗。</p></div></div><div class="token-summary"><div><span>总 token</span><strong id="tokenTotal" class="green">0</strong></div><div><span>最近 1 小时</span><strong id="tokenHour" class="blue">0</strong></div><div><span>最近 24 小时</span><strong id="tokenDay" class="violet">0</strong></div></div><div id="appToast" class="toast"></div></div><div class="card panel"><div class="panel-head"><div><h2>最近 7 次日志趋势</h2><p>按全部聊天记录聚合；无日期时归入今日。</p></div></div><div id="chart" class="chart"></div></div></section>
+            <section class="grid-2"><div class="card panel"><div class="panel-head"><div><h2>Token 记录</h2><p>按全部记录、最近 1 小时和最近 24 小时汇总 AI token 消耗。</p></div></div><div class="token-summary"><div><span>总 token</span><strong id="tokenTotal" class="green">0</strong></div><div><span>最近 1 小时</span><strong id="tokenHour" class="blue">0</strong></div><div><span>最近 24 小时</span><strong id="tokenDay" class="violet">0</strong></div></div><div id="appToast" class="toast"></div></div><div class="card panel"><div class="panel-head"><div><h2>最近 7 次日志趋势</h2><p>按全部@ 回复记录聚合；无日期时归入今日。</p></div></div><div id="chart" class="chart"></div></div></section>
           </section>
 
           <section class="view" id="view-records">
-            <div class="hero-card"><div class="hero-head"><div class="hero-title"><h1>聊天记录</h1><p id="recordsMeta">正在读取最近24小时聊天记录...</p></div><div class="panel-actions"><button id="recordsRefreshBtn" class="secondary" type="button">刷新记录</button><button class="secondary" data-view-button="home" type="button">返回主控台</button></div></div><div id="recordsToast" class="toast"></div></div>
-            <section class="card records"><div class="panel-head"><div><h2>最近24小时对话</h2><p>按顺序配对最近 24 小时内的“小黑盒用户提问”和“机器人回复”，失败和异常发送会单独标记。</p></div></div><div class="table-wrap"><table><thead><tr><th>时间</th><th>用户</th><th>用户说</th><th>机器人回复</th><th>状态</th><th>帖子</th><th>操作</th></tr></thead><tbody id="recordsBody"><tr><td colspan="7">等待日志...</td></tr></tbody></table></div></section>
+            <div class="hero-card"><div class="hero-head"><div class="hero-title"><h1>@ 回复记录</h1><p id="recordsMeta">正在读取最近24小时 @ 回复记录...</p></div><div class="panel-actions"><button id="recordsRefreshBtn" class="secondary" type="button">刷新记录</button><button class="secondary" data-view-button="feed-records" type="button">查看自动刷帖记录</button><button class="secondary" data-view-button="home" type="button">返回主控台</button></div></div><div id="recordsToast" class="toast"></div></div>
+            <section class="card records"><div class="panel-head"><div><h2>最近24小时 @ 回复</h2><p>按顺序配对最近 24 小时内的“小黑盒用户提问”和“机器人回复”，失败和异常发送会单独标记。</p></div></div><div class="table-wrap"><table><thead><tr><th>时间</th><th>用户</th><th>用户说</th><th>机器人回复</th><th>状态</th><th>帖子</th><th>操作</th></tr></thead><tbody id="recordsBody"><tr><td colspan="7">等待日志...</td></tr></tbody></table></div></section>
           </section>
 
-          <section class="view" id="view-logs"><div class="card log-panel"><div class="log-head"><div><h2>日志管理</h2><p id="currentSource">等待日志源...</p></div><div class="log-tools"><div class="log-filterbar"><select id="logSelect"></select><select id="logFilter"><option value="all">全部</option><option value="error">只看报错</option><option value="ask">用户提问</option><option value="reply">AI 回复</option><option value="image">图片/生图</option></select><input id="logKeyword" class="input" type="search" placeholder="关键词筛选"></div><div class="log-buttonbar"><button id="copySelectedLogBtn" class="copy-btn" type="button">复制选中</button><button id="copyLogBtn" class="copy-btn" type="button">复制全部</button><button id="toggleLogRefreshBtn" class="copy-btn" type="button">暂停刷新</button></div></div></div><div class="terminal"><pre id="logOutput" class="empty" tabindex="0">等待日志...</pre></div></div></section>
+          <section class="view" id="view-feed-records">
+            <div class="hero-card"><div class="hero-head"><div class="hero-title"><h1>自动刷帖记录</h1><p id="feedRecordsMeta">正在读取最近24小时自动刷帖记录...</p></div><div class="panel-actions"><button id="feedRecordsRefreshBtn" class="secondary" type="button">刷新记录</button><button class="secondary" data-view-button="records" type="button">查看 @ 回复记录</button><button class="secondary" data-view-button="home" type="button">返回主控台</button></div></div><div id="feedRecordsToast" class="toast"></div></div>
+            <section class="card records"><div class="panel-head"><div><h2>最近24小时自动刷帖</h2><p>显示 feeds 自动生成的试运行、已发送、跳过和失败记录。</p></div></div><div class="table-wrap"><table><thead><tr><th>时间</th><th>帖子</th><th>作者</th><th>AI 回复</th><th>状态</th><th>原因</th><th>打开</th></tr></thead><tbody id="feedRecordsBody"><tr><td colspan="7">等待记录...</td></tr></tbody></table></div></section>
+          </section>
+
+          <section class="view" id="view-logs"><div class="card log-panel"><div class="log-head"><div><h2>日志管理</h2><p id="currentSource">等待日志源...</p></div><div class="log-tools"><div class="log-filterbar"><select id="logSelect"></select><select id="logFilter"><option value="all">全部</option><option value="error">只看报错</option><option value="ask">用户提问</option><option value="reply">AI 回复</option><option value="image">图片/生图</option><option value="feed">自动刷帖</option></select><input id="logKeyword" class="input" type="search" placeholder="关键词筛选"></div><div class="log-buttonbar"><button id="copySelectedLogBtn" class="copy-btn" type="button">复制选中</button><button id="copyLogBtn" class="copy-btn" type="button">复制全部</button><button id="toggleLogRefreshBtn" class="copy-btn" type="button">暂停刷新</button></div></div></div><div class="terminal"><pre id="logOutput" class="empty" tabindex="0">等待日志...</pre></div></div></section>
 
           <section class="view" id="view-service"><div class="card panel"><div class="panel-head"><div><h2>服务控制</h2><p>启动、停止或重启 Openxhh systemd 服务。</p></div></div><div class="panel-actions"><button id="serviceStartBtn" class="primary">启动服务</button><button id="serviceRestartBtn" class="warn">重启服务</button><button id="serviceStopBtn" class="danger">停止服务</button><button id="serviceRefreshBtn" class="secondary">刷新状态</button></div><div class="warnbox">如果按钮报错，请确认 Web UI 运行用户有权限执行 systemctl。</div></div></section>
 
-          <section class="view" id="view-config"><div class="card panel"><div class="panel-head"><div><h2>配置管理</h2><p>保存后写入工作目录下的 <strong id="configPath">config.json</strong>；运行中的机器人需要重启后读取新配置。</p></div><div class="panel-actions"><button id="saveConfigBtn" class="primary" type="submit" form="configForm">保存配置</button><button id="configRestartBtn" class="secondary" type="button">重启服务</button></div></div><form id="configForm" class="config-form"><div class="config-group"><h3>小黑盒</h3><div class="field"><label>检查间隔/秒</label><input class="input" data-path="xhh.checkTime" data-type="number"></div><div class="field"><label>回复间隔/秒</label><input class="input" data-path="xhh.replyTime" data-type="number"></div><div class="field"><label>最高回复线程</label><input class="input" data-path="xhh.maxReplyThreads" data-type="number"></div><div class="field"><label>最大待回复队列</label><input class="input" data-path="xhh.maxPendingReplies" data-type="number"></div><div class="field"><label>单用户待回复上限</label><input class="input" data-path="xhh.maxPendingRepliesPerUser" data-type="number"></div><label class="switch field wide"><span>启用白名单（关闭时回复所有 @，仍识别 owner）</span><input data-path="xhh.enableWhitelist" data-type="bool" type="checkbox"></label><div class="field wide"><label>Owner / 白名单 UID（英文逗号分隔）</label><input class="input" data-path="xhh.owner"></div><div class="field"><label>Device ID</label><input class="input" data-path="xhh.deviceID"></div><div class="field wide"><label>API Base URL</label><input class="input" data-path="xhh.baseUrl"></div><div class="field"><label>Web Version</label><input class="input" data-path="xhh.webver"></div><div class="field"><label>Version</label><input class="input" data-path="xhh.version"></div></div><div class="config-group"><h3>数据库</h3><div class="field"><label>类型</label><select data-path="database.type"><option value="sqlite">sqlite</option><option value="pg">pg</option></select></div><div class="field"><label>数据库名</label><input class="input" data-path="database.db"></div><div class="field"><label>Host</label><input class="input" data-path="database.host"></div><div class="field"><label>Port</label><input class="input" data-path="database.port"></div><div class="field"><label>User</label><input class="input" data-path="database.user"></div><div class="field"><label>Password</label><input class="input" data-path="database.passwd" type="password"></div></div><div class="config-group"><h3>AI 回复</h3><div class="field"><label>模型</label><input class="input" data-path="ai.model"></div><div class="field wide"><label>Chat Completions / Responses URL</label><input class="input" data-path="ai.baseUrl"><small class="hint">例如：https://xxx.com/v1/chat/completions 或 https://xxx.com/v1/responses</small></div><div class="field wide"><label>Token</label><input class="input" data-path="ai.token" type="password"></div><label class="switch field wide"><span>启用模型联网搜索</span><input data-path="ai.webSearch" data-type="bool" type="checkbox"></label><label class="switch field wide"><span>强制每次回复使用联网搜索</span><input data-path="ai.forceWebSearch" data-type="bool" type="checkbox"></label><div class="field"><label>搜索上下文大小</label><select data-path="ai.searchContextSize"><option value="low">low</option><option value="medium">medium</option><option value="high">high</option></select></div><div class="field wide"><label>回复策略 Prompt</label><textarea data-path="ai.prompt"></textarea></div></div><div class="config-group"><h3>图片能力</h3><div class="field"><label>模型</label><input class="input" data-path="image.model"></div><div class="field"><label>尺寸</label><input class="input" data-path="image.size"></div><div class="field wide"><label>Images Generations URL</label><input class="input" data-path="image.baseUrl"><small class="hint">例如：https://xxx.com/v1/images/generations</small></div><div class="field wide"><label>图片 Token</label><input class="input" data-path="image.token" type="password"></div><div class="field"><label>输出格式</label><input class="input" data-path="image.responseFormat"></div><div class="field"><label>输出目录</label><input class="input" data-path="image.outputDir"></div><div class="field"><label>上传模式</label><input class="input" data-path="image.uploadMode"></div><div class="field"><label>外部图片目录</label><input class="input" data-path="image.externalDir"></div><div class="field wide"><label>外部图片访问 URL</label><input class="input" data-path="image.externalBaseUrl"></div><label class="switch field wide"><span>启用图片 Prompt 优化</span><input data-path="image.promptRefine" data-type="bool" type="checkbox"></label><div class="field"><label>Prompt 优化模型</label><input class="input" data-path="image.promptModel"></div><div class="field"><label>Prompt 最大字符数</label><input class="input" data-path="image.promptMaxChars" data-type="number"></div><div class="field wide"><label>Prompt 优化 URL</label><input class="input" data-path="image.promptBaseUrl"><small class="hint">例如：https://xxx.com/v1/chat/completions</small></div><div class="field wide"><label>Prompt 优化 Token</label><input class="input" data-path="image.promptToken" type="password"></div></div></form><div id="configToast" class="toast"></div><div class="warnbox">保存配置不会自动重启服务；改白名单、线程数、模型或 token 后，请到“服务控制”重启 Openxhh。</div></div></section>
+          <section class="view" id="view-config"><div class="card panel"><div class="panel-head"><div><h2>配置管理</h2><p>保存后写入工作目录下的 <strong id="configPath">config.json</strong>；运行中的机器人需要重启后读取新配置。</p></div><div class="panel-actions"><button id="saveConfigBtn" class="primary" type="submit" form="configForm">保存配置</button><button id="configRestartBtn" class="secondary" type="button">重启服务</button></div></div><form id="configForm" class="config-form"><div class="config-group"><h3>小黑盒</h3><div class="field"><label>检查间隔/秒</label><input class="input" data-path="xhh.checkTime" data-type="number"></div><div class="field"><label>回复间隔/秒</label><input class="input" data-path="xhh.replyTime" data-type="number"></div><div class="field"><label>最高回复线程</label><input class="input" data-path="xhh.maxReplyThreads" data-type="number"></div><div class="field"><label>最大待回复队列</label><input class="input" data-path="xhh.maxPendingReplies" data-type="number"></div><div class="field"><label>单用户待回复上限</label><input class="input" data-path="xhh.maxPendingRepliesPerUser" data-type="number"></div><label class="switch field wide"><span>启用白名单（关闭时回复所有 @，仍识别 owner）</span><input data-path="xhh.enableWhitelist" data-type="bool" type="checkbox"></label><div class="field wide"><label>Owner / 白名单 UID（英文逗号分隔）</label><input class="input" data-path="xhh.owner"></div><div class="field"><label>Device ID</label><input class="input" data-path="xhh.deviceID"></div><div class="field wide"><label>API Base URL</label><input class="input" data-path="xhh.baseUrl"></div><div class="field"><label>Web Version</label><input class="input" data-path="xhh.webver"></div><div class="field"><label>Version</label><input class="input" data-path="xhh.version"></div></div><div class="config-group"><h3>数据库</h3><div class="field"><label>类型</label><select data-path="database.type"><option value="sqlite">sqlite</option><option value="pg">pg</option></select></div><div class="field"><label>数据库名</label><input class="input" data-path="database.db"></div><div class="field"><label>Host</label><input class="input" data-path="database.host"></div><div class="field"><label>Port</label><input class="input" data-path="database.port"></div><div class="field"><label>User</label><input class="input" data-path="database.user"></div><div class="field"><label>Password</label><input class="input" data-path="database.passwd" type="password"></div></div><div class="config-group"><h3>AI 回复</h3><div class="field"><label>模型</label><input class="input" data-path="ai.model"></div><div class="field wide"><label>Chat Completions / Responses URL</label><input class="input" data-path="ai.baseUrl"><small class="hint">例如：https://xxx.com/v1/chat/completions 或 https://xxx.com/v1/responses</small></div><div class="field wide"><label>Token</label><input class="input" data-path="ai.token" type="password"></div><label class="switch field wide"><span>启用模型联网搜索</span><input data-path="ai.webSearch" data-type="bool" type="checkbox"></label><label class="switch field wide"><span>强制每次回复使用联网搜索</span><input data-path="ai.forceWebSearch" data-type="bool" type="checkbox"></label><div class="field"><label>搜索上下文大小</label><select data-path="ai.searchContextSize"><option value="low">low</option><option value="medium">medium</option><option value="high">high</option></select></div><div class="field wide"><label>回复策略 Prompt</label><textarea data-path="ai.prompt"></textarea></div></div><div class="config-group"><h3>自动刷帖回复</h3><label class="switch field wide"><span>启用自动刷帖回复</span><input data-path="feedReply.enabled" data-type="bool" type="checkbox"></label><label class="switch field wide"><span>仅试运行，不真正发送评论</span><input data-path="feedReply.dryRun" data-type="bool" type="checkbox"></label><div class="field"><label>刷帖间隔/秒</label><input class="input" data-path="feedReply.interval" data-type="number"></div><div class="field"><label>每轮最多处理</label><input class="input" data-path="feedReply.maxPerRun" data-type="number"></div><div class="field"><label>每日最多处理</label><input class="input" data-path="feedReply.maxPerDay" data-type="number"></div><div class="field wide"><label>自动刷帖 Prompt</label><textarea data-path="feedReply.prompt"></textarea></div></div><div class="config-group"><h3>图片能力</h3><div class="field"><label>模型</label><input class="input" data-path="image.model"></div><div class="field"><label>尺寸</label><input class="input" data-path="image.size"></div><div class="field wide"><label>Images Generations URL</label><input class="input" data-path="image.baseUrl"><small class="hint">例如：https://xxx.com/v1/images/generations</small></div><div class="field wide"><label>图片 Token</label><input class="input" data-path="image.token" type="password"></div><div class="field"><label>输出格式</label><input class="input" data-path="image.responseFormat"></div><div class="field"><label>输出目录</label><input class="input" data-path="image.outputDir"></div><div class="field"><label>上传模式</label><input class="input" data-path="image.uploadMode"></div><div class="field"><label>外部图片目录</label><input class="input" data-path="image.externalDir"></div><div class="field wide"><label>外部图片访问 URL</label><input class="input" data-path="image.externalBaseUrl"></div><label class="switch field wide"><span>启用图片 Prompt 优化</span><input data-path="image.promptRefine" data-type="bool" type="checkbox"></label><div class="field"><label>Prompt 优化模型</label><input class="input" data-path="image.promptModel"></div><div class="field"><label>Prompt 最大字符数</label><input class="input" data-path="image.promptMaxChars" data-type="number"></div><div class="field wide"><label>Prompt 优化 URL</label><input class="input" data-path="image.promptBaseUrl"><small class="hint">例如：https://xxx.com/v1/chat/completions</small></div><div class="field wide"><label>Prompt 优化 Token</label><input class="input" data-path="image.promptToken" type="password"></div></div></form><div id="configToast" class="toast"></div><div class="warnbox">保存配置不会自动重启服务；改白名单、线程数、模型或 token 后，请到“服务控制”重启 Openxhh。</div></div></section>
 
           <section class="view" id="view-status"><div class="card panel"><div class="panel-head"><div><h2>系统状态</h2><p>当前 Web UI 与 Openxhh 服务信息。</p></div></div><div class="meta"><div><span>监听地址</span><strong id="listenAddr">—</strong></div><div><span>工作目录</span><strong id="rootDir">—</strong></div><div><span>systemctl status</span><strong id="statusText" class="status-text">—</strong></div></div></div></section>
 
@@ -1662,11 +1820,14 @@ const loginToast=document.querySelector('#loginToast');
 const appToast=document.querySelector('#appToast');
 const recordsToast=document.querySelector('#recordsToast');
 const recordsMeta=document.querySelector('#recordsMeta');
+const feedRecordsToast=document.querySelector('#feedRecordsToast');
+const feedRecordsMeta=document.querySelector('#feedRecordsMeta');
 const logSelect=document.querySelector('#logSelect');
 const logFilter=document.querySelector('#logFilter');
 const logKeyword=document.querySelector('#logKeyword');
 const logOutput=document.querySelector('#logOutput');
 const recordsBody=document.querySelector('#recordsBody');
+const feedRecordsBody=document.querySelector('#feedRecordsBody');
 const chart=document.querySelector('#chart');
 const configForm=document.querySelector('#configForm');
 const configToast=document.querySelector('#configToast');
@@ -1676,17 +1837,19 @@ let rawLogContent='';
 let logTimer=null;
 let statusTimer=null;
 let recordsTimer=null;
+let feedRecordsTimer=null;
 let logFilterTimer=null;
 let activeView='home';
 let logScrollLatestOnce=false;
 let logPaused=false;
 let lastSelectedLogLine=-1;
 let recordsSignature='';
+let feedRecordsSignature='';
 const recordScrollMemory=new Map();
 
 function showApp(ok){loginView.classList.toggle('hidden',ok);appView.classList.toggle('hidden',!ok);if(ok){switchView('home');bootstrap()}}
 async function api(path,options={}){const res=await fetch(path,{headers:{'Content-Type':'application/json'},credentials:'same-origin',...options});const data=await res.json().catch(()=>({}));if(!res.ok)throw new Error(data.error||'请求失败');return data}
-function switchView(name){const previous=activeView;activeView=name;document.querySelectorAll('.view').forEach(view=>view.classList.toggle('active',view.id==='view-'+name));document.querySelectorAll('.nav').forEach(btn=>btn.classList.toggle('active',btn.dataset.view===name));document.querySelector('#adminMenuBtn')?.classList.toggle('active',name==='settings');const mobile=document.querySelector('#mobileNav');if(mobile&&name!=='settings')mobile.value=name;if(name==='logs'&&previous!=='logs'){logScrollLatestOnce=true;loadCurrentLog()}if(name==='records'){if(recordsMeta)recordsMeta.textContent='正在读取最近24小时聊天记录...';loadAllRecords()}}
+function switchView(name){const previous=activeView;activeView=name;document.querySelectorAll('.view').forEach(view=>view.classList.toggle('active',view.id==='view-'+name));document.querySelectorAll('.nav').forEach(btn=>btn.classList.toggle('active',btn.dataset.view===name));document.querySelector('#adminMenuBtn')?.classList.toggle('active',name==='settings');const mobile=document.querySelector('#mobileNav');if(mobile&&name!=='settings')mobile.value=name;if(name==='logs'&&previous!=='logs'){logScrollLatestOnce=true;loadCurrentLog()}if(name==='records'){if(recordsMeta)recordsMeta.textContent='正在读取最近24小时 @ 回复记录...';loadAllRecords()}if(name==='feed-records'){if(feedRecordsMeta)feedRecordsMeta.textContent='正在读取最近24小时自动刷帖记录...';loadFeedRecords()}}
 document.querySelectorAll('[data-view], [data-view-button]').forEach(el=>el.addEventListener('click',()=>switchView(el.dataset.view||el.dataset.viewButton)));
 document.querySelector('#adminMenuBtn')?.addEventListener('click',()=>switchView('settings'));
 document.querySelector('#settingsHomeBtn')?.addEventListener('click',()=>switchView('home'));
@@ -1699,6 +1862,7 @@ bindAction(['serviceStopBtn'],'/api/stop','停止命令已发送');
 bindAction(['serviceRestartBtn','homeRestartBtn','configRestartBtn'],'/api/restart','重启命令已发送');
 for(const id of ['homeRefreshBtn','serviceRefreshBtn']){const el=document.querySelector('#'+id);if(el)el.addEventListener('click',()=>{refreshStatus();loadLogs();if(id==='homeRefreshBtn')loadAllRecords(true)})}
 document.querySelector('#recordsRefreshBtn')?.addEventListener('click',()=>loadAllRecords(true));
+document.querySelector('#feedRecordsRefreshBtn')?.addEventListener('click',()=>loadFeedRecords(true));
 document.querySelector('#logoutBtn').addEventListener('click',async()=>{await api('/logout',{method:'POST'});location.reload()});
 configForm?.addEventListener('submit',async event=>{event.preventDefault();if(configToast)configToast.textContent='';try{const data=await api('/api/config',{method:'POST',body:JSON.stringify(collectConfig())});if(configToast)configToast.textContent='配置已保存：'+(data.path||'config.json')+'；重启服务后生效'}catch(err){if(configToast)configToast.textContent=err.message}});
 logSelect.addEventListener('change',()=>{currentLog=logSelect.value;currentLogLabel=logSelect.selectedOptions[0]?.textContent||currentLog;logScrollLatestOnce=true;loadCurrentLog()});
@@ -1708,11 +1872,11 @@ document.querySelector('#copySelectedLogBtn')?.addEventListener('click',()=>copy
 document.querySelector('#copyLogBtn')?.addEventListener('click',()=>copyText(logOutput.dataset.raw||logOutput.textContent||''));
 document.querySelector('#toggleLogRefreshBtn')?.addEventListener('click',event=>{logPaused=!logPaused;if(!logPaused){clearLogLineSelection();window.getSelection()?.removeAllRanges()}event.currentTarget.textContent=logPaused?'继续刷新':'暂停刷新';if(!logPaused)loadCurrentLog()});
 
-async function action(path,text){if(appToast)appToast.textContent='';try{await api(path,{method:'POST'});if(appToast)appToast.textContent=text;setTimeout(refreshStatus,900);setTimeout(loadCurrentLog,1200);setTimeout(loadAllRecords,1500)}catch(err){if(appToast)appToast.textContent=err.message}}
+async function action(path,text){if(appToast)appToast.textContent='';try{await api(path,{method:'POST'});if(appToast)appToast.textContent=text;setTimeout(refreshStatus,900);setTimeout(loadCurrentLog,1200);setTimeout(loadAllRecords,1500);setTimeout(loadFeedRecords,1500)}catch(err){if(appToast)appToast.textContent=err.message}}
 async function regenerateMessage(item,button,feedback){const original=button.textContent;button.disabled=true;button.textContent='处理中';setFeedback(feedback,'正在加入待回复队列...','pending');if(recordsToast)recordsToast.textContent='';try{await api('/api/messages/regenerate',{method:'POST',body:JSON.stringify(regeneratePayload(item))});button.textContent='已加入';setFeedback(feedback,'已加入待回复队列','ok');if(recordsToast)recordsToast.textContent='已加入待回复队列，机器人下一轮会重新生成';setTimeout(loadAllRecords,900)}catch(err){button.disabled=false;button.textContent=original;setFeedback(feedback,'失败：'+err.message,'error');if(recordsToast)recordsToast.textContent=err.message}}
 function setFeedback(el,text,state){if(!el)return;el.textContent=text;el.className='action-feedback '+(state||'')}
 function regeneratePayload(item){return{msgId:item.msgId||0,commentId:item.commentId||0,linkId:item.linkId||0,userId:item.userId||0,userName:item.user||'',question:item.question||''}}
-async function bootstrap(){clearInterval(logTimer);clearInterval(statusTimer);clearInterval(recordsTimer);await refreshStatus();await loadConfig();await loadLogs();await loadAllRecords();statusTimer=setInterval(refreshStatus,4000);logTimer=setInterval(loadCurrentLog,1800);recordsTimer=setInterval(loadAllRecords,10000)}
+async function bootstrap(){clearInterval(logTimer);clearInterval(statusTimer);clearInterval(recordsTimer);clearInterval(feedRecordsTimer);await refreshStatus();await loadConfig();await loadLogs();await loadAllRecords();await loadFeedRecords();statusTimer=setInterval(refreshStatus,4000);logTimer=setInterval(loadCurrentLog,1800);recordsTimer=setInterval(loadAllRecords,10000);feedRecordsTimer=setInterval(loadFeedRecords,10000)}
 
 async function refreshStatus(){try{const data=await api('/api/status');const running=data.running;const serviceState=document.querySelector('#serviceState');if(serviceState)serviceState.textContent=(data.active||'unknown')+(data.detail?' · '+data.detail:'');document.querySelector('#listenAddr').textContent=data.listenAddr||'—';document.querySelector('#rootDir').textContent=data.rootDir||'—';document.querySelector('#statusText').textContent=data.statusText||'—';document.querySelector('#metricPort').textContent=extractPort(data.listenAddr)||'29173';for(const id of ['serviceStartBtn'])document.querySelector('#'+id).disabled=running;for(const id of ['serviceStopBtn'])document.querySelector('#'+id).disabled=!running;topStatus.innerHTML='<span class="dot '+(running?'on':'')+'"></span><span>'+(running?'运行中':'待机')+'</span>'}catch(err){topStatus.innerHTML='<span class="dot"></span><span>认证失效</span>'}}
 
@@ -1753,12 +1917,29 @@ async function loadAllRecords(manual=false){
 			renderTokenRecords(tokenItems)
 		}
 		if(recentView)renderRecords(visibleRecords.slice().reverse())
-		if(recordsMeta)recordsMeta.textContent=recentView?'已读取最近24小时 '+formatCount(visibleRecords.length)+' 条聊天记录，来源 '+formatCount(data.sources||0)+' 个日志源':'已读取 '+formatCount(records.length)+' 条聊天记录，来源 '+formatCount(data.sources||0)+' 个日志源'
+		if(recordsMeta)recordsMeta.textContent=recentView?'已读取最近24小时 '+formatCount(visibleRecords.length)+' 条@ 回复记录，来源 '+formatCount(data.sources||0)+' 个日志源':'已读取 '+formatCount(records.length)+' 条@ 回复记录，来源 '+formatCount(data.sources||0)+' 个日志源'
 		if(manual&&recordsToast)recordsToast.textContent=recentView?'已刷新最近24小时记录':'已刷新所有记录'
 	}catch(err){
 		if(recordsMeta)recordsMeta.textContent='记录读取失败：'+err.message
 		if(recordsToast)recordsToast.textContent=err.message
 	}}
+async function loadFeedRecords(manual=false){
+	if(!manual&&activeView!=='feed-records')return
+	if(manual&&feedRecordsToast)feedRecordsToast.textContent='正在刷新自动刷帖记录...'
+	try{
+		const data=await api('/api/feed-records?window=24h')
+		const items=Array.isArray(data.records)?data.records:[]
+		renderFeedRecords(items)
+		if(feedRecordsMeta)feedRecordsMeta.textContent='已读取最近24小时 '+formatCount(items.length)+' 条自动刷帖记录'
+		if(manual&&feedRecordsToast)feedRecordsToast.textContent='已刷新自动刷帖记录'
+	}catch(err){
+		if(feedRecordsMeta)feedRecordsMeta.textContent='自动刷帖记录读取失败：'+err.message
+		if(feedRecordsToast)feedRecordsToast.textContent=err.message
+	}}
+function renderFeedRecords(items){if(!feedRecordsBody)return;const signature=JSON.stringify(items.map(item=>[item.linkId,item.repliedAt,item.replyText,item.status,item.reason].join('|')));if(signature===feedRecordsSignature)return;feedRecordsSignature=signature;feedRecordsBody.innerHTML='';if(!items.length){const row=document.createElement('tr');const cell=document.createElement('td');cell.colSpan=7;cell.textContent='暂无最近24小时自动刷帖记录';row.appendChild(cell);feedRecordsBody.appendChild(row);return}items.forEach(item=>{const row=document.createElement('tr');appendCell(row,formatUnixTime(item.repliedAt||item.createdAt));appendCell(row,item.title||('帖子 '+(item.linkId||'')),'content-cell');appendCell(row,item.author||String(item.authorId||'未知作者'));appendCell(row,item.replyText||'—','content-cell');const statusCell=document.createElement('td');const badge=document.createElement('span');badge.className='badge '+feedStatusClass(item.status);badge.textContent=feedStatusText(item.status);statusCell.appendChild(badge);row.appendChild(statusCell);appendCell(row,item.reason||'—','content-cell');appendPostCell(row,item);feedRecordsBody.appendChild(row)})}
+function feedStatusText(status){switch(status){case'sent':return'已发送';case'dry_run':return'试运行';case'skipped':return'已跳过';case'failed':return'失败';default:return status||'未知'}}
+function feedStatusClass(status){switch(status){case'sent':return'ok';case'dry_run':return'info';case'skipped':return'warn';case'failed':return'error';default:return'warn'}}
+function formatUnixTime(value){const num=Number(value||0);if(!num)return'—';const date=new Date(num*1000);return Number.isNaN(date.getTime())?'—':date.getFullYear()+'-'+String(date.getMonth()+1).padStart(2,'0')+'-'+String(date.getDate()).padStart(2,'0')+' '+String(date.getHours()).padStart(2,'0')+':'+String(date.getMinutes()).padStart(2,'0')+':'+String(date.getSeconds()).padStart(2,'0')}
 function renderRecords(items){if(!recordsBody)return;const signature=JSON.stringify(items.map(item=>recordKey(item)+'|'+(item.reply||'')+'|'+(item.status||'')+'|'+(item.tokens||0)+'|'+(item.linkId||0)));if(signature===recordsSignature)return;rememberRecordScrolls();recordsSignature=signature;recordsBody.innerHTML='';if(!items.length){const row=document.createElement('tr');const cell=document.createElement('td');cell.colSpan=7;cell.textContent='暂无最近24小时可识别的用户提问/机器人回复记录';row.appendChild(cell);recordsBody.appendChild(row);return}items.forEach((item,index)=>{const key=recordKey(item,index);const row=document.createElement('tr');appendCell(row,item.time);appendCell(row,item.user||'未知用户');appendCell(row,item.question,'content-cell',key+':question');appendCell(row,item.reply||'—','content-cell',key+':reply');const statusCell=document.createElement('td');const badge=document.createElement('span');badge.className='badge '+(item.status==='已回复'?'ok':isErrorStatus(item.status)?'error':'warn');badge.textContent=item.status;statusCell.appendChild(badge);const copyBtn=document.createElement('button');copyBtn.type='button';copyBtn.className='copy-btn';copyBtn.textContent='复制';copyBtn.addEventListener('click',async()=>{await copyText(recordText(item));copyBtn.textContent='已复制';setTimeout(()=>copyBtn.textContent='复制',900)});statusCell.appendChild(copyBtn);row.appendChild(statusCell);appendPostCell(row,item);const actionCell=document.createElement('td');const stack=document.createElement('div');stack.className='action-stack';const regenerateBtn=document.createElement('button');regenerateBtn.type='button';regenerateBtn.className='copy-btn';regenerateBtn.textContent='重新生成';const feedback=document.createElement('span');feedback.className='action-feedback';regenerateBtn.addEventListener('click',()=>regenerateMessage(item,regenerateBtn,feedback));stack.appendChild(regenerateBtn);stack.appendChild(feedback);actionCell.appendChild(stack);row.appendChild(actionCell);recordsBody.appendChild(row)})}
 function rememberRecordScrolls(){recordsBody?.querySelectorAll('.clip-cell[data-scroll-key]').forEach(cell=>recordScrollMemory.set(cell.dataset.scrollKey,cell.scrollTop))}
 function recordKey(item,index=0){if(item.msgId||item.commentId)return [item.msgId||'',item.commentId||''].join('|');const fallback=[item.linkId||'',item.time||'',normalizeText(item.user||''),normalizeText(item.question||''),normalizeText(item.reply||'')].join('|');return fallback||String(index)}
@@ -1766,14 +1947,14 @@ function applyRecordLinks(items,links){if(!links)return;const byMsg=links.byMsg|
 function renderLogLines(content){const selectedLines=selectedLogLineIndexes();logOutput.innerHTML='';logOutput.dataset.raw=content||'';logOutput.classList.toggle('empty',!content);if(!content){logOutput.textContent='暂无日志。';lastSelectedLogLine=-1;return}content.split('\n').forEach((line,index)=>{const item=document.createElement('span');item.className='log-line';item.dataset.index=String(index);item.dataset.raw=line;item.textContent=formatLogLine(line)||' ';item.title='点击选择这一行，Shift 点击选择范围，再点复制选中';item.classList.toggle('selected',selectedLines.has(index));item.addEventListener('click',event=>toggleLogLineSelection(index,event.shiftKey));logOutput.appendChild(item)})}
 function rerenderCurrentLog(){clearLogLineSelection();if(!isUsingLogControls())window.getSelection()?.removeAllRanges();renderLog(rawLogContent)}
 function filterLogContent(content){if(!content)return'';const mode=logFilter?.value||'all';const keyword=(logKeyword?.value||'').trim().toLowerCase();return content.split('\n').filter(line=>matchesLogFilter(line,mode)&&(!keyword||line.toLowerCase().includes(keyword))).join('\n')}
-function matchesLogFilter(line,mode){switch(mode){case'error':return isFailureLine(line);case'ask':return line.includes('[Ai]正在询问Ai');case'reply':return line.includes('[Ai]Ai说：');case'image':return /图片|生图|画图|生成图片|image|upload|imgs/i.test(line);default:return true}}
+function matchesLogFilter(line,mode){switch(mode){case'error':return isFailureLine(line);case'ask':return line.includes('[Ai]正在询问Ai');case'reply':return line.includes('[Ai]Ai说：');case'image':return /图片|生图|画图|生成图片|image|upload|imgs/i.test(line);case'feed':return isFeedReplyLine(line);default:return true}}
 function formatLogLine(line){const start=line.indexOf('{');if(start<0)return line;const obj=parseZapJSON(line);if(!obj)return line;const prefix=line.slice(0,start).trimEnd();const fields=[];for(const [key,value] of Object.entries(obj)){let text;if(Array.isArray(value)){text=value.map(item=>item&&typeof item==='object'?(item.text||JSON.stringify(item)):String(item||'')).filter(Boolean).join('\n')}else if(value&&typeof value==='object'){text=JSON.stringify(value)}else{text=String(value??'')}if(text)fields.push(key+'：'+cleanText(text))}return prefix+'\n  '+fields.join('\n  ')}
 function appendCell(row,text,className,scrollKey){const cell=document.createElement('td');if(className){cell.className=className;const inner=document.createElement('div');inner.className='clip-cell';inner.textContent=text||'—';if(scrollKey){inner.dataset.scrollKey=scrollKey;inner.scrollTop=recordScrollMemory.get(scrollKey)||0;inner.addEventListener('scroll',()=>recordScrollMemory.set(scrollKey,inner.scrollTop),{passive:true})}cell.appendChild(inner)}else{cell.textContent=text||'—'}row.appendChild(cell)}
 function appendPostCell(row,item){const cell=document.createElement('td');const href=postHref(item.linkId);if(href){const link=document.createElement('a');link.className='copy-btn';link.href=href;link.target='_blank';link.rel='noopener noreferrer';link.textContent='打开';cell.appendChild(link)}else{cell.textContent='—'}row.appendChild(cell)}
 function postHref(linkId){const id=Number(linkId||0);if(!Number.isFinite(id)||id<=0)return'';return 'https://www.xiaoheihe.cn/app/bbs/link/'+id}
 function renderTokenRecords(items){const totalEl=document.querySelector('#tokenTotal');const hourEl=document.querySelector('#tokenHour');const dayEl=document.querySelector('#tokenDay');const now=Date.now();let total=0;let hour=0;let day=0;for(const item of items){if(!item.tokens)continue;total+=item.tokens;const time=parseItemTime(item.time);if(!time)continue;const age=now-time.getTime();if(age>=0&&age<=3600000)hour+=item.tokens;if(age>=0&&age<=86400000)day+=item.tokens}setTokenText(totalEl,total);setTokenText(hourEl,hour);setTokenText(dayEl,day)}
 function setTokenText(el,value){if(!el)return;el.textContent=formatTokenCount(value);el.title=formatCount(value)+' token'}
-function parseInteractions(lines){const items=[];const pending=[];let lastAnswered=null;let currentMessage=null;for(const line of lines){if(line.includes('[XHH]正在处理@消息')){currentMessage=parseProcessingLine(line);continue}if(line.includes('[Ai]正在询问Ai')){const context=parseProcessingLine(line)||currentMessage;const next=attachMessageContext(parseQuestionLine(line),context);if(next.question&&!pending.some(item=>sameInteraction(item,next)))pending.push(next);currentMessage=null;continue}if(line.includes('[Ai]Ai说：')){const context=parseProcessingLine(line);let index=findPendingIndex(pending,context);if(index<0&&pending.length)index=0;const item=index>=0?pending.splice(index,1)[0]:attachMessageContext({reply:'',status:'待回复'},context);if(!item.question)continue;item.reply=extractJsonField(line,'text')||stripLogPrefix(line);item.tokens=extractToken(line);item.status='已回复';items.push(item);lastAnswered=item;continue}if(isSendAnomalyLine(line)&&lastAnswered&&lastAnswered.status==='已回复'){attachMessageContext(lastAnswered,parseAnomalyLine(line));lastAnswered.status='异常发送';lastAnswered.lastError=stripLogPrefix(line);continue}if(isFailureLine(line)){const failed=attachMessageContext(parseStandaloneFailureLine(line),currentMessage);const index=findPendingIndex(pending,failed);if(index>=0){const item=pending.splice(index,1)[0];item.lastError=failed.reply;item.status='失败';items.push(finalizePending(item));currentMessage=null;continue}if(failed.question&&failed.reply){items.push(failed);currentMessage=null}}}for(const item of pending){if(item.question)items.push(finalizePending(item))}return items}
+function parseInteractions(lines){const items=[];const pending=[];let lastAnswered=null;let currentMessage=null;for(const line of lines){if(isFeedReplyLine(line))continue;if(line.includes('[XHH]正在处理@消息')){currentMessage=parseProcessingLine(line);continue}if(line.includes('[Ai]正在询问Ai')){const context=parseProcessingLine(line)||currentMessage;const next=attachMessageContext(parseQuestionLine(line),context);if(next.question&&!pending.some(item=>sameInteraction(item,next)))pending.push(next);currentMessage=null;continue}if(line.includes('[Ai]Ai说：')){const context=parseProcessingLine(line);let index=findPendingIndex(pending,context);if(index<0&&pending.length)index=0;const item=index>=0?pending.splice(index,1)[0]:attachMessageContext({reply:'',status:'待回复'},context);if(!item.question)continue;item.reply=extractJsonField(line,'text')||stripLogPrefix(line);item.tokens=extractToken(line);item.status='已回复';items.push(item);lastAnswered=item;continue}if(isSendAnomalyLine(line)&&lastAnswered&&lastAnswered.status==='已回复'){attachMessageContext(lastAnswered,parseAnomalyLine(line));lastAnswered.status='异常发送';lastAnswered.lastError=stripLogPrefix(line);continue}if(isFailureLine(line)){const failed=attachMessageContext(parseStandaloneFailureLine(line),currentMessage);const index=findPendingIndex(pending,failed);if(index>=0){const item=pending.splice(index,1)[0];item.lastError=failed.reply;item.status='失败';items.push(finalizePending(item));currentMessage=null;continue}if(failed.question&&failed.reply){items.push(failed);currentMessage=null}}}for(const item of pending){if(item.question)items.push(finalizePending(item))}return items}
 function dedupeInteractions(items){const result=[];const positions=new Map();for(const item of items){const key=interactionKey(item);if(!key){result.push(item);continue}const index=positions.get(key);if(index===undefined){positions.set(key,result.length);result.push(item);continue}result[index]=mergeInteraction(result[index],item)}return result}
 function interactionKey(item){if(item?.msgId)return'msg:'+item.msgId;if(item?.commentId)return'comment:'+item.commentId;const user=normalizeText(item?.user||'');const question=normalizeText(item?.question||'');return user&&question?'text:'+user+'|'+question:''}
 function mergeInteraction(existing,next){const primary=statusRank(next.status)>statusRank(existing.status)?next:existing;const secondary=primary===next?existing:next;return{...secondary,...primary,msgId:primary.msgId||secondary.msgId,commentId:primary.commentId||secondary.commentId,linkId:primary.linkId||secondary.linkId,userId:primary.userId||secondary.userId,user:primary.user||secondary.user,question:primary.question||secondary.question,reply:primary.reply||secondary.reply,tokens:primary.tokens||secondary.tokens,time:primary.time||secondary.time,lastError:primary.lastError||secondary.lastError}}
@@ -1782,6 +1963,7 @@ function findPendingIndex(items,context){if(!context)return-1;let index=items.fi
 function sameInteraction(a,b){if(a?.msgId&&b?.msgId&&a.msgId!==b.msgId)return false;if(a?.commentId&&b?.commentId&&a.commentId!==b.commentId)return false;return normalizeText(a?.user)===normalizeText(b?.user)&&normalizeText(a?.question)===normalizeText(b?.question)}
 function finalizePending(item){if(item.status==='待重试'||item.lastError){item.reply=item.lastError||item.reply||'AI 回复失败';item.status='失败'}return item}
 function isErrorStatus(status){return status==='失败'||status==='异常发送'}
+function isFeedReplyLine(line){return line.includes('[FeedReply]')||line.includes('"feed_reply":true')}
 function attachMessageContext(item,context){if(!context)return item;if(context.msgId)item.msgId=context.msgId;if(context.commentId)item.commentId=context.commentId;if(context.linkId)item.linkId=context.linkId;if(context.userId)item.userId=context.userId;if((!item.user||item.user==='未知用户')&&context.user)item.user=context.user;if(context.question)item.question=context.question;if((!item.time||item.time==='—')&&context.time)item.time=context.time;return item}
 function parseProcessingLine(line){const obj=parseZapJSON(line);if(!obj)return null;return{msgId:numberField(obj,'msg_id','msgId','message_id'),commentId:numberField(obj,'comment_id','commentId','reply_id'),linkId:numberField(obj,'link_id','linkId'),userId:numberField(obj,'user_id','userId','userid'),user:cleanText(obj.user_name||obj.user||''),question:fullQuestionText(obj),time:extractTime(line)}}
 function parseAnomalyLine(line){const obj=parseZapJSON(line);if(!obj)return null;return{commentId:numberField(obj,'reply_id','comment_id','commentId'),linkId:numberField(obj,'link_id','linkId'),time:extractTime(line)}}
