@@ -79,10 +79,7 @@ func trackOutboundReplies(outbound db.OutboundMessage) messageStreamTrackResult 
 		if !trackedComments[comment.CommentID] {
 			continue
 		}
-		source := "reply_to_bot"
-		if rootID == botCommentID && comment.ReplyID == 0 {
-			source = "comment_on_bot_floor"
-		}
+		source := inboundMessageStreamSource(comment, rootID, botCommentID)
 		if db.SaveInboundMessage(db.InboundMessage{
 			Source:         source,
 			LinkID:         outbound.LinkID,
@@ -257,6 +254,16 @@ func trackedInboundCommentIDs(comments []CommentInfo, rootID int, botCommentID i
 
 func shouldSaveTrackedInbound(comment CommentInfo, rootID int, botCommentID int, outbound db.OutboundMessage) bool {
 	return trackedInboundCommentIDs([]CommentInfo{comment}, rootID, botCommentID, outbound)[comment.CommentID]
+}
+
+func inboundMessageStreamSource(comment CommentInfo, rootID int, botCommentID int) string {
+	if rootID == botCommentID {
+		return "comment_on_bot_floor"
+	}
+	if comment.ReplyID == botCommentID {
+		return "reply_to_bot"
+	}
+	return "nested_reply_to_bot"
 }
 
 func isTrackableInboundComment(comment CommentInfo, botCommentID int, outbound db.OutboundMessage) bool {

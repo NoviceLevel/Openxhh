@@ -118,6 +118,12 @@ func TestTrackedInboundCommentIDsIncludesNestedRepliesToBotThread(t *testing.T) 
 	if tracked[63] {
 		t.Fatalf("tracked = %#v, should not include unrelated same-floor comment", tracked)
 	}
+	if got := inboundMessageStreamSource(comments[1], 10, 60); got != "reply_to_bot" {
+		t.Fatalf("direct source = %q, want reply_to_bot", got)
+	}
+	if got := inboundMessageStreamSource(comments[2], 10, 60); got != "nested_reply_to_bot" {
+		t.Fatalf("nested source = %q, want nested_reply_to_bot", got)
+	}
 }
 
 func TestShouldSaveTrackedInboundForBotFloorComment(t *testing.T) {
@@ -130,6 +136,9 @@ func TestShouldSaveTrackedInboundForBotFloorComment(t *testing.T) {
 
 	if !shouldSaveTrackedInbound(comment, 70, 70, outbound) {
 		t.Fatal("shouldSaveTrackedInbound should save comment on bot floor")
+	}
+	if got := inboundMessageStreamSource(comment, 70, 70); got != "comment_on_bot_floor" {
+		t.Fatalf("source = %q, want comment_on_bot_floor", got)
 	}
 }
 
