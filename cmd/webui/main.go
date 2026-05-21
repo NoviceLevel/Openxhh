@@ -595,7 +595,7 @@ func applyConfigDefaults(cfg *appConfig) bool {
 		changed = true
 	}
 	if cfg.Image.UploadMode == "" {
-		cfg.Image.UploadMode = "external"
+		cfg.Image.UploadMode = "cos"
 		changed = true
 	}
 	if cfg.Image.PromptMaxChars == 0 {
@@ -1241,7 +1241,7 @@ const indexHTML = `<!doctype html>
               <div class="field"><label>尺寸</label><input class="input" data-path="image.size"></div>
               <div class="field"><label>Response Format</label><input class="input" data-path="image.responseFormat"></div>
               <div class="field"><label>输出目录</label><input class="input" data-path="image.outputDir"></div>
-              <div class="field"><label>上传模式</label><select data-path="image.uploadMode"><option value="external">external</option><option value="cos">cos</option><option value="">禁用/空</option></select></div>
+              <div class="field"><label>上传模式</label><select data-path="image.uploadMode"><option value="cos">cos</option><option value="external">external（兼容旧配置，仍走 cos）</option><option value="legacy_external">legacy_external（VPS 图床备用）</option><option value="">禁用/空</option></select></div>
               <div class="field"><label>外部图片目录</label><input class="input" data-path="image.externalDir"></div>
               <div class="field wide"><label>外部图片访问 URL</label><input class="input" data-path="image.externalBaseUrl"></div>
               <label class="switch field wide"><span>启用图片 Prompt 优化</span><input data-path="image.promptRefine" data-type="bool" type="checkbox"></label>

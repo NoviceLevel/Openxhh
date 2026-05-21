@@ -32,7 +32,7 @@ Openxhh 的目标是让机器人更像一个真的在看帖的人：
 - 支持帖子 / 评论楼层上下文增强。
 - 支持评论图片和帖子图片进入 AI 上下文。
 - 支持评论区 @ 生图：`生图`、`画图`、`生成图片`。
-- 支持把生成图片写入 VPS 静态图床，并用 `imgs=<图片URL>` 发布顶级带图评论。
+- 支持把生成图片上传到小黑盒官方图床，并用 `imgs=<图片URL>` 发布顶级带图评论。
 - 支持生图后生成自然短回复，避免暴露 prompt。
 - 支持显式点名 @：例如“给小菲画一张”“问问楼主”“对小菲说”。
 - 支持 VPS Web UI：配置管理、服务控制、日志筛选、最近对话、失败记录、token 统计。
@@ -120,7 +120,7 @@ sudo nano /opt/Openxhh/config.json
 - `ai.model`：AI 回复模型名。
 - `ai.baseUrl`：OpenAI 兼容 Chat Completions 完整地址。
 - `ai.token`：AI 回复接口 token。
-- 如果要生图，再填 `image.baseUrl`、`image.token`、`image.externalDir`、`image.externalBaseUrl`。
+- 如果要生图，再填 `image.baseUrl`、`image.token`；图片上传推荐走小黑盒官方图床，不再需要额外配置 VPS 静态图床。
 
 ### 4. 扫码登录
 
@@ -187,9 +187,9 @@ sudo ./Openxhh -mode start
     "size": "1024x1024",
     "responseFormat": "b64_json",
     "outputDir": "images",
-    "uploadMode": "external",
-    "externalDir": "/var/www/xhh-images",
-    "externalBaseUrl": "http://你的VPS公网IP/xhh-images",
+    "uploadMode": "cos",
+    "externalDir": "",
+    "externalBaseUrl": "",
     "promptRefine": false,
     "promptModel": "",
     "promptBaseUrl": "",
@@ -212,9 +212,9 @@ sudo ./Openxhh -mode start
 - owner 不受 `maxPendingReplies` 和 `maxPendingRepliesPerUser` 限制。
 - `ai.baseUrl` 要填完整的 Chat Completions 地址，例如 `https://example.com/v1/chat/completions`。
 - `image.baseUrl` 要填完整的 Images Generations 地址，例如 `https://example.com/v1/images/generations`。
-- `image.responseFormat` 默认 `b64_json`，适合直接拿到图片内容再写入图床目录。
-- `image.uploadMode` 默认 `external`，推荐搭配 VPS 静态目录使用。
-- `image.externalBaseUrl` 必须是完整公网 URL，例如 `http://你的VPS公网IP/xhh-images`；末尾有没有 `/` 都可以。
+- `image.responseFormat` 默认 `b64_json`，程序会把 base64 解码成图片 bytes 后上传。
+- `image.uploadMode` 推荐填 `cos`，使用小黑盒官方图床；当前版本即使填 `external` / `static` 也会优先走官方图床。
+- `image.externalDir` 和 `image.externalBaseUrl` 仅保留给旧的 VPS 静态图床备用方案，推荐留空。
 - `promptRefine=true` 后，可以用文本模型先把用户口语化生图请求整理成更适合图片模型的提示词。
 - 保存配置后需要重启 `Openxhh` 服务才会生效。
 
@@ -234,7 +234,7 @@ VPS Web UI 提供“配置管理”页，可以读取和保存：
 - 小黑盒配置：检查间隔、回复间隔、白名单开关、owner UID、并发和队列上限。
 - 数据库配置：SQLite / PostgreSQL。
 - AI 回复配置：模型、Chat Completions URL、token、回复 prompt。
-- 图片能力配置：图片模型、Images Generations URL、图片 token、输出格式、上传模式、外部图床目录和访问 URL。
+- 图片能力配置：图片模型、Images Generations URL、图片 token、输出格式和上传模式；外部图床目录仅作为旧方案备用。
 - Prompt 优化配置：是否启用、模型、URL、token、最大字符数。
 
 保存后只会写入 `config.json`，不会自动让运行中的机器人重新读取。改完配置后请在 Web UI 点“重启服务”，或执行：
@@ -578,9 +578,43 @@ curl -fsSL https://raw.githubusercontent.com/Www8881313/Openxhh/main/scripts/upd
 
 </details>
 
-## 外部图床配置说明
+## 图片图床配置说明
 
-评论区生图要能发到小黑盒，核心是让小黑盒能访问生成后的图片。当前推荐方案是：
+评论区生图要能发到小黑盒，核心是让小黑盒能访问生成后的图片。当前推荐方案是 **小黑盒官方图床**：
+
+```text
+Openxhh 调用图片模型生成图片
+→ 如果图片接口返回 b64_json，先解码成图片 bytes
+→ Openxhh 通过小黑盒官方 COS 上传接口获取 key 和临时 STS 凭证
+→ PUT 到小黑盒官方 COS
+→ 拿到 https://imgheybox.max-c.com/... 图片 URL
+→ 评论接口把这个 URL 写入 imgs 字段
+```
+
+推荐配置：
+
+```json
+{
+  "image": {
+    "uploadMode": "cos",
+    "externalDir": "",
+    "externalBaseUrl": ""
+  }
+}
+```
+
+说明：
+
+- `uploadMode` 推荐填 `cos`，明确使用小黑盒官方图床。
+- 当前版本会把 `external` / `static` 作为旧配置兼容值处理，因此旧配置也会优先走小黑盒图床。
+- `externalDir` 和 `externalBaseUrl` 不再是推荐必填项，正常使用可以留空。
+- 真实上传依赖小黑盒登录态，运行目录下必须有有效的 `cookie.json`。
+- 小黑盒官方图床返回的 URL 通常是 `https://imgheybox.max-c.com/web/bbs/...`。
+
+<details>
+<summary>旧方案：VPS / Nginx 静态图床（备用）</summary>
+
+旧方案仍可作为排障或回退思路，但不再推荐作为默认路径。它的流程是：
 
 ```text
 Openxhh 生成图片
@@ -589,53 +623,14 @@ Openxhh 生成图片
 → Openxhh 把 http://你的VPS公网IP/xhh-images/xxx.png 发到评论 imgs 字段
 ```
 
-也就是说，配置里这两个字段必须对应：
+如果要恢复旧方案，需要保证：
 
-```json
-{
-  "image": {
-    "uploadMode": "external",
-    "externalDir": "/var/www/xhh-images",
-    "externalBaseUrl": "http://你的VPS公网IP/xhh-images"
-  }
-}
-```
-
-- `externalDir` 是服务器本地目录，Openxhh 会把图片文件写到这里。
-- `externalBaseUrl` 是公网访问地址，小黑盒会通过这个 URL 读取图片。
+- `externalDir` 是服务器本地目录，Openxhh 对它有写入权限。
+- `externalBaseUrl` 是公网访问地址，小黑盒能直接访问。
 - Nginx 的 `alias` 目录必须和 `externalDir` 一致。
 - `externalBaseUrl` 必须是完整 URL，包含 `http://` 或 `https://`。
-- `externalBaseUrl` 末尾有没有 `/` 都可以，程序会自动拼接文件名。
 
-<details>
-<summary>用 Nginx 配置静态图床</summary>
-
-### 1. 安装 Nginx
-
-```bash
-sudo apt update
-sudo apt install -y nginx
-```
-
-### 2. 创建图片目录
-
-```bash
-sudo mkdir -p /var/www/xhh-images
-sudo chown -R root:www-data /var/www/xhh-images
-sudo chmod 775 /var/www/xhh-images
-```
-
-Openxhh 服务如果不是 root 运行，需要确保它对 `/var/www/xhh-images` 有写入权限。
-
-### 3. 添加 Nginx location
-
-如果你使用默认站点，可以编辑：
-
-```bash
-sudo nano /etc/nginx/sites-available/default
-```
-
-在 `server { ... }` 里加入：
+最小 Nginx location 示例：
 
 ```nginx
 location /xhh-images/ {
@@ -644,47 +639,13 @@ location /xhh-images/ {
 }
 ```
 
-注意：
-
-- `location /xhh-images/` 末尾有 `/`。
-- `alias /var/www/xhh-images/` 末尾也有 `/`。
-- 两边路径要一一对应。
-
-### 4. 放一张测试图
-
-```bash
-sudo bash -c 'printf test > /var/www/xhh-images/test.txt'
-sudo nginx -t
-sudo systemctl reload nginx
-```
-
-### 5. 测试公网访问
+测试公网访问：
 
 ```bash
 curl -I http://你的VPS公网IP/xhh-images/test.txt
 ```
 
-如果返回 `200 OK`，说明公网图床可访问。
-
-### 6. 回到 Openxhh 配置
-
-把 `config.json` 里的图片配置改成：
-
-```json
-{
-  "image": {
-    "uploadMode": "external",
-    "externalDir": "/var/www/xhh-images",
-    "externalBaseUrl": "http://你的VPS公网IP/xhh-images"
-  }
-}
-```
-
-然后重启机器人：
-
-```bash
-sudo systemctl restart Openxhh
-```
+如果返回 `200 OK`，说明旧图床公网访问正常。
 
 </details>
 
@@ -736,10 +697,10 @@ go run ./cmd/dry_run_image_comment \
 验证已有图片 URL 能否发带图评论：
 
 ```bash
-go run ./cmd/test_image_comment 你的测试帖子link_id "图片测试" "http://你的VPS公网IP/xhh-images/test.png"
+go run ./cmd/test_image_comment 你的测试帖子link_id "图片测试" "https://imgheybox.max-c.com/web/bbs/示例图片.png"
 ```
 
-验证本地图片上传到外部图床并可选发布评论：
+验证本地图片上传到小黑盒官方图床并可选发布评论：
 
 ```bash
 go run ./cmd/test_xhh_image_upload_comment \
@@ -754,12 +715,11 @@ go run ./cmd/test_xhh_image_upload_comment \
 测试带图评论前确认：
 
 - `link_id` 已换成你自己的小黑盒测试帖子 ID。
+- 运行目录下有有效的 `cookie.json`，否则官方图床上传会要求重新登录。
 - 图片 URL 是公网 URL，不是 `localhost`、`127.0.0.1`、内网 IP 或只在自己电脑可访问的地址。
 - 用手机 4G/5G 或无登录浏览器能直接打开图片 URL。
 - `curl -I 图片URL` 返回 `200 OK`。
-- `image.externalDir` 和 Nginx `alias` 指向同一个目录。
-- `image.externalBaseUrl` 和浏览器访问的图片 URL 前缀一致。
-- 如果别人看不到测试图片，优先检查公网图床，而不是先怀疑 `link_id`。
+- 如果别人看不到测试图片，优先检查官方图床上传是否成功，再检查 `link_id`。
 
 </details>
 
@@ -827,7 +787,8 @@ C:\ProgramData\Openxhh\log\
 - 不要把这些文件上传到 GitHub。
 - 不要把 `checkTime` 和 `replyTime` 调得太低，容易触发平台风控；建议保持 `checkTime=60`、`replyTime=30` 或更保守。
 - VPS Web UI 不要全网裸奔，至少用云安全组限制来源 IP。
-- 外部图床目录不要放敏感文件，它会通过公网 URL 暴露。
+- 使用小黑盒官方图床时，不要上传敏感图片；图片会通过公网 CDN URL 暴露。
+- 如果恢复旧 VPS 静态图床，外部图床目录不要放敏感文件。
 
 建议限制运行目录权限：
 
@@ -926,16 +887,16 @@ sudo journalctl -u Openxhh-webui -n 50 --no-pager
 | `image.size` | `1024x1024` | 图片尺寸默认值 |
 | `image.responseFormat` | `b64_json` | 图片接口输出格式 |
 | `image.outputDir` | `images` | 本地生成图片临时目录 |
-| `image.uploadMode` | `external` | 推荐写入外部静态图床 |
-| `image.externalDir` | `/var/www/xhh-images` | 推荐外部图片目录，需手动配置 |
-| `image.externalBaseUrl` | `http://你的VPS公网IP/xhh-images` | 推荐外部图片访问 URL，需手动配置为公网可访问地址 |
+| `image.uploadMode` | `cos` | 推荐使用小黑盒官方图床 |
+| `image.externalDir` | 空 | 旧 VPS 静态图床备用字段，推荐留空 |
+| `image.externalBaseUrl` | 空 | 旧 VPS 静态图床备用字段，推荐留空 |
 | `image.promptRefine` | `false` | 默认不启用图片 prompt 优化 |
 | `image.promptMaxChars` | `1000` | 图片 prompt 优化输入最大字符数 |
 | VPS Web UI 端口 | `29173` | 默认访问 `http://服务器IP:29173` |
 | VPS Web UI 服务名 | `Openxhh-webui` | 更新脚本默认识别和重启 |
 | 机器人服务名 | `Openxhh` | 更新脚本默认识别和重启 |
 
-说明：`image.externalDir` 和 `image.externalBaseUrl` 不会凭空知道你的服务器公网地址，必须按你的 VPS 实际情况填写；上表给的是本文推荐恢复值。
+说明：当前推荐小黑盒官方图床，`image.externalDir` 和 `image.externalBaseUrl` 只在恢复旧 VPS 静态图床时才需要填写。
 
 ## 免责声明
 

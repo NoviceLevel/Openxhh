@@ -3,27 +3,36 @@ package xhh
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha1"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
+	_ "image/gif"
+	_ "image/jpeg"
+	_ "image/png"
 	"io"
 	"net/http"
 	"net/url"
 	"openxhh/config"
 	"path/filepath"
-	"strconv"
+	"sort"
 	"strings"
 	"time"
 )
 
-const xhhCOSBucket = "imgheybox-1251007209"
-const xhhCOSRegion = "ap-shanghai"
-const xhhCDNHost = "imgheybox.max-c.com"
-const xhhCOSUploadTokenPath = "/bbs/app/api/qcloud/cos/upload/token/v2"
-
-var ErrMissingXHHCOSCredential = errors.New("missing XHH COS upload credential/provider")
+const (
+	xhhCOSBucket             = "imgheybox-1251007209"
+	xhhCOSRegion             = "ap-shanghai"
+	xhhCDNHost               = "imgheybox.max-c.com"
+	xhhCOSUploadInfoPath     = "/bbs/app/api/qcloud/cos/upload/info/v2"
+	xhhCOSUploadTokenPath    = "/bbs/app/api/qcloud/cos/upload/token/v2"
+	xhhCOSUploadCallbackPath = "/bbs/app/api/qcloud/cos/upload/callback/v2"
+	xhhCOSWebQuery           = "app=heybox&os_type=web&x_app=heybox&x_client_type=web&x_os_type=Mac&x_client_version=999.999.999&x_request_default=true"
+)
 
 type XHHCOSUploadPlan struct {
 	Key       string
@@ -34,7 +43,22 @@ type XHHCOSUploadPlan struct {
 	Uploaded  bool
 }
 
-type xhhCOSUploadTokenResp struct {
+type xhhCOSUploadInfo struct {
+	Bucket string
+	Region string
+	Host   string
+	Key    string
+}
+
+type xhhCOSUploadCredential struct {
+	TmpSecretID  string
+	TmpSecretKey string
+	SessionToken string
+	StartTime    int64
+	ExpiredTime  int64
+}
+
+type xhhCOSUploadInfoResp struct {
 	Status string `json:"status"`
 	Msg    string `json:"msg"`
 	Result struct {
@@ -43,6 +67,38 @@ type xhhCOSUploadTokenResp struct {
 		Bucket string   `json:"bucket"`
 		Host   string   `json:"host"`
 	} `json:"result"`
+}
+
+type xhhCOSUploadTokenResp struct {
+	Status string `json:"status"`
+	Msg    string `json:"msg"`
+	Result struct {
+		Credentials struct {
+			TmpSecretID  string `json:"tmpSecretId"`
+			TmpSecretKey string `json:"tmpSecretKey"`
+			SessionToken string `json:"sessionToken"`
+		} `json:"credentials"`
+		StartTime   int64 `json:"startTime"`
+		ExpiredTime int64 `json:"expiredTime"`
+	} `json:"result"`
+}
+
+type xhhCOSUploadCallbackResp struct {
+	Status string `json:"status"`
+	Msg    string `json:"msg"`
+	Result struct {
+		PreviewURLs []string `json:"preview_urls"`
+		Thumbs      []string `json:"thumbs"`
+	} `json:"result"`
+}
+
+type xhhCOSUploadFileInfo struct {
+	Name     string  `json:"name"`
+	MimeType string  `json:"mimetype"`
+	FSize    int     `json:"fsize"`
+	Width    int     `json:"width,omitempty"`
+	Height   int     `json:"height,omitempty"`
+	Duration float64 `json:"duration,omitempty"`
 }
 
 func IsXHHCDNImageURL(imageURL string) bool {
@@ -58,170 +114,142 @@ func PlanXHHCOSUpload(imageBytes []byte, sourcePath string, now time.Time) XHHCO
 }
 
 func UploadToXHHCOS(ctx context.Context, imageBytes []byte, sourcePath string, dryRun bool) (XHHCOSUploadPlan, error) {
-	// 临时切到官方 info/token/STS 签名流程，旧 token header 直传逻辑保留在下方未调用。
-	return UploadToXHHCOSOfficial(ctx, imageBytes, sourcePath, dryRun)
+	if len(imageBytes) == 0 {
+		return XHHCOSUploadPlan{}, errors.New("image bytes are required")
+	}
+	if dryRun {
+		plan := PlanXHHCOSUpload(imageBytes, sourcePath, time.Now())
+		plan.DryRun = true
+		return plan, nil
+	}
+
+	mimeType := imageMimeType(imageBytes)
+	info, err := requestXHHCOSUploadInfo(ctx, imageBytes, sourcePath, mimeType)
+	if err != nil {
+		return XHHCOSUploadPlan{}, err
+	}
+	credential, err := requestXHHCOSUploadToken(ctx, info.Bucket, info.Key, mimeType)
+	if err != nil {
+		return XHHCOSUploadPlan{}, err
+	}
+
+	plan := buildXHHCOSUploadPlan(info.Bucket, info.Region, info.Host, info.Key, len(imageBytes))
+	if err := putXHHCOSObject(ctx, plan.UploadURL, info.Bucket, info.Key, imageBytes, mimeType, credential); err != nil {
+		return plan, err
+	}
+	plan.Uploaded = true
+
+	previewURL, err := callbackXHHCOSUpload(ctx, info.Key)
+	if err != nil {
+		return plan, err
+	}
+	if previewURL != "" {
+		plan.CDNURL = previewURL
+	}
+	return plan, nil
 }
 
-func requestXHHCOSUploadToken(key, mimeType string, size int) (XHHCOSUploadPlan, string, string, error) {
-	keys, err := json.Marshal([]string{key})
+func requestXHHCOSUploadInfo(ctx context.Context, imageBytes []byte, sourcePath, mimeType string) (xhhCOSUploadInfo, error) {
+	fileInfo := xhhCOSUploadFileInfo{
+		Name:     xhhCOSUploadFileName(sourcePath, imageBytes),
+		MimeType: mimeType,
+		FSize:    len(imageBytes),
+	}
+	if width, height := imageDimensions(imageBytes); width > 0 && height > 0 {
+		fileInfo.Width = width
+		fileInfo.Height = height
+	}
+	fileInfos, err := json.Marshal([]xhhCOSUploadFileInfo{fileInfo})
 	if err != nil {
-		return XHHCOSUploadPlan{}, "", "", err
+		return xhhCOSUploadInfo{}, err
+	}
+	body := "file_infos=" + url.QueryEscape(string(fileInfos)) + "&scope=bbs&need_cache=0"
+	data, err := postXHHCOSAPI(ctx, xhhCOSUploadInfoPath, "", body)
+	if err != nil {
+		return xhhCOSUploadInfo{}, err
+	}
+
+	var parsed xhhCOSUploadInfoResp
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		return xhhCOSUploadInfo{}, err
+	}
+	if parsed.Status != "ok" {
+		return xhhCOSUploadInfo{}, xhhCOSStatusError("XHH COS upload info", parsed.Status, parsed.Msg)
+	}
+	if len(parsed.Result.Keys) == 0 || parsed.Result.Bucket == "" || parsed.Result.Host == "" {
+		return xhhCOSUploadInfo{}, errors.New("XHH COS upload info response missing key/bucket/host")
+	}
+	region := strings.TrimSpace(parsed.Result.Region)
+	if region == "" {
+		region = xhhCOSRegion
+	}
+	return xhhCOSUploadInfo{
+		Bucket: parsed.Result.Bucket,
+		Region: region,
+		Host:   parsed.Result.Host,
+		Key:    ensureLeadingSlash(parsed.Result.Keys[0]),
+	}, nil
+}
+
+func requestXHHCOSUploadToken(ctx context.Context, bucket, key, mimeType string) (xhhCOSUploadCredential, error) {
+	keys, err := json.Marshal([]string{ensureLeadingSlash(key)})
+	if err != nil {
+		return xhhCOSUploadCredential{}, err
 	}
 	mimetypes, err := json.Marshal([]string{mimeType})
 	if err != nil {
-		return XHHCOSUploadPlan{}, "", "", err
+		return xhhCOSUploadCredential{}, err
 	}
-
-	formBody := "bucket=" + url.QueryEscape(xhhCOSBucket) +
+	body := "bucket=" + url.QueryEscape(bucket) +
 		"&keys=" + url.QueryEscape(string(keys)) +
 		"&mimetypes=" + url.QueryEscape(string(mimetypes)) +
 		"&is_multipart_upload=0"
-
-	resp, err := sendXHHCOSUploadTokenReq(strings.NewReader(formBody))
+	data, err := postXHHCOSAPI(ctx, xhhCOSUploadTokenPath, "", body)
 	if err != nil {
-		return XHHCOSUploadPlan{}, "", "", err
-	}
-	if resp == nil {
-		return XHHCOSUploadPlan{}, "", "", errors.New("XHH COS upload token request failed")
-	}
-	defer resp.Body.Close()
-
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return XHHCOSUploadPlan{}, "", "", err
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return XHHCOSUploadPlan{}, "", "", fmt.Errorf("XHH COS upload token request failed: status=%d", resp.StatusCode)
+		return xhhCOSUploadCredential{}, err
 	}
 
 	var parsed xhhCOSUploadTokenResp
 	if err := json.Unmarshal(data, &parsed); err != nil {
-		return XHHCOSUploadPlan{}, "", "", err
+		return xhhCOSUploadCredential{}, err
 	}
 	if parsed.Status != "ok" {
-		if parsed.Msg != "" {
-			return XHHCOSUploadPlan{}, "", "", errors.New(parsed.Msg)
-		}
-		return XHHCOSUploadPlan{}, "", "", fmt.Errorf("XHH COS upload token status=%s", parsed.Status)
+		return xhhCOSUploadCredential{}, xhhCOSStatusError("XHH COS upload token", parsed.Status, parsed.Msg)
 	}
-	if len(parsed.Result.Keys) == 0 || parsed.Result.Bucket == "" || parsed.Result.Region == "" || parsed.Result.Host == "" {
-		return XHHCOSUploadPlan{}, "", "", errors.New("XHH COS upload token response missing key/bucket/region/host")
+	credential := xhhCOSUploadCredential{
+		TmpSecretID:  parsed.Result.Credentials.TmpSecretID,
+		TmpSecretKey: parsed.Result.Credentials.TmpSecretKey,
+		SessionToken: parsed.Result.Credentials.SessionToken,
+		StartTime:    parsed.Result.StartTime,
+		ExpiredTime:  parsed.Result.ExpiredTime,
 	}
-
-	authorization, securityToken := extractXHHCOSUploadCredential(resp.Header, data)
-	if authorization == "" || securityToken == "" {
-		return XHHCOSUploadPlan{}, "", "", ErrMissingXHHCOSCredential
+	if credential.TmpSecretID == "" || credential.TmpSecretKey == "" || credential.SessionToken == "" || credential.StartTime == 0 || credential.ExpiredTime == 0 {
+		return xhhCOSUploadCredential{}, errors.New("XHH COS upload token response missing STS credential")
 	}
-
-	plan := buildXHHCOSUploadPlan(parsed.Result.Bucket, parsed.Result.Region, parsed.Result.Host, parsed.Result.Keys[0], size)
-	return plan, authorization, securityToken, nil
+	return credential, nil
 }
 
-func sendXHHCOSUploadTokenReq(body io.Reader) (*http.Response, error) {
-	cfg := config.ConfigStruct.Xhh
-	u, err := url.Parse(cfg.BaseUrl + xhhCOSUploadTokenPath)
-	if err != nil {
-		return nil, err
+func putXHHCOSObject(ctx context.Context, uploadURL, bucket, key string, imageBytes []byte, mimeType string, credential xhhCOSUploadCredential) error {
+	key = ensureLeadingSlash(key)
+	query := map[string]string{
+		"bucket":   bucket,
+		"keys":     jsonStrings([]string{key}),
+		"mimetype": mimeType,
 	}
-
-	hkey, nonce, requestTime := GetKeys(xhhCOSUploadTokenPath)
-	query := u.Query()
-	query.Set("app", "heybox")
-	query.Set("os_type", "web")
-	query.Set("x_app", "heybox")
-	query.Set("x_client_type", "web")
-	query.Set("x_os_type", "Mac")
-	query.Set("x_request_default", "true")
-	query.Set("x_client_version", "999.999.999")
-	query.Set("version", "999.0.4")
-	query.Set("hkey", hkey)
-	query.Set("_time", strconv.Itoa(requestTime))
-	query.Set("nonce", nonce)
-	u.RawQuery = query.Encode()
-
-	req, err := http.NewRequest("POST", u.String(), body)
-	if err != nil {
-		return nil, err
+	headers := map[string]string{
+		"content-type":         mimeType,
+		"host":                 xhhCOSUploadHost(uploadURL),
+		"x-cos-security-token": credential.SessionToken,
 	}
-	req.Header.Set("Accept", "application/json, text/plain, */*")
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded;charset=UTF-8")
-	req.Header.Set("Origin", "https://www.xiaoheihe.cn")
-	req.Header.Set("Referer", "https://www.xiaoheihe.cn/")
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
-	req.Header.Set("Host", "api.xiaoheihe.cn")
-	if Info.Cookie != "" {
-		req.Header.Set("cookie", Info.Cookie)
-	}
-
-	return http.DefaultClient.Do(req)
-}
-
-func extractXHHCOSUploadCredential(headers http.Header, data []byte) (string, string) {
-	authorization := strings.TrimSpace(headers.Get("Authorization"))
-	securityToken := strings.TrimSpace(headers.Get("x-cos-security-token"))
-
-	var raw any
-	if err := json.Unmarshal(data, &raw); err == nil {
-		if authorization == "" {
-			authorization = findStringByNormalizedKey(raw, map[string]bool{"authorization": true})
-		}
-		if securityToken == "" {
-			securityToken = findStringByNormalizedKey(raw, map[string]bool{
-				"xcossecuritytoken": true,
-				"securitytoken":     true,
-				"sessiontoken":      true,
-			})
-		}
-	}
-
-	return authorization, securityToken
-}
-
-func findStringByNormalizedKey(data any, candidates map[string]bool) string {
-	switch value := data.(type) {
-	case map[string]any:
-		for key, item := range value {
-			if candidates[normalizeCOSCredentialKey(key)] {
-				if text, ok := item.(string); ok && strings.TrimSpace(text) != "" {
-					return strings.TrimSpace(text)
-				}
-			}
-		}
-		for _, item := range value {
-			if found := findStringByNormalizedKey(item, candidates); found != "" {
-				return found
-			}
-		}
-	case []any:
-		for _, item := range value {
-			if found := findStringByNormalizedKey(item, candidates); found != "" {
-				return found
-			}
-		}
-	}
-	return ""
-}
-
-func normalizeCOSCredentialKey(key string) string {
-	key = strings.ToLower(key)
-	replacer := strings.NewReplacer("-", "", "_", "", " ", "")
-	return replacer.Replace(key)
-}
-
-func putXHHCOSObject(ctx context.Context, uploadURL, mimeType string, imageBytes []byte, authorization, securityToken string) error {
-	if authorization == "" || securityToken == "" {
-		return ErrMissingXHHCOSCredential
-	}
-
-	req, err := http.NewRequestWithContext(ctx, "PUT", uploadURL, bytes.NewReader(imageBytes))
+	queryString := sortedCOSPairs(query)
+	authorization := buildXHHCOSAuthorization("put", key, query, headers, credential)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, uploadURL+"?"+queryString, bytes.NewReader(imageBytes))
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Authorization", authorization)
-	req.Header.Set("x-cos-security-token", securityToken)
 	req.Header.Set("Content-Type", mimeType)
-	req.Header.Set("Origin", "https://www.xiaoheihe.cn")
-	req.Header.Set("Referer", "https://www.xiaoheihe.cn/")
+	req.Header.Set("x-cos-security-token", credential.SessionToken)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -233,6 +261,123 @@ func putXHHCOSObject(ctx context.Context, uploadURL, mimeType string, imageBytes
 		return fmt.Errorf("XHH COS PUT failed: status=%d body=%s", resp.StatusCode, limitCOSString(string(data), 300))
 	}
 	return nil
+}
+
+func callbackXHHCOSUpload(ctx context.Context, key string) (string, error) {
+	keys, err := json.Marshal([]string{ensureLeadingSlash(key)})
+	if err != nil {
+		return "", err
+	}
+	data, err := postXHHCOSAPI(ctx, xhhCOSUploadCallbackPath, "&is_finished=true", "keys="+url.QueryEscape(string(keys)))
+	if err != nil {
+		return "", err
+	}
+	var parsed xhhCOSUploadCallbackResp
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		return "", err
+	}
+	if parsed.Status != "ok" {
+		return "", xhhCOSStatusError("XHH COS upload callback", parsed.Status, parsed.Msg)
+	}
+	if len(parsed.Result.PreviewURLs) > 0 {
+		return parsed.Result.PreviewURLs[0], nil
+	}
+	if len(parsed.Result.Thumbs) > 0 {
+		return parsed.Result.Thumbs[0], nil
+	}
+	return "", nil
+}
+
+func postXHHCOSAPI(ctx context.Context, path, extraQuery, body string) ([]byte, error) {
+	baseURL := strings.TrimRight(strings.TrimSpace(config.ConfigStruct.Xhh.BaseUrl), "/")
+	if baseURL == "" {
+		baseURL = "https://api.xiaoheihe.cn"
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+path+"?"+xhhCOSWebQuery+extraQuery, strings.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/json, text/plain, */*")
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded;charset=UTF-8")
+	req.Header.Set("Origin", "https://www.xiaoheihe.cn")
+	req.Header.Set("Referer", "https://www.xiaoheihe.cn/")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+	if Info.Cookie != "" {
+		req.Header.Set("cookie", Info.Cookie)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("XHH COS API failed: path=%s status=%d body=%s", path, resp.StatusCode, limitCOSString(string(data), 300))
+	}
+	return data, nil
+}
+
+func buildXHHCOSAuthorization(method, key string, query, headers map[string]string, credential xhhCOSUploadCredential) string {
+	keyTime := fmt.Sprintf("%d;%d", credential.StartTime, credential.ExpiredTime)
+	formatString := strings.ToLower(method) + "\n" + ensureLeadingSlash(key) + "\n" + sortedCOSPairs(query) + "\n" + sortedCOSPairs(headers) + "\n"
+	stringToSign := "sha1\n" + keyTime + "\n" + sha1Hex(formatString) + "\n"
+	signKey := hmacSHA1Hex(credential.TmpSecretKey, keyTime)
+	signature := hmacSHA1Hex(signKey, stringToSign)
+	return "q-sign-algorithm=sha1" +
+		"&q-ak=" + credential.TmpSecretID +
+		"&q-sign-time=" + keyTime +
+		"&q-key-time=" + keyTime +
+		"&q-header-list=" + strings.Join(sortedKeys(headers), ";") +
+		"&q-url-param-list=" + strings.Join(sortedKeys(query), ";") +
+		"&q-signature=" + signature
+}
+
+func sortedCOSPairs(values map[string]string) string {
+	keys := sortedKeys(values)
+	pairs := make([]string, 0, len(keys))
+	for _, key := range keys {
+		pairs = append(pairs, cosEscape(key)+"="+cosEscape(values[key]))
+	}
+	return strings.Join(pairs, "&")
+}
+
+func sortedKeys(values map[string]string) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, strings.ToLower(key))
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func cosEscape(value string) string {
+	const hexDigits = "0123456789ABCDEF"
+	var builder strings.Builder
+	for _, ch := range []byte(value) {
+		if (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '-' || ch == '_' || ch == '.' || ch == '~' {
+			builder.WriteByte(ch)
+			continue
+		}
+		builder.WriteByte('%')
+		builder.WriteByte(hexDigits[ch>>4])
+		builder.WriteByte(hexDigits[ch&0x0f])
+	}
+	return builder.String()
+}
+
+func sha1Hex(value string) string {
+	sum := sha1.Sum([]byte(value))
+	return hex.EncodeToString(sum[:])
+}
+
+func hmacSHA1Hex(secret, value string) string {
+	mac := hmac.New(sha1.New, []byte(secret))
+	mac.Write([]byte(value))
+	return hex.EncodeToString(mac.Sum(nil))
 }
 
 func buildXHHCOSUploadPlan(bucket, region, host, key string, size int) XHHCOSUploadPlan {
@@ -280,6 +425,42 @@ func imageMimeType(imageBytes []byte) string {
 	default:
 		return "image/png"
 	}
+}
+
+func xhhCOSUploadFileName(sourcePath string, imageBytes []byte) string {
+	name := filepath.Base(strings.TrimSpace(sourcePath))
+	if name == "" || name == "." || name == string(filepath.Separator) {
+		name = "generated" + imageExtFromBytesOrPath(imageBytes, sourcePath)
+	}
+	return name
+}
+
+func imageDimensions(imageBytes []byte) (int, int) {
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(imageBytes))
+	if err != nil {
+		return 0, 0
+	}
+	return cfg.Width, cfg.Height
+}
+
+func jsonStrings(values []string) string {
+	data, _ := json.Marshal(values)
+	return string(data)
+}
+
+func xhhCOSUploadHost(uploadURL string) string {
+	parsed, err := url.Parse(uploadURL)
+	if err != nil {
+		return ""
+	}
+	return parsed.Host
+}
+
+func xhhCOSStatusError(action, status, msg string) error {
+	if msg != "" {
+		return fmt.Errorf("%s failed: status=%s msg=%s", action, status, msg)
+	}
+	return fmt.Errorf("%s failed: status=%s", action, status)
 }
 
 func limitCOSString(s string, max int) string {

@@ -650,7 +650,7 @@ func applyConfigDefaults(cfg *appConfig) bool {
 		changed = true
 	}
 	if cfg.Image.UploadMode == "" {
-		cfg.Image.UploadMode = "external"
+		cfg.Image.UploadMode = "cos"
 		changed = true
 	}
 	if cfg.Image.PromptMaxChars == 0 {

@@ -178,7 +178,7 @@ func applyDefaults() bool {
 		changed = true
 	}
 	if ConfigStruct.Image.UploadMode == "" {
-		ConfigStruct.Image.UploadMode = "external"
+		ConfigStruct.Image.UploadMode = "cos"
 		changed = true
 	}
 	if ConfigStruct.Image.PromptMaxChars == 0 {

@@ -178,7 +178,7 @@ func ProcessImageGenerationComment(linkID, commentID, rootID, userID int, text s
 
 	imageURL, uploadPlan, err := resolveXHHImageURL(ctx, imageResult, options.DryRun)
 	if err != nil {
-		return ImageCommentResult{Handled: true, OK: errors.Is(err, ErrMissingXHHCOSCredential), Err: fmt.Errorf("resolve image url failed: %w", err)}
+		return ImageCommentResult{Handled: true, Err: fmt.Errorf("resolve image url failed: %w", err)}
 	}
 	loger.Loger.Info("[XHH]图片 URL 准备完成", zap.Int("comment_id", commentID), zap.String("image_url", imageURL), zap.String("upload_key", uploadPlan.Key), zap.Bool("uploaded", uploadPlan.Uploaded), zap.Duration("duration", time.Since(started)))
 
@@ -311,12 +311,15 @@ func resolveXHHImageURL(ctx context.Context, imageResult ai.ImageResult, dryRun 
 	}
 
 	mode := strings.ToLower(strings.TrimSpace(config.ConfigStruct.Image.UploadMode))
-	if mode == "external" || mode == "static" {
-		// 临时停用 VPS external/static 图床，统一走小黑盒官方 COS。
-		mode = "cos"
-	}
-	if mode == "" || mode == "xhh_cos" || mode == "xhh-cos" || mode == "cos" {
+	if mode == "" || mode == "xhh_cos" || mode == "xhh-cos" || mode == "cos" || mode == "external" || mode == "static" {
 		plan, err := UploadToXHHCOS(ctx, imageBytes, imageResult.Path, dryRun)
+		if err != nil {
+			return "", plan, err
+		}
+		return plan.CDNURL, plan, nil
+	}
+	if mode == "legacy_external" || mode == "external_legacy" || mode == "vps_external" {
+		plan, err := UploadToExternalImageHost(imageBytes, imageResult.Path, dryRun)
 		if err != nil {
 			return "", plan, err
 		}
