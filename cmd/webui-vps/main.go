@@ -998,15 +998,29 @@ func (s *serverState) handleCommentThread(w http.ResponseWriter, r *http.Request
 	if record.CommentID > 0 || record.RootCommentID > 0 {
 		thread, err = fetchXHHCommentThread(r.Context(), cfg, session, record)
 		if err != nil || len(thread) == 0 {
-			thread = fallbackCommentThread(record)
-			source = "local"
+			cachedThread, cachedTitle, ok := s.lookupSQLiteCommentThreadCache(cfg, record, payload.ReplyText)
+			if ok {
+				thread = cachedThread
+				postTitle = firstNonEmpty(postTitle, cachedTitle)
+				source = "cache"
+			} else {
+				thread = fallbackCommentThread(record)
+				source = "local"
+			}
 		}
 	} else {
 		mode = "post"
 		thread, postTitle, err = fetchXHHPostComments(r.Context(), cfg, session, record.LinkID, payload.ReplyText)
 		if err != nil || len(thread) == 0 {
-			thread = []commentThreadItem{}
-			source = "post_empty"
+			cachedThread, cachedTitle, ok := s.lookupSQLiteCommentThreadCache(cfg, record, payload.ReplyText)
+			if ok {
+				thread = cachedThread
+				postTitle = firstNonEmpty(postTitle, cachedTitle)
+				source = "cache"
+			} else {
+				thread = []commentThreadItem{}
+				source = "post_empty"
+			}
 		}
 	}
 	markCurrentCommentReplyTarget(thread)
@@ -1084,6 +1098,138 @@ func scanSQLiteCommentThreadRecord(database *sql.DB, where string, args ...any) 
 		return commentThreadRecord{}, false, nil
 	}
 	return record, err == nil, err
+}
+
+func (s *serverState) lookupSQLiteCommentThreadCache(cfg appConfig, record commentThreadRecord, targetText string) ([]commentThreadItem, string, bool) {
+	if strings.ToLower(strings.TrimSpace(cfg.DataBase.Type)) != "" && strings.ToLower(strings.TrimSpace(cfg.DataBase.Type)) != "sqlite" {
+		return nil, "", false
+	}
+	if _, err := os.Stat(filepath.Join(s.rootDir, "sql.db")); err != nil {
+		return nil, "", false
+	}
+	database, err := s.openSQLiteDatabase()
+	if err != nil {
+		return nil, "", false
+	}
+	defer database.Close()
+	title := sqliteCachedPostTitle(database, record.LinkID)
+	rootID := record.RootCommentID
+	if record.CommentID > 0 {
+		cachedRootID := sqliteCachedRootCommentID(database, record.CommentID)
+		if cachedRootID > 0 && (rootID <= 0 || rootID == record.CommentID) {
+			rootID = cachedRootID
+		}
+	}
+	if rootID <= 0 && record.LinkID > 0 && normalizeCommentTextForMatch(targetText) != "" {
+		rootID = sqliteCachedRootByTarget(database, record.LinkID, targetText)
+	}
+	if rootID <= 0 && record.LinkID > 0 {
+		rootID = sqliteFirstCachedRoot(database, record.LinkID)
+	}
+	if rootID <= 0 {
+		return nil, title, false
+	}
+	items, ok := sqliteCachedCommentFloor(database, rootID, record, targetText)
+	return items, title, ok
+}
+
+func sqliteCachedPostTitle(database *sql.DB, linkID int64) string {
+	if linkID <= 0 {
+		return ""
+	}
+	var title string
+	err := database.QueryRow("SELECT COALESCE(title, '') FROM xhh_post_cache WHERE link_id=?", linkID).Scan(&title)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(title)
+}
+
+func sqliteCachedRootCommentID(database *sql.DB, commentID int64) int64 {
+	var rootID int64
+	err := database.QueryRow("SELECT COALESCE(root_comment_id, 0) FROM xhh_comment_cache WHERE comment_id=?", commentID).Scan(&rootID)
+	if err != nil {
+		return 0
+	}
+	return rootID
+}
+
+func sqliteCachedRootByTarget(database *sql.DB, linkID int64, targetText string) int64 {
+	rows, err := database.Query(`SELECT c.root_comment_id, COALESCE(c.text, '')
+		FROM xhh_comment_cache c
+		LEFT JOIN xhh_comment_cache r ON r.comment_id = c.root_comment_id
+		WHERE c.root_comment_id > 0 AND (c.link_id = ? OR r.link_id = ?)
+		ORDER BY c.updated_at DESC, c.comment_id ASC`, linkID, linkID)
+	if err != nil {
+		return 0
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var rootID int64
+		var text string
+		if err := rows.Scan(&rootID, &text); err != nil {
+			continue
+		}
+		if matchCommentText(text, targetText) {
+			return rootID
+		}
+	}
+	return 0
+}
+
+func sqliteFirstCachedRoot(database *sql.DB, linkID int64) int64 {
+	var rootID int64
+	err := database.QueryRow(`SELECT COALESCE(root_comment_id, 0)
+		FROM xhh_comment_cache
+		WHERE link_id = ? AND root_comment_id > 0
+		ORDER BY updated_at DESC, CASE WHEN comment_id = root_comment_id THEN 0 ELSE 1 END, comment_id ASC
+		LIMIT 1`, linkID).Scan(&rootID)
+	if err != nil {
+		return 0
+	}
+	return rootID
+}
+
+func sqliteCachedCommentFloor(database *sql.DB, rootID int64, record commentThreadRecord, targetText string) ([]commentThreadItem, bool) {
+	rows, err := database.Query(`SELECT comment_id, root_comment_id, reply_id, floor_num, user_id, COALESCE(user_name, ''), COALESCE(avatar_url, ''), COALESCE(reply_user_name, ''), COALESCE(created_at, ''), COALESCE(text, ''), COALESCE(images, '[]')
+		FROM xhh_comment_cache
+		WHERE root_comment_id = ? AND (? <= 0 OR link_id = ? OR link_id = 0)
+		ORDER BY CASE WHEN comment_id = root_comment_id THEN 0 ELSE 1 END, comment_id ASC`, rootID, record.LinkID, record.LinkID)
+	if err != nil {
+		return nil, false
+	}
+	defer rows.Close()
+	items := []commentThreadItem{}
+	for rows.Next() {
+		item, ok := scanSQLiteCachedCommentItem(rows, record, targetText)
+		if ok {
+			items = append(items, item)
+		}
+	}
+	return items, len(items) > 0
+}
+
+func scanSQLiteCachedCommentItem(rows *sql.Rows, record commentThreadRecord, targetText string) (commentThreadItem, bool) {
+	var item commentThreadItem
+	var imagesJSON string
+	err := rows.Scan(&item.CommentID, &item.RootCommentID, &item.ReplyID, &item.FloorNum, &item.UserID, &item.UserName, &item.AvatarURL, &item.ReplyUserName, &item.CreatedAt, &item.Text, &imagesJSON)
+	if err != nil {
+		return commentThreadItem{}, false
+	}
+	var images []string
+	if err := json.Unmarshal([]byte(imagesJSON), &images); err == nil {
+		for _, image := range images {
+			if imageURL := normalizeXHHImageURL(image); imageURL != "" {
+				item.Images = append(item.Images, imageURL)
+			}
+		}
+	}
+	item.UserName = firstNonEmpty(cleanXHHCommentText(item.UserName), "未知用户")
+	item.Text = cleanXHHCommentText(item.Text)
+	item.IsRoot = item.CommentID > 0 && item.CommentID == item.RootCommentID
+	item.IsTarget = matchCommentText(item.Text, targetText)
+	item.IsCurrentComment = record.CommentID > 0 && item.CommentID == record.CommentID
+	return item, true
 }
 
 func lookupPostgresCommentThreadRecord(cfg appConfig, req commentThreadRequest) (commentThreadRecord, error) {
@@ -3378,10 +3524,10 @@ function resendFailedMessage(item,button,feedback){return regenerateMessage(item
 function setFeedback(el,text,state){if(!el)return;el.textContent=text;el.className='action-feedback '+(state||'')}
 function regeneratePayload(item){return{msgId:item.msgId||0,commentId:item.commentId||0,linkId:item.linkId||0,userId:item.userId||0,userName:item.user||'',question:item.question||''}}
 async function showCommentThread(item,button,feedback){if(!item.commentId&&!item.rootCommentId&&!item.msgId&&!item.linkId){setFeedback(feedback,'这条记录缺少帖子 ID','error');return}const original=button.textContent;button.disabled=true;button.textContent='读取中';const postMode=!item.commentId&&!item.rootCommentId&&!item.msgId;setFeedback(feedback,postMode?'正在定位并读取整层楼...':'正在读取当前整层楼...','pending');try{const data=await api('/api/comment-thread',{method:'POST',body:JSON.stringify({msgId:item.msgId||0,commentId:item.commentId||0,rootCommentId:item.rootCommentId||0,linkId:item.linkId||0,replyText:item.replyText||item.reply||'',title:item.title||''})});renderCommentThread(data);setFeedback(feedback,commentFeedbackText(data),'ok')}catch(err){setFeedback(feedback,'失败：'+err.message,'error')}finally{button.disabled=false;button.textContent=original}}
-function commentFeedbackText(data){if(data.mode==='post')return data.thread?.length?'已读取整层楼':'没定位到对应楼层';if(data.source==='xhh')return'已读取当前整层楼';return'已显示本地记录'}
+function commentFeedbackText(data){if(data.mode==='post')return data.thread?.length?(data.source==='cache'?'已读取缓存整层楼':'已读取整层楼'):'没定位到对应楼层';if(data.source==='xhh')return'已读取当前整层楼';if(data.source==='cache')return'已读取缓存整层楼';return'已显示本地记录'}
 function hideCommentThread(){commentOverlay?.classList.add('hidden');document.documentElement.classList.remove('modal-open');document.body.classList.remove('modal-open')}
 function renderCommentThread(data){if(!commentOverlay||!commentThread)return;commentOverlay.classList.remove('hidden');document.documentElement.classList.add('modal-open');document.body.classList.add('modal-open');if(commentOverlayTitle)commentOverlayTitle.textContent='整层楼评论';commentOverlaySubtitle.textContent=commentSubtitle(data);renderCommentChips(data);renderCommentActions(data);commentThread.innerHTML='';const items=orderedCommentItems(data);if(!items.length){const empty=document.createElement('div');empty.className='comment-empty';empty.textContent='没有读取到这层楼的评论，或小黑盒接口暂不可用。';commentThread.appendChild(empty);return}for(const item of items){commentThread.appendChild(commentCard(item))}}
-function commentSubtitle(data){if(data.mode==='post'){const title=data.postTitle?'《'+data.postTitle+'》':'';return '正在查看 '+title+' 中机器人评论所在的整层楼；楼中楼里没有 @ 的普通评论也会显示。'}if(data.source==='xhh')return'来自小黑盒楼层接口，当前评论所在整层楼已显示。';return'小黑盒接口暂不可用，先显示本地记录。'}
+function commentSubtitle(data){if(data.mode==='post'){const title=data.postTitle?'《'+data.postTitle+'》':'';if(data.source==='cache')return'来自本地缓存，正在查看 '+title+' 中机器人评论所在的整层楼。';return '正在查看 '+title+' 中机器人评论所在的整层楼；楼中楼里没有 @ 的普通评论也会显示。'}if(data.source==='xhh')return'来自小黑盒楼层接口，当前评论所在整层楼已显示。';if(data.source==='cache')return'小黑盒接口暂不可用，已显示本地缓存的整层楼。';return'小黑盒接口暂不可用，先显示本地记录。'}
 function orderedCommentItems(data){return Array.isArray(data.thread)?data.thread.slice():[]}
 function renderCommentChips(data){if(!commentChips)return;commentChips.innerHTML='';if(data.postTitle)addCommentChip(data.postTitle);addCommentChip('帖子 '+(data.linkId||'—'));if(data.mode!=='post'){addCommentChip('根评论 '+(data.rootCommentId||'—'));addCommentChip('当前评论 '+(data.commentId||'—'))}addCommentChip('评论 '+formatCount((data.thread||[]).length)+' 条');if(data.imageCount)addCommentChip('图片 '+formatCount(data.imageCount)+' 张')}
 function addCommentChip(text){const chip=document.createElement('span');chip.className='comment-chip';chip.textContent=text;commentChips.appendChild(chip)}

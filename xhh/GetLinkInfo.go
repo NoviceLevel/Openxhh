@@ -5,6 +5,7 @@ import (
 	"html"
 	"io"
 	"openxhh/ai"
+	"openxhh/db"
 	"openxhh/loger"
 	"regexp"
 	"strconv"
@@ -16,12 +17,26 @@ import (
 )
 
 type CommentInfo struct {
-	CommentID int    `json:"commentid"`
-	UserID    int    `json:"userid"`
-	Text      string `json:"text"`
-	ReplyID   int    `json:"replyid"`
-	User      struct {
-		UserName string `json:"username"`
+	CommentID   int             `json:"commentid"`
+	UserID      int             `json:"userid"`
+	Text        string          `json:"text"`
+	ReplyID     int             `json:"replyid"`
+	FloorNum    int             `json:"floor_num"`
+	CreateAt    json.RawMessage `json:"create_at"`
+	CreatedAt   json.RawMessage `json:"created_at"`
+	CreateTime  json.RawMessage `json:"create_time"`
+	CreatedTime json.RawMessage `json:"created_time"`
+	Time        json.RawMessage `json:"time"`
+	Dateline    json.RawMessage `json:"dateline"`
+	PublishTime json.RawMessage `json:"publish_time"`
+	TimeDesc    json.RawMessage `json:"time_desc"`
+	User        struct {
+		UserName  string `json:"username"`
+		Avatar    string `json:"avatar"`
+		AvatarURL string `json:"avatar_url"`
+		AvatarUrl string `json:"avatarUrl"`
+		Icon      string `json:"icon"`
+		IconURL   string `json:"icon_url"`
 	} `json:"user"`
 	Imgs []struct {
 		Url string `json:"url"`
@@ -264,7 +279,153 @@ func fetchLinkInfoPage(linkID int, page int) (LinkInfoS, bool) {
 		return data, false
 	}
 
+	cacheLinkInfoPage(linkID, data)
 	return data, true
+}
+
+func cacheLinkInfoPage(linkID int, data LinkInfoS) {
+	comments := []db.CommentCacheItem{}
+	for _, group := range data.Result.Comments {
+		if len(group.Comment) == 0 || group.Comment[0].CommentID <= 0 {
+			continue
+		}
+		rootID := group.Comment[0].CommentID
+		for _, comment := range group.Comment {
+			comments = append(comments, commentCacheItem(linkID, rootID, comment))
+		}
+	}
+	db.SaveCommentThreadCache(db.CommentCachePost{LinkID: int64(linkID), Title: data.Result.Link.Title}, comments)
+}
+
+func cacheSubComments(rootCommentID int, comments []CommentInfo) {
+	items := make([]db.CommentCacheItem, 0, len(comments))
+	for _, comment := range comments {
+		items = append(items, commentCacheItem(0, rootCommentID, comment))
+	}
+	db.SaveCommentThreadCache(db.CommentCachePost{}, items)
+}
+
+func commentCacheItem(linkID int, rootCommentID int, comment CommentInfo) db.CommentCacheItem {
+	return db.CommentCacheItem{
+		LinkID:        int64(linkID),
+		RootCommentID: int64(rootCommentID),
+		CommentID:     int64(comment.CommentID),
+		ReplyID:       int64(comment.ReplyID),
+		FloorNum:      int64(comment.FloorNum),
+		UserID:        int64(comment.UserID),
+		UserName:      CleanXHHRichText(comment.User.UserName),
+		AvatarURL:     normalizeXHHImageURL(firstNonEmptyString(comment.User.AvatarURL, comment.User.AvatarUrl, comment.User.Avatar, comment.User.IconURL, comment.User.Icon)),
+		ReplyUserName: CleanXHHRichText(comment.ReplyUser.UserName),
+		CreatedAt:     commentCreatedAt(comment),
+		Text:          CleanXHHRichText(comment.Text),
+		Images:        commentImageURLs(comment),
+	}
+}
+
+func commentImageURLs(comment CommentInfo) []string {
+	images := make([]string, 0, len(comment.Imgs))
+	for _, image := range comment.Imgs {
+		if imageURL := normalizeXHHImageURL(image.Url); imageURL != "" {
+			images = append(images, imageURL)
+		}
+	}
+	return images
+}
+
+func commentCreatedAt(comment CommentInfo) string {
+	for _, value := range []json.RawMessage{comment.CreateAt, comment.CreatedAt, comment.CreateTime, comment.CreatedTime, comment.Time, comment.Dateline, comment.PublishTime, comment.TimeDesc} {
+		if normalized := normalizeCommentTimeValue(value); normalized != "" {
+			return normalized
+		}
+	}
+	return ""
+}
+
+func normalizeCommentTimeValue(value json.RawMessage) string {
+	raw := strings.TrimSpace(string(value))
+	if raw == "" || raw == "null" {
+		return ""
+	}
+	var text string
+	if err := json.Unmarshal(value, &text); err == nil {
+		return normalizeCommentTimeText(text)
+	}
+	var number json.Number
+	if err := json.Unmarshal(value, &number); err == nil {
+		if unixTime, err := number.Int64(); err == nil {
+			return formatCommentUnixTime(unixTime)
+		}
+		if unixTime, err := strconv.ParseFloat(number.String(), 64); err == nil {
+			return formatCommentUnixTime(int64(unixTime))
+		}
+	}
+	return strings.Trim(raw, `"`)
+}
+
+func normalizeCommentTimeText(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" || value == "0" {
+		return ""
+	}
+	if isUnixTimeText(value) {
+		if unixTime, err := strconv.ParseInt(value, 10, 64); err == nil {
+			return formatCommentUnixTime(unixTime)
+		}
+	}
+	return value
+}
+
+func isUnixTimeText(value string) bool {
+	if len(value) < 10 {
+		return false
+	}
+	for _, char := range value {
+		if char < '0' || char > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func formatCommentUnixTime(value int64) string {
+	if value <= 0 {
+		return ""
+	}
+	var timestamp time.Time
+	switch {
+	case value >= 1000000000000000000:
+		timestamp = time.Unix(0, value)
+	case value >= 1000000000000000:
+		timestamp = time.Unix(value/1000000, (value%1000000)*int64(time.Microsecond))
+	case value >= 1000000000000:
+		timestamp = time.Unix(value/1000, (value%1000)*int64(time.Millisecond))
+	case value >= 1000000000:
+		timestamp = time.Unix(value, 0)
+	default:
+		return strconv.FormatInt(value, 10)
+	}
+	return timestamp.Local().Format("2006-01-02 15:04:05")
+}
+
+func normalizeXHHImageURL(rawURL string) string {
+	rawURL = strings.TrimSpace(rawURL)
+	if strings.HasPrefix(rawURL, "//") {
+		rawURL = "https:" + rawURL
+	}
+	if strings.HasPrefix(rawURL, "http://") || strings.HasPrefix(rawURL, "https://") {
+		return rawURL
+	}
+	return ""
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func findCommentGroup(groups []commentGroup, rootCommentID int) []CommentInfo {
@@ -325,6 +486,7 @@ func fetchMoreSubComments(rootCommentID int, targetCommentID int, comments []Com
 			return comments
 		}
 
+		cacheSubComments(rootCommentID, data.Result.Comments)
 		comments = append(comments, data.Result.Comments...)
 		if findComment(comments, targetCommentID) != nil || !data.Result.HasMore {
 			return comments
@@ -703,6 +865,7 @@ func fetchAllSubComments(rootCommentID int, comments []CommentInfo, subCommentPa
 			return comments
 		}
 
+		cacheSubComments(rootCommentID, data.Result.Comments)
 		comments = append(comments, data.Result.Comments...)
 		if !data.Result.HasMore {
 			return comments
