@@ -156,11 +156,12 @@ type messageStreamPostInfo struct {
 }
 
 type commentThreadRequest struct {
-	MsgID     int64  `json:"msgId"`
-	CommentID int64  `json:"commentId"`
-	LinkID    int64  `json:"linkId"`
-	ReplyText string `json:"replyText"`
-	Title     string `json:"title"`
+	MsgID         int64  `json:"msgId"`
+	CommentID     int64  `json:"commentId"`
+	RootCommentID int64  `json:"rootCommentId"`
+	LinkID        int64  `json:"linkId"`
+	ReplyText     string `json:"replyText"`
+	Title         string `json:"title"`
 }
 
 type commentThreadRecord struct {
@@ -978,6 +979,9 @@ func (s *serverState) handleCommentThread(w http.ResponseWriter, r *http.Request
 	if record.CommentID <= 0 {
 		record.CommentID = payload.CommentID
 	}
+	if record.RootCommentID <= 0 {
+		record.RootCommentID = payload.RootCommentID
+	}
 	if record.RootCommentID <= 0 && record.CommentID > 0 {
 		record.RootCommentID = record.CommentID
 	}
@@ -991,7 +995,7 @@ func (s *serverState) handleCommentThread(w http.ResponseWriter, r *http.Request
 	postTitle := strings.TrimSpace(payload.Title)
 	session := s.loadXHHSession()
 	var thread []commentThreadItem
-	if record.CommentID > 0 {
+	if record.CommentID > 0 || record.RootCommentID > 0 {
 		thread, err = fetchXHHCommentThread(r.Context(), cfg, session, record)
 		if err != nil || len(thread) == 0 {
 			thread = fallbackCommentThread(record)
@@ -1052,7 +1056,7 @@ func (s *serverState) lookupCommentThreadRecord(cfg appConfig, req commentThread
 
 func (s *serverState) lookupSQLiteCommentThreadRecord(req commentThreadRequest) (commentThreadRecord, error) {
 	if _, err := os.Stat(filepath.Join(s.rootDir, "sql.db")); err != nil {
-		return commentThreadRecord{LinkID: req.LinkID, CommentID: req.CommentID}, nil
+		return commentThreadRecord{LinkID: req.LinkID, CommentID: req.CommentID, RootCommentID: req.RootCommentID}, nil
 	}
 	database, err := s.openSQLiteDatabase()
 	if err != nil {
@@ -1069,7 +1073,7 @@ func (s *serverState) lookupSQLiteCommentThreadRecord(req commentThreadRequest) 
 			return record, err
 		}
 	}
-	return commentThreadRecord{LinkID: req.LinkID, CommentID: req.CommentID}, nil
+	return commentThreadRecord{LinkID: req.LinkID, CommentID: req.CommentID, RootCommentID: req.RootCommentID}, nil
 }
 
 func scanSQLiteCommentThreadRecord(database *sql.DB, where string, args ...any) (commentThreadRecord, bool, error) {
@@ -1100,7 +1104,7 @@ func lookupPostgresCommentThreadRecord(cfg appConfig, req commentThreadRequest) 
 			return record, err
 		}
 	}
-	return commentThreadRecord{LinkID: req.LinkID, CommentID: req.CommentID}, nil
+	return commentThreadRecord{LinkID: req.LinkID, CommentID: req.CommentID, RootCommentID: req.RootCommentID}, nil
 }
 
 func scanPostgresCommentThreadRecord(ctx context.Context, pool *pgxpool.Pool, where string, args ...any) (commentThreadRecord, bool, error) {
@@ -3372,7 +3376,7 @@ async function regenerateMessage(item,button,feedback,options={}){const original
 function resendFailedMessage(item,button,feedback){return regenerateMessage(item,button,feedback,{toast:failedRecordsToast,workingText:'发送中',pendingText:'正在加入重新发送队列...',successText:'已加入重新发送队列',toastSuccess:'已加入重新发送队列，机器人下一轮会重新发送'})}
 function setFeedback(el,text,state){if(!el)return;el.textContent=text;el.className='action-feedback '+(state||'')}
 function regeneratePayload(item){return{msgId:item.msgId||0,commentId:item.commentId||0,linkId:item.linkId||0,userId:item.userId||0,userName:item.user||'',question:item.question||''}}
-async function showCommentThread(item,button,feedback){if(!item.commentId&&!item.msgId&&!item.linkId){setFeedback(feedback,'这条记录缺少帖子 ID','error');return}const original=button.textContent;button.disabled=true;button.textContent='读取中';const postMode=!item.commentId&&!item.msgId;setFeedback(feedback,postMode?'正在定位并读取整层楼...':'正在读取当前整层楼...','pending');try{const data=await api('/api/comment-thread',{method:'POST',body:JSON.stringify({msgId:item.msgId||0,commentId:item.commentId||0,linkId:item.linkId||0,replyText:item.replyText||item.reply||'',title:item.title||''})});renderCommentThread(data);setFeedback(feedback,commentFeedbackText(data),'ok')}catch(err){setFeedback(feedback,'失败：'+err.message,'error')}finally{button.disabled=false;button.textContent=original}}
+async function showCommentThread(item,button,feedback){if(!item.commentId&&!item.rootCommentId&&!item.msgId&&!item.linkId){setFeedback(feedback,'这条记录缺少帖子 ID','error');return}const original=button.textContent;button.disabled=true;button.textContent='读取中';const postMode=!item.commentId&&!item.rootCommentId&&!item.msgId;setFeedback(feedback,postMode?'正在定位并读取整层楼...':'正在读取当前整层楼...','pending');try{const data=await api('/api/comment-thread',{method:'POST',body:JSON.stringify({msgId:item.msgId||0,commentId:item.commentId||0,rootCommentId:item.rootCommentId||0,linkId:item.linkId||0,replyText:item.replyText||item.reply||'',title:item.title||''})});renderCommentThread(data);setFeedback(feedback,commentFeedbackText(data),'ok')}catch(err){setFeedback(feedback,'失败：'+err.message,'error')}finally{button.disabled=false;button.textContent=original}}
 function commentFeedbackText(data){if(data.mode==='post')return data.thread?.length?'已读取整层楼':'没定位到对应楼层';if(data.source==='xhh')return'已读取当前整层楼';return'已显示本地记录'}
 function hideCommentThread(){commentOverlay?.classList.add('hidden');document.documentElement.classList.remove('modal-open');document.body.classList.remove('modal-open')}
 function renderCommentThread(data){if(!commentOverlay||!commentThread)return;commentOverlay.classList.remove('hidden');document.documentElement.classList.add('modal-open');document.body.classList.add('modal-open');if(commentOverlayTitle)commentOverlayTitle.textContent='整层楼评论';commentOverlaySubtitle.textContent=commentSubtitle(data);renderCommentChips(data);renderCommentActions(data);commentThread.innerHTML='';const items=orderedCommentItems(data);if(!items.length){const empty=document.createElement('div');empty.className='comment-empty';empty.textContent='没有读取到这层楼的评论，或小黑盒接口暂不可用。';commentThread.appendChild(empty);return}for(const item of items){commentThread.appendChild(commentCard(item))}}
@@ -3466,7 +3470,7 @@ function appendEmptyRow(body,colSpan,text){const row=document.createElement('tr'
 function appendStreamTextCell(row,item){const cell=document.createElement('td');cell.className='content-cell';const inner=document.createElement('div');inner.className='clip-cell';const label=document.createElement('div');label.className='stream-source-label';label.textContent=streamSourceText(item.source);inner.appendChild(label);appendEmojiText(inner,cleanText(item.text)||'—');const urls=recordImageUrls(item);if(urls.length){const hint=document.createElement('div');hint.className='stream-muted';hint.textContent='图片 '+formatCount(urls.length)+' 张';inner.appendChild(hint);const images=document.createElement('div');images.className='comment-images';for(const src of urls){const link=document.createElement('a');link.className='comment-image-link';link.href=src;link.target='_blank';link.rel='noopener noreferrer';const img=document.createElement('img');img.src=src;img.alt='评论图片';img.loading='lazy';link.appendChild(img);images.appendChild(link)}inner.appendChild(images)}cell.appendChild(inner);row.appendChild(cell)}
 function appendStreamTargetUserCell(row,item){appendCell(row,cleanText(item.commentUserName)||'—')}
 function appendStreamActionCell(row,item,showPostLink=true){const cell=document.createElement('td');const stack=document.createElement('div');stack.className='action-stack';const viewBtn=document.createElement('button');viewBtn.type='button';viewBtn.className='copy-btn';viewBtn.textContent='查看楼层';const copyBtn=document.createElement('button');copyBtn.type='button';copyBtn.className='copy-btn';copyBtn.textContent='复制';const feedback=document.createElement('span');feedback.className='action-feedback';viewBtn.addEventListener('click',()=>showCommentThread(streamThreadItem(item),viewBtn,feedback));copyBtn.addEventListener('click',async()=>{await copyText(streamRecordText(item));copyBtn.textContent='已复制';setTimeout(()=>copyBtn.textContent='复制',900)});stack.appendChild(viewBtn);stack.appendChild(copyBtn);const href=showPostLink?postHref(item.linkId):'';if(href){const openBtn=document.createElement('a');openBtn.className='copy-btn';openBtn.href=href;openBtn.target='_blank';openBtn.rel='noopener noreferrer';openBtn.textContent='打开原帖';stack.appendChild(openBtn)}stack.appendChild(feedback);cell.appendChild(stack);row.appendChild(cell)}
-function streamThreadItem(item){return{msgId:item.messageId||0,commentId:item.commentId||item.rootCommentId||0,linkId:item.linkId||0,replyText:cleanText(item.text)||'',title:cleanText(item.postTitle)||''}}
+function streamThreadItem(item){return{msgId:item.messageId||0,commentId:item.commentId||0,rootCommentId:item.rootCommentId||0,linkId:item.linkId||0,replyText:cleanText(item.text)||'',title:cleanText(item.postTitle)||''}}
 function streamRecordText(item){const lines=['时间：'+formatUnixTime(item.createdAt),'类型：'+streamSourceText(item.source),'内容：'+(cleanText(item.text)||'—')];if(item.commentUserName)lines.push('被评论者：'+cleanText(item.commentUserName));if(item.postTitle)lines.push('帖子标题：'+cleanText(item.postTitle));if(item.userName||item.userId)lines.push('用户：'+(cleanText(item.userName)||item.userId));if(item.commentId)lines.push('评论ID：'+item.commentId);if(item.rootCommentId)lines.push('根评论ID：'+item.rootCommentId);if(item.replyCommentId)lines.push('回复评论ID：'+item.replyCommentId);if(item.linkId)lines.push('帖子ID：'+item.linkId);const imageUrls=recordImageUrls(item);if(imageUrls.length)lines.push('图片：'+imageUrls.join(' '));return lines.join('\n')}
 async function loadFeedRecords(manual=false){
 	if(!manual&&activeView!=='feed-records')return
