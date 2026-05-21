@@ -60,6 +60,12 @@ type authStore struct {
 	Hash string `json:"hash"`
 }
 
+type xhhSession struct {
+	Cookie   string `json:"cookie"`
+	HeyBoxID string `json:"heyboxId"`
+	Time     int    `json:"time"`
+}
+
 type serverState struct {
 	rootDir    string
 	authPath   string
@@ -873,16 +879,17 @@ func (s *serverState) handleCommentThread(w http.ResponseWriter, r *http.Request
 	mode := "thread"
 	source := "xhh"
 	postTitle := strings.TrimSpace(payload.Title)
+	session := s.loadXHHSession()
 	var thread []commentThreadItem
 	if record.CommentID > 0 {
-		thread, err = fetchXHHCommentThread(r.Context(), cfg, record)
+		thread, err = fetchXHHCommentThread(r.Context(), cfg, session, record)
 		if err != nil || len(thread) == 0 {
 			thread = fallbackCommentThread(record)
 			source = "local"
 		}
 	} else {
 		mode = "post"
-		thread, postTitle, err = fetchXHHPostComments(r.Context(), cfg, record.LinkID, payload.ReplyText)
+		thread, postTitle, err = fetchXHHPostComments(r.Context(), cfg, session, record.LinkID, payload.ReplyText)
 		if err != nil || len(thread) == 0 {
 			thread = []commentThreadItem{}
 			source = "post_empty"
@@ -908,6 +915,16 @@ func (s *serverState) handleCommentThread(w http.ResponseWriter, r *http.Request
 		ImageCount:    countCommentImages(thread),
 		Thread:        thread,
 	})
+}
+
+func (s *serverState) loadXHHSession() xhhSession {
+	data, err := os.ReadFile(filepath.Join(s.rootDir, "cookie.json"))
+	if err != nil {
+		return xhhSession{}
+	}
+	var session xhhSession
+	_ = json.Unmarshal(data, &session)
+	return session
 }
 
 func (s *serverState) lookupCommentThreadRecord(cfg appConfig, req commentThreadRequest) (commentThreadRecord, error) {
@@ -984,16 +1001,16 @@ func scanPostgresCommentThreadRecord(ctx context.Context, pool *pgxpool.Pool, wh
 	return record, err == nil, err
 }
 
-func fetchXHHCommentThread(ctx context.Context, cfg appConfig, record commentThreadRecord) ([]commentThreadItem, error) {
-	items, _, err := fetchXHHCommentFloor(ctx, cfg, record.LinkID, record.RootCommentID, record.CommentID, "")
+func fetchXHHCommentThread(ctx context.Context, cfg appConfig, session xhhSession, record commentThreadRecord) ([]commentThreadItem, error) {
+	items, _, err := fetchXHHCommentFloor(ctx, cfg, session, record.LinkID, record.RootCommentID, record.CommentID, "")
 	if err == nil && len(items) > 0 {
 		return items, nil
 	}
-	return fetchXHHBackendCommentThread(ctx, cfg, record)
+	return fetchXHHBackendCommentThread(ctx, cfg, session, record)
 }
 
-func fetchXHHBackendCommentThread(ctx context.Context, cfg appConfig, record commentThreadRecord) ([]commentThreadItem, error) {
-	u, err := xhhAPIURL(cfg, "/bbs/app/link/tree/backend", url.Values{
+func fetchXHHBackendCommentThread(ctx context.Context, cfg appConfig, session xhhSession, record commentThreadRecord) ([]commentThreadItem, error) {
+	u, err := xhhAPIURL(cfg, session, "/bbs/app/link/tree/backend", url.Values{
 		"link_id":         {fmt.Sprint(record.LinkID)},
 		"root_comment_id": {fmt.Sprint(record.RootCommentID)},
 		"lastval":         {"0"},
@@ -1002,7 +1019,7 @@ func fetchXHHBackendCommentThread(ctx context.Context, cfg appConfig, record com
 	if err != nil {
 		return nil, err
 	}
-	resp, err := getXHHJSON(ctx, u)
+	resp, err := getXHHJSON(ctx, u, session)
 	if err != nil {
 		return nil, err
 	}
@@ -1024,17 +1041,17 @@ func fetchXHHBackendCommentThread(ctx context.Context, cfg appConfig, record com
 	return items, nil
 }
 
-func fetchXHHPostComments(ctx context.Context, cfg appConfig, linkID int64, targetText string) ([]commentThreadItem, string, error) {
-	return fetchXHHCommentFloor(ctx, cfg, linkID, 0, 0, targetText)
+func fetchXHHPostComments(ctx context.Context, cfg appConfig, session xhhSession, linkID int64, targetText string) ([]commentThreadItem, string, error) {
+	return fetchXHHCommentFloor(ctx, cfg, session, linkID, 0, 0, targetText)
 }
 
-func fetchXHHCommentFloor(ctx context.Context, cfg appConfig, linkID int64, rootCommentID int64, targetCommentID int64, targetText string) ([]commentThreadItem, string, error) {
+func fetchXHHCommentFloor(ctx context.Context, cfg appConfig, session xhhSession, linkID int64, rootCommentID int64, targetCommentID int64, targetText string) ([]commentThreadItem, string, error) {
 	const maxCommentSearchPages = 20
 	postTitle := ""
 	fallback := []commentThreadItem{}
 	maxPage := 1
 	for page := 1; page <= maxPage && page <= maxCommentSearchPages; page++ {
-		payload, err := fetchXHHLinkTreePage(ctx, cfg, linkID, page)
+		payload, err := fetchXHHLinkTreePage(ctx, cfg, session, linkID, page)
 		if err != nil {
 			if page == 1 {
 				return nil, postTitle, err
@@ -1057,13 +1074,13 @@ func fetchXHHCommentFloor(ctx context.Context, cfg appConfig, linkID int64, root
 				fallback = append(fallback, items...)
 			}
 			if rootCommentID > 0 && rootID == rootCommentID {
-				return expandXHHCommentFloor(ctx, cfg, rootID, items, targetCommentID, targetText), postTitle, nil
+				return expandXHHCommentFloor(ctx, cfg, session, rootID, items, targetCommentID, targetText), postTitle, nil
 			}
 			if targetCommentID > 0 && commentItemsContainID(items, targetCommentID) {
-				return expandXHHCommentFloor(ctx, cfg, rootID, items, targetCommentID, targetText), postTitle, nil
+				return expandXHHCommentFloor(ctx, cfg, session, rootID, items, targetCommentID, targetText), postTitle, nil
 			}
 			if strings.TrimSpace(targetText) != "" && commentItemsHaveTarget(items) {
-				return expandXHHCommentFloor(ctx, cfg, rootID, items, targetCommentID, targetText), postTitle, nil
+				return expandXHHCommentFloor(ctx, cfg, session, rootID, items, targetCommentID, targetText), postTitle, nil
 			}
 		}
 	}
@@ -1073,12 +1090,12 @@ func fetchXHHCommentFloor(ctx context.Context, cfg appConfig, linkID int64, root
 	return nil, postTitle, errors.New("未找到对应评论楼层")
 }
 
-func fetchXHHLinkTreePage(ctx context.Context, cfg appConfig, linkID int64, page int) (xhhPostCommentsResponse, error) {
+func fetchXHHLinkTreePage(ctx context.Context, cfg appConfig, session xhhSession, linkID int64, page int) (xhhPostCommentsResponse, error) {
 	isFirst := "0"
 	if page == 1 {
 		isFirst = "1"
 	}
-	u, err := xhhAPIURL(cfg, "/bbs/app/link/tree", url.Values{
+	u, err := xhhAPIURL(cfg, session, "/bbs/app/link/tree", url.Values{
 		"h_src":      {""},
 		"link_id":    {fmt.Sprint(linkID)},
 		"page":       {fmt.Sprint(page)},
@@ -1090,7 +1107,7 @@ func fetchXHHLinkTreePage(ctx context.Context, cfg appConfig, linkID int64, page
 	if err != nil {
 		return xhhPostCommentsResponse{}, err
 	}
-	resp, err := getXHHJSON(ctx, u)
+	resp, err := getXHHJSON(ctx, u, session)
 	if err != nil {
 		return xhhPostCommentsResponse{}, err
 	}
@@ -1105,7 +1122,7 @@ func fetchXHHLinkTreePage(ctx context.Context, cfg appConfig, linkID int64, page
 	return payload, nil
 }
 
-func expandXHHCommentFloor(ctx context.Context, cfg appConfig, rootCommentID int64, items []commentThreadItem, targetCommentID int64, targetText string) []commentThreadItem {
+func expandXHHCommentFloor(ctx context.Context, cfg appConfig, session xhhSession, rootCommentID int64, items []commentThreadItem, targetCommentID int64, targetText string) []commentThreadItem {
 	const maxSubCommentPages = 80
 	if rootCommentID <= 0 || len(items) == 0 {
 		return items
@@ -1117,7 +1134,7 @@ func expandXHHCommentFloor(ctx context.Context, cfg appConfig, rootCommentID int
 	}
 	lastVal := items[len(items)-1].CommentID
 	for page := 0; page < maxSubCommentPages; page++ {
-		payload, err := fetchXHHSubCommentsPage(ctx, cfg, rootCommentID, lastVal)
+		payload, err := fetchXHHSubCommentsPage(ctx, cfg, session, rootCommentID, lastVal)
 		if err != nil || len(payload.Result.Comments) == 0 {
 			break
 		}
@@ -1142,15 +1159,15 @@ func expandXHHCommentFloor(ctx context.Context, cfg appConfig, rootCommentID int
 	return items
 }
 
-func fetchXHHSubCommentsPage(ctx context.Context, cfg appConfig, rootCommentID int64, lastVal int64) (xhhSubCommentsResponse, error) {
-	u, err := xhhAPIURL(cfg, "/bbs/app/comment/sub/comments", url.Values{
+func fetchXHHSubCommentsPage(ctx context.Context, cfg appConfig, session xhhSession, rootCommentID int64, lastVal int64) (xhhSubCommentsResponse, error) {
+	u, err := xhhAPIURL(cfg, session, "/bbs/app/comment/sub/comments", url.Values{
 		"root_comment_id": {fmt.Sprint(rootCommentID)},
 		"lastval":         {fmt.Sprint(lastVal)},
 	})
 	if err != nil {
 		return xhhSubCommentsResponse{}, err
 	}
-	resp, err := getXHHJSON(ctx, u)
+	resp, err := getXHHJSON(ctx, u, session)
 	if err != nil {
 		return xhhSubCommentsResponse{}, err
 	}
@@ -1219,10 +1236,13 @@ func firstNonZeroInt64(values ...int64) int64 {
 	return 0
 }
 
-func getXHHJSON(ctx context.Context, requestURL string) (*http.Response, error) {
+func getXHHJSON(ctx context.Context, requestURL string, session xhhSession) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
 	if err != nil {
 		return nil, err
+	}
+	if strings.TrimSpace(session.Cookie) != "" {
+		req.Header.Set("cookie", session.Cookie)
 	}
 	req.Header.Set("Referer", "https://www.xiaoheihe.cn/")
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125 Safari/537.36")
@@ -1238,7 +1258,7 @@ func getXHHJSON(ctx context.Context, requestURL string) (*http.Response, error) 
 	return resp, nil
 }
 
-func xhhAPIURL(cfg appConfig, path string, params url.Values) (string, error) {
+func xhhAPIURL(cfg appConfig, session xhhSession, path string, params url.Values) (string, error) {
 	baseURL := strings.TrimRight(strings.TrimSpace(cfg.Xhh.BaseURL), "/")
 	if baseURL == "" {
 		baseURL = "https://api.xiaoheihe.cn"
@@ -1250,12 +1270,15 @@ func xhhAPIURL(cfg appConfig, path string, params url.Values) (string, error) {
 	query := u.Query()
 	hkey, nonce, requestTime := xhhWebGetKeys(path)
 	query.Set("os_type", "web")
-	query.Set("app", "heybox")
+	query.Set("app", "web")
 	query.Set("client_type", "web")
 	query.Set("version", firstNonEmpty(strings.TrimSpace(cfg.Xhh.Ver), "999.0.4"))
 	query.Set("web_version", firstNonEmpty(strings.TrimSpace(cfg.Xhh.WebVer), "2.5"))
 	query.Set("x_client_type", "web")
 	query.Set("x_app", "heybox_website")
+	if strings.TrimSpace(session.HeyBoxID) != "" {
+		query.Set("heybox_id", session.HeyBoxID)
+	}
 	query.Set("x_os_type", "Windows")
 	query.Set("device_info", "Chrome")
 	if deviceID := strings.TrimSpace(cfg.Xhh.DeviceID); deviceID != "" {
@@ -1264,6 +1287,7 @@ func xhhAPIURL(cfg appConfig, path string, params url.Values) (string, error) {
 	query.Set("hkey", hkey)
 	query.Set("_time", fmt.Sprint(requestTime))
 	query.Set("nonce", nonce)
+	query.Set("_notip", "true")
 	for key, values := range params {
 		for _, value := range values {
 			query.Set(key, value)
