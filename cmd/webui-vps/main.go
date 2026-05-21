@@ -131,6 +131,22 @@ type feedReplyRecord struct {
 	RepliedAt int64  `json:"repliedAt"`
 }
 
+type messageStreamRecord struct {
+	Direction      string `json:"direction"`
+	Source         string `json:"source"`
+	MessageID      int64  `json:"messageId"`
+	LinkID         int64  `json:"linkId"`
+	RootCommentID  int64  `json:"rootCommentId"`
+	ReplyCommentID int64  `json:"replyCommentId"`
+	CommentID      int64  `json:"commentId"`
+	UserID         int64  `json:"userId"`
+	UserName       string `json:"userName"`
+	Text           string `json:"text"`
+	ImageURL       string `json:"imageUrl"`
+	CreatedAt      int64  `json:"createdAt"`
+	UniqueKey      string `json:"uniqueKey"`
+}
+
 type commentThreadRequest struct {
 	MsgID     int64  `json:"msgId"`
 	CommentID int64  `json:"commentId"`
@@ -348,6 +364,7 @@ func main() {
 	mux.HandleFunc("/api/logs", state.requireAuth(state.handleLogs))
 	mux.HandleFunc("/api/logs/read", state.requireAuth(state.handleReadLog))
 	mux.HandleFunc("/api/records", state.requireAuth(state.handleRecords))
+	mux.HandleFunc("/api/message-stream", state.requireAuth(state.handleMessageStream))
 	mux.HandleFunc("/api/feed-records", state.requireAuth(state.handleFeedRecords))
 
 	listener, err := net.Listen("tcp", *addr)
@@ -1936,6 +1953,26 @@ func (s *serverState) handleRecords(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "content": content, "sources": sources, "tokens": tokens, "links": links})
 }
 
+func (s *serverState) handleMessageStream(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	window := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("window")))
+	recentOnly := window == "24h" || window == "recent"
+	cfg, err := s.readConfigForRecordLookup()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	outbound, inbound, err := s.readMessageStreamRecords(cfg, recentOnly)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "outbound": outbound, "inbound": inbound})
+}
+
 func (s *serverState) handleFeedRecords(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -2035,6 +2072,136 @@ func (s *serverState) readConfigForRecordLookup() (appConfig, error) {
 	}
 	applyConfigDefaults(&cfg)
 	return cfg, nil
+}
+
+func (s *serverState) readMessageStreamRecords(cfg appConfig, recentOnly bool) ([]messageStreamRecord, []messageStreamRecord, error) {
+	switch strings.ToLower(strings.TrimSpace(cfg.DataBase.Type)) {
+	case "", "sqlite":
+		return s.readSQLiteMessageStreamRecords(recentOnly)
+	case "pg", "postgres", "postgresql":
+		return readPostgresMessageStreamRecords(cfg, recentOnly)
+	default:
+		return nil, nil, fmt.Errorf("不支持的数据库类型: %s", cfg.DataBase.Type)
+	}
+}
+
+func (s *serverState) readSQLiteMessageStreamRecords(recentOnly bool) ([]messageStreamRecord, []messageStreamRecord, error) {
+	if _, err := os.Stat(filepath.Join(s.rootDir, "sql.db")); err != nil {
+		return []messageStreamRecord{}, []messageStreamRecord{}, nil
+	}
+	database, err := s.openSQLiteDatabase()
+	if err != nil {
+		return nil, nil, err
+	}
+	defer database.Close()
+	outbound, err := querySQLiteMessageStream(database, true, recentOnly)
+	if err != nil {
+		return nil, nil, err
+	}
+	inbound, err := querySQLiteMessageStream(database, false, recentOnly)
+	if err != nil {
+		return nil, nil, err
+	}
+	return outbound, inbound, nil
+}
+
+func querySQLiteMessageStream(database *sql.DB, outbound bool, recentOnly bool) ([]messageStreamRecord, error) {
+	query := outboundMessageStreamQuery("?", recentOnly)
+	if !outbound {
+		query = inboundMessageStreamQuery("?", recentOnly)
+	}
+	args := messageStreamQueryArgs(recentOnly)
+	rows, err := database.Query(query, args...)
+	if err != nil {
+		if isMissingMessageStreamTable(err) {
+			return []messageStreamRecord{}, nil
+		}
+		return nil, err
+	}
+	defer rows.Close()
+	return scanMessageStreamRows(rows)
+}
+
+func readPostgresMessageStreamRecords(cfg appConfig, recentOnly bool) ([]messageStreamRecord, []messageStreamRecord, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, postgresDSN(cfg))
+	if err != nil {
+		return nil, nil, err
+	}
+	defer pool.Close()
+	outbound, err := queryPostgresMessageStream(ctx, pool, true, recentOnly)
+	if err != nil {
+		return nil, nil, err
+	}
+	inbound, err := queryPostgresMessageStream(ctx, pool, false, recentOnly)
+	if err != nil {
+		return nil, nil, err
+	}
+	return outbound, inbound, nil
+}
+
+func queryPostgresMessageStream(ctx context.Context, pool *pgxpool.Pool, outbound bool, recentOnly bool) ([]messageStreamRecord, error) {
+	query := outboundMessageStreamQuery("$1", recentOnly)
+	if !outbound {
+		query = inboundMessageStreamQuery("$1", recentOnly)
+	}
+	args := messageStreamQueryArgs(recentOnly)
+	rows, err := pool.Query(ctx, query, args...)
+	if err != nil {
+		if isMissingMessageStreamTable(err) {
+			return []messageStreamRecord{}, nil
+		}
+		return nil, err
+	}
+	defer rows.Close()
+	return scanMessageStreamRows(rows)
+}
+
+func outboundMessageStreamQuery(placeholder string, recentOnly bool) string {
+	query := `SELECT 'outbound', COALESCE(source,''), CAST(0 AS BIGINT), COALESCE(link_id,0), COALESCE(root_comment_id,0), COALESCE(reply_comment_id,0), COALESCE(comment_id,0), CAST(0 AS BIGINT), CAST('' AS TEXT), COALESCE(text,''), COALESCE(image_url,''), COALESCE(created_at,0), COALESCE(unique_key,'') FROM outbound_messages`
+	if recentOnly {
+		query += " WHERE created_at >= " + placeholder
+	}
+	return query + " ORDER BY created_at DESC LIMIT 300"
+}
+
+func inboundMessageStreamQuery(placeholder string, recentOnly bool) string {
+	query := `SELECT 'inbound', COALESCE(source,''), COALESCE(message_id,0), COALESCE(link_id,0), COALESCE(root_comment_id,0), COALESCE(reply_comment_id,0), COALESCE(comment_id,0), COALESCE(user_id,0), COALESCE(user_name,''), COALESCE(text,''), CAST('' AS TEXT), COALESCE(created_at,0), COALESCE(unique_key,'') FROM inbound_messages`
+	if recentOnly {
+		query += " WHERE created_at >= " + placeholder
+	}
+	return query + " ORDER BY created_at DESC LIMIT 300"
+}
+
+func messageStreamQueryArgs(recentOnly bool) []any {
+	if !recentOnly {
+		return nil
+	}
+	return []any{time.Now().Add(-24 * time.Hour).Unix()}
+}
+
+type messageStreamRows interface {
+	Next() bool
+	Scan(dest ...any) error
+	Err() error
+}
+
+func scanMessageStreamRows(rows messageStreamRows) ([]messageStreamRecord, error) {
+	records := []messageStreamRecord{}
+	for rows.Next() {
+		var record messageStreamRecord
+		if err := rows.Scan(&record.Direction, &record.Source, &record.MessageID, &record.LinkID, &record.RootCommentID, &record.ReplyCommentID, &record.CommentID, &record.UserID, &record.UserName, &record.Text, &record.ImageURL, &record.CreatedAt, &record.UniqueKey); err != nil {
+			return nil, err
+		}
+		records = append(records, record)
+	}
+	return records, rows.Err()
+}
+
+func isMissingMessageStreamTable(err error) bool {
+	text := strings.ToLower(err.Error())
+	return strings.Contains(text, "no such table") || strings.Contains(text, "does not exist") || strings.Contains(text, "undefined_table")
 }
 
 func (s *serverState) readFeedReplyRecords(cfg appConfig, recentOnly bool) ([]feedReplyRecord, error) {
@@ -2653,15 +2820,15 @@ const indexHTML = `<!doctype html>
     html.modal-open,body.modal-open{overflow:hidden;overscroll-behavior:none}
     button,input,select,textarea{font:inherit}.hidden{display:none!important}.shell{position:relative;width:min(1420px,calc(100vw - 56px));margin:0 auto;padding:18px 0 48px}.topnav{height:64px;display:flex;align-items:center;justify-content:space-between;gap:18px;padding:0 16px 0 20px;border:1px solid #dfe6ef;border-radius:28px;background:rgba(255,255,255,.84);box-shadow:var(--soft);backdrop-filter:blur(16px);position:sticky;top:14px;z-index:5}.brand{display:flex;align-items:center;gap:12px;min-width:220px}.logo{width:38px;height:38px;border-radius:14px;background:linear-gradient(145deg,#fff1f6,#ffd7e5);box-shadow:inset 0 -8px 18px rgba(255,135,174,.2);display:grid;place-items:center;color:#d45d88;font-weight:900}.brand strong{font-size:18px}.brand small{color:var(--muted);font-size:12px}.navlinks{display:flex;align-items:center;gap:8px;flex:1;justify-content:center}.navlinks button{border:0;background:transparent;color:#4b5563;border-radius:999px;padding:10px 16px;cursor:pointer;font-weight:800}.navlinks button.active{background:#eef3f8;color:#111827;box-shadow:inset 0 0 0 1px #e3eaf3}.right-tools{display:flex;align-items:center;gap:10px}.tool-pill{display:inline-flex;align-items:center;gap:8px;border:1px solid #dfe6ef;border-radius:999px;background:#fff;padding:9px 13px;color:#475467;font-weight:800}.avatar-button{width:42px;height:42px;border:3px solid #fff;border-radius:50%;padding:0;background:#fff;box-shadow:0 8px 20px rgba(36,50,74,.16);overflow:hidden;cursor:pointer}.avatar-button.active{outline:4px solid rgba(22,132,226,.14)}.avatar-button img{width:100%;height:100%;object-fit:cover;display:block}.dot{width:9px;height:9px;border-radius:50%;background:var(--red);box-shadow:0 0 0 5px rgba(222,48,56,.12)}.dot.on{background:var(--green);box-shadow:0 0 0 5px rgba(8,185,158,.13)}
     .login{min-height:72vh;display:grid;place-items:center}.login-card{width:min(470px,100%);padding:36px;border-radius:28px;background:var(--paper);box-shadow:var(--shadow);text-align:center}.catgirl{position:relative;width:126px;height:126px;margin:0 auto 18px;border-radius:40px;background:linear-gradient(145deg,#fff8fb,#ffe4ef 48%,#fff);box-shadow:inset 0 -12px 30px rgba(255,156,183,.22),var(--soft);display:grid;place-items:center;color:#d35d88;font-size:28px;font-weight:900}.catgirl:before,.catgirl:after{content:"";position:absolute;top:-12px;width:46px;height:46px;background:#ffe3ee;border:7px solid #fff;border-radius:14px;transform:rotate(45deg);box-shadow:var(--soft)}.catgirl:before{left:14px}.catgirl:after{right:14px}.catgirl b{position:relative;z-index:1}.login-card h1{margin:0 0 8px;font-size:30px}.login-card p{margin:0 0 22px;color:var(--muted);line-height:1.7}.input,select,textarea{width:100%;border:1px solid var(--line);background:#fbfcfe;color:var(--ink);border-radius:16px;padding:14px 15px;outline:none}textarea{min-height:110px;resize:vertical}.input:focus,select:focus,textarea:focus{border-color:rgba(22,132,226,.55);box-shadow:0 0 0 4px rgba(22,132,226,.09)}.toast{min-height:22px;margin-top:14px;color:var(--red);font-size:13px}
-    .layout{display:grid;grid-template-columns:260px 1fr;gap:26px;margin-top:24px}.side{padding:18px}.new-chat{width:100%;height:46px;border:0;border-radius:22px;background:var(--dark);color:#fff;font-weight:900;cursor:pointer;box-shadow:var(--soft)}.side-link{width:100%;height:44px;margin-top:12px;border:1px solid #dfe6ef;border-radius:20px;background:#fff;color:#2563eb;font-weight:900;cursor:pointer;box-shadow:var(--soft)}.side-card{margin-top:14px;padding:16px;border-radius:18px;background:#fff;box-shadow:var(--soft)}.service-card{margin-top:22px}.side-card strong{display:block;margin-bottom:8px}.side-card p{margin:0;color:var(--muted);font-size:13px;line-height:1.5}.content{min-width:0}.view{display:none}.view.active{display:block}.hero-card{padding:24px 26px;border-radius:26px;background:#fff;box-shadow:var(--shadow)}.hero-head{display:flex;align-items:center;justify-content:space-between;gap:16px}.hero-title h1{margin:0;font-size:28px}.hero-title p{margin:7px 0 0;color:var(--muted)}.panel-actions{display:flex;gap:10px;flex-wrap:wrap}button.primary,button.secondary,button.danger,button.warn{border:0;cursor:pointer;border-radius:14px;padding:12px 17px;font-weight:900;transition:.18s ease}button.primary{color:#fff;background:var(--blue);box-shadow:0 8px 18px rgba(22,132,226,.2)}button.secondary{color:#2563eb;background:#edf6ff}button.danger{color:#fff;background:var(--red);box-shadow:0 8px 18px rgba(222,48,56,.18)}button.warn{color:#5a3a00;background:var(--amber);box-shadow:0 8px 18px rgba(255,196,92,.22)}button:hover{transform:translateY(-1px);filter:brightness(1.03)}button:disabled{opacity:.45;cursor:not-allowed;transform:none}.cards{display:grid;grid-template-columns:repeat(5,minmax(138px,1fr));gap:20px;margin-top:24px}.card{background:#fff;border-radius:22px;box-shadow:var(--shadow);border:1px solid rgba(255,255,255,.8)}.stat{min-height:124px;min-width:0;padding:20px;text-align:center;display:grid;align-content:center;gap:12px;overflow:hidden}.stat span{color:#4c5566;font-size:16px}.stat strong{max-width:100%;font-size:clamp(30px,3vw,42px);line-height:1;font-weight:900;letter-spacing:-.05em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.green{color:var(--green)}.blue{color:var(--blue)}.red{color:var(--red)}.amber{color:#f7b23c}.violet{color:var(--violet)}.grid-2{display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-top:24px}.panel{padding:24px}.panel-head{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:18px}.panel h2{margin:0;font-size:22px}.panel p{margin:6px 0 0;color:var(--muted)}.control-grid{display:grid;grid-template-columns:150px 1fr;gap:20px;align-items:center}.meta{display:grid;gap:12px}.meta div{display:grid;gap:4px}.meta span{font-size:12px;color:var(--muted)}.meta strong{font-size:13px;word-break:break-all;white-space:pre-wrap}.status-text{max-height:130px;overflow:auto}.warnbox{border:1px solid #ffe0a3;background:#fff8e8;color:#7a4f00;border-radius:14px;padding:12px 14px;margin-top:16px;font-size:13px;line-height:1.55}.chart{height:220px;border-top:1px solid var(--line);display:grid;grid-template-columns:repeat(7,1fr);align-items:end;gap:18px;padding:24px 12px 4px}.bar-wrap{text-align:center;color:var(--muted);font-size:13px}.bar-num{height:22px;color:#4c5566}.bar{width:58px;max-width:100%;height:8px;margin:6px auto 10px;border-radius:8px 8px 2px 2px;background:linear-gradient(180deg,var(--green),#10c6aa);box-shadow:0 8px 18px rgba(8,185,158,.2)}.records{margin-top:24px;padding:24px}.table-wrap{overflow:auto;border-top:1px solid var(--line);padding-top:18px}table{width:100%;border-collapse:collapse;min-width:900px;table-layout:fixed}th{background:#f6f8fb;color:#4c5566;text-align:left;font-size:15px;padding:14px 12px}th:nth-child(1){width:160px}th:nth-child(2){width:170px}th:nth-child(5){width:92px}th:nth-child(6){width:92px}th:nth-child(7){width:118px}td{padding:14px 12px;border-bottom:1px solid var(--line);font-size:14px;vertical-align:top}.badge{display:inline-flex;align-items:center;justify-content:center;min-width:64px;padding:6px 10px;border-radius:999px;font-size:12px;font-weight:900;color:#fff}.badge.info{background:var(--blue)}.badge.error{background:var(--red)}.badge.warn{background:#f0a81f}.badge.ok{background:var(--green)}.copy-btn{display:inline-flex;align-items:center;justify-content:center;border:0;border-radius:999px;padding:7px 11px;background:linear-gradient(180deg,#f4f9ff,#e8f3ff);color:#2563eb;font-size:12px;font-weight:900;cursor:pointer;margin-left:8px;text-decoration:none;box-shadow:inset 0 0 0 1px rgba(37,99,235,.08);white-space:nowrap}.copy-btn:hover{transform:translateY(-1px);box-shadow:0 8px 18px rgba(37,99,235,.12)}.action-stack{display:flex;flex-direction:column;align-items:flex-start;gap:7px}.action-stack .copy-btn{margin-left:0}.action-feedback{font-size:12px;line-height:1.35;color:var(--muted)}.action-feedback.ok{color:var(--green)}.action-feedback.error{color:var(--red)}.action-feedback.pending{color:var(--blue)}.content-cell{line-height:1.55;user-select:text}.xhh-emoji-token{display:inline-flex;align-items:center;gap:3px;margin:0 2px;vertical-align:middle;white-space:nowrap}.xhh-emoji-img{width:22px;height:22px;object-fit:contain;border-radius:5px;vertical-align:middle}.xhh-emoji-label{font-size:.9em;color:var(--muted)}.clip-cell{max-height:5.1em;overflow:auto;overflow-wrap:anywhere;word-break:break-word;padding-right:4px}.clip-cell::-webkit-scrollbar{width:6px}.clip-cell::-webkit-scrollbar-thumb{background:#d5dce8;border-radius:999px}.log-panel{overflow:hidden}.log-head{display:grid;grid-template-columns:minmax(220px,1fr) minmax(520px,1.7fr);align-items:start;gap:18px;padding:22px 24px;border-bottom:1px solid var(--line)}.log-tools{display:grid;gap:10px}.log-filterbar,.log-buttonbar{display:flex;align-items:center;justify-content:flex-end;gap:10px;flex-wrap:wrap}.log-filterbar select{width:auto;min-width:150px}.log-filterbar input{width:min(260px,100%);padding:10px 12px}.log-buttonbar .copy-btn{margin-left:0;white-space:nowrap}.terminal{height:min(56vh,590px);overflow:auto;background:#101724;color:#d9e7ff;padding:18px 22px;border-radius:0 0 22px 22px;user-select:text;cursor:text}.terminal::-webkit-scrollbar{width:10px;height:10px}.terminal::-webkit-scrollbar-thumb{background:#2f3d52;border:2px solid #101724;border-radius:999px}.terminal::-webkit-scrollbar-track{background:#101724}pre{margin:0;white-space:pre-wrap;word-break:break-word;font:13px/1.62 ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;user-select:text;cursor:text}.log-line{display:block;min-height:1.62em;margin:4px 0;padding:7px 10px;border:1px solid rgba(255,255,255,.045);border-radius:10px;background:rgba(255,255,255,.025);cursor:pointer}.log-line:hover{background:rgba(255,255,255,.07)}.log-line.selected{background:rgba(22,132,226,.22);color:#fff}.log-line.copied{background:rgba(8,185,158,.18);color:#fff}.empty{color:var(--muted);display:grid;place-items:center;text-align:center;min-height:230px;background:#fff}.settings-hero{display:grid;grid-template-columns:120px 1fr;gap:22px;align-items:center;padding:26px;border-radius:24px;background:linear-gradient(135deg,#fff7fb,#eef6ff);border:1px solid #fff;box-shadow:var(--soft)}.settings-hero h2{margin:0 0 8px;font-size:28px}.settings-hero p{margin:0;color:var(--muted);line-height:1.65}.config-form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.config-group{grid-column:1/-1;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;padding:18px;border:1px solid var(--line);border-radius:22px;background:linear-gradient(180deg,#fff,#fbfcfe)}.config-group h3{grid-column:1/-1;margin:0 0 2px;color:var(--blue);font-size:16px;display:flex;align-items:center;gap:8px}.config-group h3:before{content:"";width:8px;height:8px;border-radius:50%;background:var(--blue);box-shadow:0 0 0 5px rgba(22,132,226,.1)}.field{display:grid;gap:7px}.field label{font-size:12px;color:var(--muted)}.hint{color:var(--muted);font-size:12px;line-height:1.45}.field.wide{grid-column:1/-1}.switch{display:flex;align-items:center;justify-content:space-between;gap:12px;border:1px solid var(--line);border-radius:16px;padding:13px;background:#fbfcfe}.switch input{width:22px;height:22px}.settings-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:16px;margin-top:18px}.setting{position:relative;overflow:hidden;padding:20px;border:1px solid var(--line);border-radius:20px;background:#fbfcfe}.setting:before{content:"";position:absolute;inset:0 0 auto;height:4px;background:linear-gradient(90deg,var(--blue),#ff91b8)}.setting span{display:block;color:var(--muted);font-size:13px;margin-bottom:9px}.setting strong{display:block;font-size:17px;line-height:1.45;word-break:break-all}.setting small{display:block;margin-top:8px;color:var(--muted);line-height:1.5}.setting-wide{grid-column:1/-1}.setting-actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:18px}.token-summary{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.token-summary div{padding:18px;border:1px solid var(--line);border-radius:18px;background:#fbfcfe}.token-summary span{display:block;color:var(--muted);font-size:13px;margin-bottom:8px}.token-summary strong{font-size:32px}.comment-overlay{position:fixed;inset:0;z-index:40;display:grid;place-items:center;padding:26px;background:rgba(15,23,42,.34);backdrop-filter:blur(10px);overscroll-behavior:contain}.comment-sheet{width:min(1040px,calc(100vw - 36px));max-height:min(88vh,860px);overflow:hidden;overscroll-behavior:contain;border-radius:32px;background:linear-gradient(180deg,#fff,#f8fbff);box-shadow:0 30px 90px rgba(15,23,42,.28);border:1px solid rgba(255,255,255,.78)}.comment-sheet-head{position:relative;display:flex;align-items:flex-start;justify-content:space-between;gap:20px;padding:24px 26px 20px;background:radial-gradient(circle at 12% 0,rgba(255,145,184,.28),transparent 220px),linear-gradient(135deg,#111820,#24364d);color:#fff;overflow:hidden}.comment-sheet-head:after{content:"";position:absolute;right:-70px;top:-80px;width:220px;height:220px;border-radius:50%;background:rgba(255,255,255,.08);pointer-events:none}.comment-sheet-kicker{display:inline-flex;align-items:center;gap:8px;margin-bottom:9px;color:#a7f3d0;font-size:12px;font-weight:900;letter-spacing:.08em}.comment-sheet h2{position:relative;margin:0;font-size:26px;letter-spacing:-.03em}.comment-sheet p{position:relative;margin:8px 0 0;color:rgba(255,255,255,.72)}.comment-close{position:relative;z-index:2;border:0;border-radius:16px;background:rgba(255,255,255,.12);color:#fff;width:42px;height:42px;cursor:pointer;font-size:24px;line-height:1}.comment-sheet-body{padding:22px 24px 24px;overflow:auto;max-height:calc(min(88vh,860px) - 126px);overscroll-behavior:contain}.comment-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:18px}.comment-chips{display:flex;gap:8px;flex-wrap:wrap}.comment-chip{border:1px solid #dfe6ef;border-radius:999px;background:#fff;padding:8px 11px;color:#475467;font-size:12px;font-weight:900}.comment-actions{display:flex;gap:8px;flex-wrap:wrap}.comment-action{border:0;border-radius:999px;background:#101724;color:#fff;padding:9px 13px;font-size:12px;font-weight:900;text-decoration:none}.comment-action.secondary{background:#edf6ff;color:#2563eb}.comment-thread{display:grid;gap:12px}.comment-card{position:relative;padding:16px 16px 15px 18px;border:1px solid #dfe6ef;border-radius:22px;background:#fff;box-shadow:0 10px 26px rgba(36,50,74,.07)}.comment-card.root{background:linear-gradient(180deg,#fff,#f6fbff)}.comment-card.target{border-color:rgba(8,185,158,.45);box-shadow:0 18px 44px rgba(8,185,158,.15);background:linear-gradient(180deg,#f4fffc,#fff)}.comment-card.current-comment{border-color:rgba(22,132,226,.38);background:linear-gradient(180deg,#f4f9ff,#fff)}.comment-card.reply-target{border-color:rgba(255,196,92,.55);background:linear-gradient(180deg,#fffaf0,#fff)}.comment-card.target:before,.comment-card.current-comment:before,.comment-card.reply-target:before{position:absolute;right:14px;top:12px;border-radius:999px;color:#fff;font-size:11px;font-weight:900;padding:5px 9px}.comment-card.target:before{content:"当前回复";background:var(--green)}.comment-card.current-comment:not(.target):before{content:"当前评论";background:var(--blue)}.comment-card.reply-target:not(.target):not(.current-comment):before{content:"被回复评论";background:#f0a81f}.comment-card.child{margin-left:24px}.comment-card-head{display:flex;align-items:center;gap:10px;padding-right:82px}.comment-avatar{width:34px;height:34px;border-radius:14px;background:linear-gradient(145deg,#ffe4ef,#eaf4ff);display:grid;place-items:center;color:#d45d88;font-weight:900;overflow:hidden;flex:0 0 auto}.comment-avatar img{width:100%;height:100%;object-fit:cover;display:block}.comment-author{font-weight:900}.comment-meta{color:var(--muted);font-size:12px}.comment-text{margin:12px 0 0;line-height:1.7;white-space:pre-wrap;word-break:break-word;color:#263142}.comment-images{display:grid;grid-template-columns:repeat(auto-fill,minmax(112px,1fr));gap:10px;margin-top:14px}.comment-image-link{position:relative;display:block;overflow:hidden;border-radius:18px;border:1px solid #e5eaf2;background:#f8fafc;box-shadow:0 8px 20px rgba(36,50,74,.08);aspect-ratio:1}.comment-image-link:after{content:"打开原图";position:absolute;right:7px;bottom:7px;border-radius:999px;background:rgba(15,23,42,.68);color:#fff;font-size:11px;font-weight:900;padding:4px 7px;opacity:0;transform:translateY(4px);transition:.16s ease}.comment-image-link:hover:after{opacity:1;transform:translateY(0)}.comment-images img{width:100%;height:100%;object-fit:cover;display:block;transition:.18s ease}.comment-image-link:hover img{transform:scale(1.04)}.comment-empty{padding:26px;border:1px dashed #cbd5e1;border-radius:22px;text-align:center;color:var(--muted);background:#fff}.mobile-tabs{display:none}
-    @media(max-width:1180px){.cards{grid-template-columns:repeat(2,1fr)}.grid-2{grid-template-columns:1fr}.layout{grid-template-columns:1fr}.side{display:none}.navlinks{display:none}.mobile-tabs{display:block;margin-top:18px}.mobile-tabs select{background:#fff}.topnav{position:relative;top:0}.brand{min-width:0}.right-tools .tool-pill:first-child{display:none}}@media(max-width:700px){.shell{width:min(100vw - 24px,1420px);padding-top:12px}.topnav{border-radius:20px}.cards{grid-template-columns:1fr}.hero-head,.panel-head{align-items:stretch;flex-direction:column}.log-head{grid-template-columns:1fr}.log-filterbar,.log-buttonbar{justify-content:stretch}.log-filterbar select,.log-filterbar input,.log-buttonbar button{width:100%}.control-grid,.settings-hero,.settings-grid,.token-summary,.config-form,.config-group{grid-template-columns:1fr}.content-cell{white-space:normal}.chart{gap:10px;padding-inline:4px}.bar{width:34px}.stat strong{font-size:36px}}
+    .layout{display:grid;grid-template-columns:260px 1fr;gap:26px;margin-top:24px}.side{padding:18px}.new-chat{width:100%;height:46px;border:0;border-radius:22px;background:var(--dark);color:#fff;font-weight:900;cursor:pointer;box-shadow:var(--soft)}.side-link{width:100%;height:44px;margin-top:12px;border:1px solid #dfe6ef;border-radius:20px;background:#fff;color:#2563eb;font-weight:900;cursor:pointer;box-shadow:var(--soft)}.side-card{margin-top:14px;padding:16px;border-radius:18px;background:#fff;box-shadow:var(--soft)}.service-card{margin-top:22px}.side-card strong{display:block;margin-bottom:8px}.side-card p{margin:0;color:var(--muted);font-size:13px;line-height:1.5}.content{min-width:0}.view{display:none}.view.active{display:block}.hero-card{padding:24px 26px;border-radius:26px;background:#fff;box-shadow:var(--shadow)}.hero-head{display:flex;align-items:center;justify-content:space-between;gap:16px}.hero-title h1{margin:0;font-size:28px}.hero-title p{margin:7px 0 0;color:var(--muted)}.panel-actions{display:flex;gap:10px;flex-wrap:wrap}button.primary,button.secondary,button.danger,button.warn{border:0;cursor:pointer;border-radius:14px;padding:12px 17px;font-weight:900;transition:.18s ease}button.primary{color:#fff;background:var(--blue);box-shadow:0 8px 18px rgba(22,132,226,.2)}button.secondary{color:#2563eb;background:#edf6ff}button.danger{color:#fff;background:var(--red);box-shadow:0 8px 18px rgba(222,48,56,.18)}button.warn{color:#5a3a00;background:var(--amber);box-shadow:0 8px 18px rgba(255,196,92,.22)}button:hover{transform:translateY(-1px);filter:brightness(1.03)}button:disabled{opacity:.45;cursor:not-allowed;transform:none}.cards{display:grid;grid-template-columns:repeat(5,minmax(138px,1fr));gap:20px;margin-top:24px}.card{background:#fff;border-radius:22px;box-shadow:var(--shadow);border:1px solid rgba(255,255,255,.8)}.stat{min-height:124px;min-width:0;padding:20px;text-align:center;display:grid;align-content:center;gap:12px;overflow:hidden}.stat span{color:#4c5566;font-size:16px}.stat strong{max-width:100%;font-size:clamp(30px,3vw,42px);line-height:1;font-weight:900;letter-spacing:-.05em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.green{color:var(--green)}.blue{color:var(--blue)}.red{color:var(--red)}.amber{color:#f7b23c}.violet{color:var(--violet)}.grid-2{display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-top:24px}.panel{padding:24px}.panel-head{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:18px}.panel h2{margin:0;font-size:22px}.panel p{margin:6px 0 0;color:var(--muted)}.control-grid{display:grid;grid-template-columns:150px 1fr;gap:20px;align-items:center}.meta{display:grid;gap:12px}.meta div{display:grid;gap:4px}.meta span{font-size:12px;color:var(--muted)}.meta strong{font-size:13px;word-break:break-all;white-space:pre-wrap}.status-text{max-height:130px;overflow:auto}.warnbox{border:1px solid #ffe0a3;background:#fff8e8;color:#7a4f00;border-radius:14px;padding:12px 14px;margin-top:16px;font-size:13px;line-height:1.55}.chart{height:220px;border-top:1px solid var(--line);display:grid;grid-template-columns:repeat(7,1fr);align-items:end;gap:18px;padding:24px 12px 4px}.bar-wrap{text-align:center;color:var(--muted);font-size:13px}.bar-num{height:22px;color:#4c5566}.bar{width:58px;max-width:100%;height:8px;margin:6px auto 10px;border-radius:8px 8px 2px 2px;background:linear-gradient(180deg,var(--green),#10c6aa);box-shadow:0 8px 18px rgba(8,185,158,.2)}.records{margin-top:24px;padding:24px}.table-wrap{overflow:auto;border-top:1px solid var(--line);padding-top:18px}table{width:100%;border-collapse:collapse;min-width:900px;table-layout:fixed}th{background:#f6f8fb;color:#4c5566;text-align:left;font-size:15px;padding:14px 12px}th:nth-child(1){width:160px}th:nth-child(2){width:170px}th:nth-child(5){width:92px}th:nth-child(6){width:92px}th:nth-child(7){width:118px}td{padding:14px 12px;border-bottom:1px solid var(--line);font-size:14px;vertical-align:top}.badge{display:inline-flex;align-items:center;justify-content:center;min-width:64px;padding:6px 10px;border-radius:999px;font-size:12px;font-weight:900;color:#fff}.badge.info{background:var(--blue)}.badge.error{background:var(--red)}.badge.warn{background:#f0a81f}.badge.ok{background:var(--green)}.copy-btn{display:inline-flex;align-items:center;justify-content:center;border:0;border-radius:999px;padding:7px 11px;background:linear-gradient(180deg,#f4f9ff,#e8f3ff);color:#2563eb;font-size:12px;font-weight:900;cursor:pointer;margin-left:8px;text-decoration:none;box-shadow:inset 0 0 0 1px rgba(37,99,235,.08);white-space:nowrap}.copy-btn:hover{transform:translateY(-1px);box-shadow:0 8px 18px rgba(37,99,235,.12)}.action-stack{display:flex;flex-direction:column;align-items:flex-start;gap:7px}.action-stack .copy-btn{margin-left:0}.action-feedback{font-size:12px;line-height:1.35;color:var(--muted)}.action-feedback.ok{color:var(--green)}.action-feedback.error{color:var(--red)}.action-feedback.pending{color:var(--blue)}.content-cell{line-height:1.55;user-select:text}.xhh-emoji-token{display:inline-flex;align-items:center;gap:3px;margin:0 2px;vertical-align:middle;white-space:nowrap}.xhh-emoji-img{width:22px;height:22px;object-fit:contain;border-radius:5px;vertical-align:middle}.xhh-emoji-label{font-size:.9em;color:var(--muted)}.clip-cell{max-height:5.1em;overflow:auto;overflow-wrap:anywhere;word-break:break-word;padding-right:4px}.clip-cell::-webkit-scrollbar{width:6px}.clip-cell::-webkit-scrollbar-thumb{background:#d5dce8;border-radius:999px}.log-panel{overflow:hidden}.log-head{display:grid;grid-template-columns:minmax(220px,1fr) minmax(520px,1.7fr);align-items:start;gap:18px;padding:22px 24px;border-bottom:1px solid var(--line)}.log-tools{display:grid;gap:10px}.log-filterbar,.log-buttonbar{display:flex;align-items:center;justify-content:flex-end;gap:10px;flex-wrap:wrap}.log-filterbar select{width:auto;min-width:150px}.log-filterbar input{width:min(260px,100%);padding:10px 12px}.log-buttonbar .copy-btn{margin-left:0;white-space:nowrap}.terminal{height:min(56vh,590px);overflow:auto;background:#101724;color:#d9e7ff;padding:18px 22px;border-radius:0 0 22px 22px;user-select:text;cursor:text}.terminal::-webkit-scrollbar{width:10px;height:10px}.terminal::-webkit-scrollbar-thumb{background:#2f3d52;border:2px solid #101724;border-radius:999px}.terminal::-webkit-scrollbar-track{background:#101724}pre{margin:0;white-space:pre-wrap;word-break:break-word;font:13px/1.62 ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;user-select:text;cursor:text}.log-line{display:block;min-height:1.62em;margin:4px 0;padding:7px 10px;border:1px solid rgba(255,255,255,.045);border-radius:10px;background:rgba(255,255,255,.025);cursor:pointer}.log-line:hover{background:rgba(255,255,255,.07)}.log-line.selected{background:rgba(22,132,226,.22);color:#fff}.log-line.copied{background:rgba(8,185,158,.18);color:#fff}.empty{color:var(--muted);display:grid;place-items:center;text-align:center;min-height:230px;background:#fff}.settings-hero{display:grid;grid-template-columns:120px 1fr;gap:22px;align-items:center;padding:26px;border-radius:24px;background:linear-gradient(135deg,#fff7fb,#eef6ff);border:1px solid #fff;box-shadow:var(--soft)}.settings-hero h2{margin:0 0 8px;font-size:28px}.settings-hero p{margin:0;color:var(--muted);line-height:1.65}.config-form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.config-group{grid-column:1/-1;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;padding:18px;border:1px solid var(--line);border-radius:22px;background:linear-gradient(180deg,#fff,#fbfcfe)}.config-group h3{grid-column:1/-1;margin:0 0 2px;color:var(--blue);font-size:16px;display:flex;align-items:center;gap:8px}.config-group h3:before{content:"";width:8px;height:8px;border-radius:50%;background:var(--blue);box-shadow:0 0 0 5px rgba(22,132,226,.1)}.field{display:grid;gap:7px}.field label{font-size:12px;color:var(--muted)}.hint{color:var(--muted);font-size:12px;line-height:1.45}.field.wide{grid-column:1/-1}.switch{display:flex;align-items:center;justify-content:space-between;gap:12px;border:1px solid var(--line);border-radius:16px;padding:13px;background:#fbfcfe}.switch input{width:22px;height:22px}.settings-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:16px;margin-top:18px}.setting{position:relative;overflow:hidden;padding:20px;border:1px solid var(--line);border-radius:20px;background:#fbfcfe}.setting:before{content:"";position:absolute;inset:0 0 auto;height:4px;background:linear-gradient(90deg,var(--blue),#ff91b8)}.setting span{display:block;color:var(--muted);font-size:13px;margin-bottom:9px}.setting strong{display:block;font-size:17px;line-height:1.45;word-break:break-all}.setting small{display:block;margin-top:8px;color:var(--muted);line-height:1.5}.setting-wide{grid-column:1/-1}.setting-actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:18px}.token-summary{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.token-summary div{padding:18px;border:1px solid var(--line);border-radius:18px;background:#fbfcfe}.token-summary span{display:block;color:var(--muted);font-size:13px;margin-bottom:8px}.token-summary strong{font-size:32px}.comment-overlay{position:fixed;inset:0;z-index:40;display:grid;place-items:center;padding:26px;background:rgba(15,23,42,.34);backdrop-filter:blur(10px);overscroll-behavior:contain}.comment-sheet{width:min(1040px,calc(100vw - 36px));max-height:min(88vh,860px);overflow:hidden;overscroll-behavior:contain;border-radius:32px;background:linear-gradient(180deg,#fff,#f8fbff);box-shadow:0 30px 90px rgba(15,23,42,.28);border:1px solid rgba(255,255,255,.78)}.comment-sheet-head{position:relative;display:flex;align-items:flex-start;justify-content:space-between;gap:20px;padding:24px 26px 20px;background:radial-gradient(circle at 12% 0,rgba(255,145,184,.28),transparent 220px),linear-gradient(135deg,#111820,#24364d);color:#fff;overflow:hidden}.comment-sheet-head:after{content:"";position:absolute;right:-70px;top:-80px;width:220px;height:220px;border-radius:50%;background:rgba(255,255,255,.08);pointer-events:none}.comment-sheet-kicker{display:inline-flex;align-items:center;gap:8px;margin-bottom:9px;color:#a7f3d0;font-size:12px;font-weight:900;letter-spacing:.08em}.comment-sheet h2{position:relative;margin:0;font-size:26px;letter-spacing:-.03em}.comment-sheet p{position:relative;margin:8px 0 0;color:rgba(255,255,255,.72)}.comment-close{position:relative;z-index:2;border:0;border-radius:16px;background:rgba(255,255,255,.12);color:#fff;width:42px;height:42px;cursor:pointer;font-size:24px;line-height:1}.comment-sheet-body{padding:22px 24px 24px;overflow:auto;max-height:calc(min(88vh,860px) - 126px);overscroll-behavior:contain}.comment-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:18px}.comment-chips{display:flex;gap:8px;flex-wrap:wrap}.comment-chip{border:1px solid #dfe6ef;border-radius:999px;background:#fff;padding:8px 11px;color:#475467;font-size:12px;font-weight:900}.comment-actions{display:flex;gap:8px;flex-wrap:wrap}.comment-action{border:0;border-radius:999px;background:#101724;color:#fff;padding:9px 13px;font-size:12px;font-weight:900;text-decoration:none}.comment-action.secondary{background:#edf6ff;color:#2563eb}.comment-thread{display:grid;gap:12px}.comment-card{position:relative;padding:16px 16px 15px 18px;border:1px solid #dfe6ef;border-radius:22px;background:#fff;box-shadow:0 10px 26px rgba(36,50,74,.07)}.comment-card.root{background:linear-gradient(180deg,#fff,#f6fbff)}.comment-card.target{border-color:rgba(8,185,158,.45);box-shadow:0 18px 44px rgba(8,185,158,.15);background:linear-gradient(180deg,#f4fffc,#fff)}.comment-card.current-comment{border-color:rgba(22,132,226,.38);background:linear-gradient(180deg,#f4f9ff,#fff)}.comment-card.reply-target{border-color:rgba(255,196,92,.55);background:linear-gradient(180deg,#fffaf0,#fff)}.comment-card.target:before,.comment-card.current-comment:before,.comment-card.reply-target:before{position:absolute;right:14px;top:12px;border-radius:999px;color:#fff;font-size:11px;font-weight:900;padding:5px 9px}.comment-card.target:before{content:"当前回复";background:var(--green)}.comment-card.current-comment:not(.target):before{content:"当前评论";background:var(--blue)}.comment-card.reply-target:not(.target):not(.current-comment):before{content:"被回复评论";background:#f0a81f}.comment-card.child{margin-left:24px}.comment-card-head{display:flex;align-items:center;gap:10px;padding-right:82px}.comment-avatar{width:34px;height:34px;border-radius:14px;background:linear-gradient(145deg,#ffe4ef,#eaf4ff);display:grid;place-items:center;color:#d45d88;font-weight:900;overflow:hidden;flex:0 0 auto}.comment-avatar img{width:100%;height:100%;object-fit:cover;display:block}.comment-author{font-weight:900}.comment-meta{color:var(--muted);font-size:12px}.comment-text{margin:12px 0 0;line-height:1.7;white-space:pre-wrap;word-break:break-word;color:#263142}.comment-images{display:grid;grid-template-columns:repeat(auto-fill,minmax(112px,1fr));gap:10px;margin-top:14px}.comment-image-link{position:relative;display:block;overflow:hidden;border-radius:18px;border:1px solid #e5eaf2;background:#f8fafc;box-shadow:0 8px 20px rgba(36,50,74,.08);aspect-ratio:1}.comment-image-link:after{content:"打开原图";position:absolute;right:7px;bottom:7px;border-radius:999px;background:rgba(15,23,42,.68);color:#fff;font-size:11px;font-weight:900;padding:4px 7px;opacity:0;transform:translateY(4px);transition:.16s ease}.comment-image-link:hover:after{opacity:1;transform:translateY(0)}.comment-images img{width:100%;height:100%;object-fit:cover;display:block;transition:.18s ease}.comment-image-link:hover img{transform:scale(1.04)}.comment-empty{padding:26px;border:1px dashed #cbd5e1;border-radius:22px;text-align:center;color:var(--muted);background:#fff}.stream-grid{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:24px}.stream-card{min-width:0}.stream-card .panel-head{align-items:flex-start}.stream-card .table-wrap{max-height:62vh;overflow:auto}.stream-table{min-width:640px}.stream-table th:nth-child(1){width:150px}.stream-table th:nth-child(2){width:120px}.stream-table th:nth-child(5){width:132px}.stream-muted{color:var(--muted);font-size:12px;margin-top:6px}.mobile-tabs{display:none}
+    @media(max-width:1180px){.cards{grid-template-columns:repeat(2,1fr)}.grid-2,.stream-grid{grid-template-columns:1fr}.layout{grid-template-columns:1fr}.side{display:none}.navlinks{display:none}.mobile-tabs{display:block;margin-top:18px}.mobile-tabs select{background:#fff}.topnav{position:relative;top:0}.brand{min-width:0}.right-tools .tool-pill:first-child{display:none}}@media(max-width:700px){.shell{width:min(100vw - 24px,1420px);padding-top:12px}.topnav{border-radius:20px}.cards{grid-template-columns:1fr}.hero-head,.panel-head{align-items:stretch;flex-direction:column}.log-head{grid-template-columns:1fr}.log-filterbar,.log-buttonbar{justify-content:stretch}.log-filterbar select,.log-filterbar input,.log-buttonbar button{width:100%}.control-grid,.settings-hero,.settings-grid,.token-summary,.config-form,.config-group{grid-template-columns:1fr}.content-cell{white-space:normal}.chart{gap:10px;padding-inline:4px}.bar{width:34px}.stat strong{font-size:36px}}
   </style>
 </head>
 <body data-authed="{{.Authed}}">
   <main class="shell">
     <header class="topnav">
       <div class="brand"><div class="logo">猫</div><div><strong>小黑盒猫娘</strong><br><small>VPS 控制台</small></div></div>
-      <nav class="navlinks"><button class="nav active" data-view="home">主控台</button><button class="nav" data-view="records">@ 回复记录</button><button class="nav" data-view="feed-records">自动刷帖记录</button><button class="nav" data-view="logs">日志管理</button><button class="nav" data-view="config">配置管理</button><button class="nav" data-view="service">服务控制</button><button class="nav" data-view="status">系统状态</button></nav>
+      <nav class="navlinks"><button class="nav active" data-view="home">主控台</button><button class="nav" data-view="records">消息流</button><button class="nav" data-view="feed-records">自动刷帖记录</button><button class="nav" data-view="logs">日志管理</button><button class="nav" data-view="config">配置管理</button><button class="nav" data-view="service">服务控制</button><button class="nav" data-view="status">系统状态</button></nav>
       <div class="right-tools"><div id="topStatus" class="tool-pill"><span class="dot"></span><span>未连接</span></div><button id="adminMenuBtn" class="avatar-button" type="button" aria-label="打开管理员设置"><img src="/assets/admin-avatar.png" alt="管理员"></button></div>
     </header>
 
@@ -2677,29 +2844,29 @@ const indexHTML = `<!doctype html>
     </section>
 
     <section id="appView" class="hidden">
-      <div class="mobile-tabs"><select id="mobileNav"><option value="home">主控台</option><option value="records">@ 回复记录</option><option value="feed-records">自动刷帖记录</option><option value="logs">日志管理</option><option value="config">配置管理</option><option value="service">服务控制</option><option value="status">系统状态</option></select></div>
+      <div class="mobile-tabs"><select id="mobileNav"><option value="home">主控台</option><option value="records">消息流</option><option value="feed-records">自动刷帖记录</option><option value="logs">日志管理</option><option value="config">配置管理</option><option value="service">服务控制</option><option value="status">系统状态</option></select></div>
       <div class="layout">
         <aside class="side">
           <button class="new-chat" data-view-button="home">主控首页</button>
-          <button class="side-link" data-view-button="records" type="button">最近24小时 @ 回复记录</button>
+          <button class="side-link" data-view-button="records" type="button">最近24小时消息流</button>
           <button class="side-link" data-view-button="feed-records" type="button">自动刷帖记录</button>
-          <div class="side-card"><strong>猫娘面板</strong><p>主控台放首页，@ 回复记录和自动刷帖记录可从左侧单独查看。</p></div>
+          <div class="side-card"><strong>猫娘面板</strong><p>主控台放首页，消息流和自动刷帖记录可从左侧单独查看。</p></div>
           <div class="side-card service-card"><strong>当前服务</strong><p>{{.Service}}</p></div>
         </aside>
         <div class="content">
           <section class="view active" id="view-home">
-            <div class="hero-card"><div class="hero-head"><div class="hero-title"><h1>主控台</h1><p>汇总所有可读取日志中的提问、回复、失败和 token 消耗。</p></div><div class="panel-actions"><button id="homeRefreshBtn" class="secondary" type="button">刷新</button><button class="secondary" data-view-button="records" type="button">查看 @ 回复记录</button><button id="homeRestartBtn" class="warn" type="button">重启服务</button></div></div></div>
+            <div class="hero-card"><div class="hero-head"><div class="hero-title"><h1>主控台</h1><p>汇总所有可读取日志中的提问、回复、失败和 token 消耗。</p></div><div class="panel-actions"><button id="homeRefreshBtn" class="secondary" type="button">刷新</button><button class="secondary" data-view-button="records" type="button">查看消息流</button><button id="homeRestartBtn" class="warn" type="button">重启服务</button></div></div></div>
             <section class="cards"><div class="card stat"><span>提问次数</span><strong id="metricStatus" class="violet">0</strong></div><div class="card stat"><span>回复成功</span><strong id="metricLines" class="green">0</strong></div><div class="card stat"><span>失败次数</span><strong id="metricErrors" class="red">0</strong></div><div class="card stat"><span>待处理</span><strong id="metricFiles" class="blue">0</strong></div><div class="card stat"><span>Web 端口</span><strong id="metricPort" class="amber">29173</strong></div></section>
-            <section class="grid-2"><div class="card panel"><div class="panel-head"><div><h2>Token 记录</h2><p>按全部记录、最近 1 小时和最近 24 小时汇总 AI token 消耗。</p></div></div><div class="token-summary"><div><span>总 token</span><strong id="tokenTotal" class="green">0</strong></div><div><span>最近 1 小时</span><strong id="tokenHour" class="blue">0</strong></div><div><span>最近 24 小时</span><strong id="tokenDay" class="violet">0</strong></div></div><div id="appToast" class="toast"></div></div><div class="card panel"><div class="panel-head"><div><h2>最近 7 次日志趋势</h2><p>按全部@ 回复记录聚合；无日期时归入今日。</p></div></div><div id="chart" class="chart"></div></div></section>
+            <section class="grid-2"><div class="card panel"><div class="panel-head"><div><h2>Token 记录</h2><p>按全部记录、最近 1 小时和最近 24 小时汇总 AI token 消耗。</p></div></div><div class="token-summary"><div><span>总 token</span><strong id="tokenTotal" class="green">0</strong></div><div><span>最近 1 小时</span><strong id="tokenHour" class="blue">0</strong></div><div><span>最近 24 小时</span><strong id="tokenDay" class="violet">0</strong></div></div><div id="appToast" class="toast"></div></div><div class="card panel"><div class="panel-head"><div><h2>最近 7 次日志趋势</h2><p>按全部消息流聚合；无日期时归入今日。</p></div></div><div id="chart" class="chart"></div></div></section>
           </section>
 
           <section class="view" id="view-records">
-            <div class="hero-card"><div class="hero-head"><div class="hero-title"><h1>@ 回复记录</h1><p id="recordsMeta">正在读取最近24小时 @ 回复记录...</p></div><div class="panel-actions"><button id="recordsRefreshBtn" class="secondary" type="button">刷新记录</button><button class="secondary" data-view-button="feed-records" type="button">查看自动刷帖记录</button><button class="secondary" data-view-button="home" type="button">返回主控台</button></div></div><div id="recordsToast" class="toast"></div></div>
-            <section class="card records"><div class="panel-head"><div><h2>最近24小时 @ 回复</h2><p>按顺序配对最近 24 小时内的“小黑盒用户提问”和“机器人回复”，失败和异常发送会单独标记。</p></div></div><div class="table-wrap"><table><thead><tr><th>时间</th><th>用户</th><th>用户说</th><th>机器人回复</th><th>状态</th><th>帖子</th><th>操作</th></tr></thead><tbody id="recordsBody"><tr><td colspan="7">等待日志...</td></tr></tbody></table></div></section>
+            <div class="hero-card"><div class="hero-head"><div class="hero-title"><h1>消息流</h1><p id="recordsMeta">正在读取最近24小时消息流...</p></div><div class="panel-actions"><button id="recordsRefreshBtn" class="secondary" type="button">刷新消息流</button><button class="secondary" data-view-button="feed-records" type="button">查看自动刷帖记录</button><button class="secondary" data-view-button="home" type="button">返回主控台</button></div></div><div id="recordsToast" class="toast"></div></div>
+            <section class="stream-grid"><div class="card records stream-card"><div class="panel-head"><div><h2>我评论的</h2><p>机器人最近 24 小时实际发出的评论，包括普通回复、图片回复和自动刷帖。</p></div></div><div class="table-wrap"><table class="stream-table"><thead><tr><th>时间</th><th>类型</th><th>内容</th><th>帖子</th><th>操作</th></tr></thead><tbody id="outboundRecordsBody"><tr><td colspan="5">等待记录...</td></tr></tbody></table></div></div><div class="card records stream-card"><div class="panel-head"><div><h2>评论我的</h2><p>用户 @ 机器人或回复机器人评论后被追踪到的评论。</p></div></div><div class="table-wrap"><table class="stream-table"><thead><tr><th>时间</th><th>用户</th><th>内容</th><th>来源</th><th>操作</th></tr></thead><tbody id="inboundRecordsBody"><tr><td colspan="5">等待记录...</td></tr></tbody></table></div></div></section>
           </section>
 
           <section class="view" id="view-feed-records">
-            <div class="hero-card"><div class="hero-head"><div class="hero-title"><h1>自动刷帖记录</h1><p id="feedRecordsMeta">正在读取最近24小时自动刷帖记录...</p></div><div class="panel-actions"><button id="feedRecordsRefreshBtn" class="secondary" type="button">刷新记录</button><button class="secondary" data-view-button="records" type="button">查看 @ 回复记录</button><button class="secondary" data-view-button="home" type="button">返回主控台</button></div></div><div id="feedRecordsToast" class="toast"></div></div>
+            <div class="hero-card"><div class="hero-head"><div class="hero-title"><h1>自动刷帖记录</h1><p id="feedRecordsMeta">正在读取最近24小时自动刷帖记录...</p></div><div class="panel-actions"><button id="feedRecordsRefreshBtn" class="secondary" type="button">刷新记录</button><button class="secondary" data-view-button="records" type="button">查看消息流</button><button class="secondary" data-view-button="home" type="button">返回主控台</button></div></div><div id="feedRecordsToast" class="toast"></div></div>
             <section class="card records"><div class="panel-head"><div><h2>最近24小时自动刷帖</h2><p>显示 feeds 自动生成的试运行、已发送、跳过和失败记录；可直接查看机器人评论所在整层楼，即使楼中楼评论没有 @ 机器人。</p></div></div><div class="table-wrap"><table><thead><tr><th>时间</th><th>帖子</th><th>作者</th><th>AI 回复</th><th>状态</th><th>原因</th><th>操作</th></tr></thead><tbody id="feedRecordsBody"><tr><td colspan="7">等待记录...</td></tr></tbody></table></div></section>
           </section>
 
@@ -2724,7 +2891,7 @@ const indexHTML = `<!doctype html>
       </div>
       <div class="comment-sheet-body">
         <div class="comment-toolbar"><div id="commentChips" class="comment-chips"></div><div id="commentActions" class="comment-actions"></div></div>
-        <div id="commentThread" class="comment-thread"><div class="comment-empty">点击 @ 回复记录里的“查看楼层”，这里会按回复时间显示整层楼，并标注当前回复、当前评论和被回复评论。</div></div>
+        <div id="commentThread" class="comment-thread"><div class="comment-empty">点击 消息流里的“查看楼层”，这里会按回复时间显示整层楼，并标注当前回复、当前评论和被回复评论。</div></div>
       </div>
     </section>
   </div>
@@ -2744,6 +2911,8 @@ const logFilter=document.querySelector('#logFilter');
 const logKeyword=document.querySelector('#logKeyword');
 const logOutput=document.querySelector('#logOutput');
 const recordsBody=document.querySelector('#recordsBody');
+const outboundRecordsBody=document.querySelector('#outboundRecordsBody');
+const inboundRecordsBody=document.querySelector('#inboundRecordsBody');
 const feedRecordsBody=document.querySelector('#feedRecordsBody');
 const commentOverlay=document.querySelector('#commentOverlay');
 const commentOverlayTitle=document.querySelector('#commentOverlayTitle');
@@ -2768,13 +2937,14 @@ let logScrollLatestOnce=false;
 let logPaused=false;
 let lastSelectedLogLine=-1;
 let recordsSignature='';
+let messageStreamSignature='';
 let feedRecordsSignature='';
 let emojiLibrary={};
 const recordScrollMemory=new Map();
 
 function showApp(ok){loginView.classList.toggle('hidden',ok);appView.classList.toggle('hidden',!ok);if(ok){switchView('home');bootstrap()}}
 async function api(path,options={}){const res=await fetch(path,{headers:{'Content-Type':'application/json'},credentials:'same-origin',...options});const data=await res.json().catch(()=>({}));if(!res.ok)throw new Error(data.error||'请求失败');return data}
-function switchView(name){const previous=activeView;activeView=name;document.querySelectorAll('.view').forEach(view=>view.classList.toggle('active',view.id==='view-'+name));document.querySelectorAll('.nav').forEach(btn=>btn.classList.toggle('active',btn.dataset.view===name));document.querySelector('#adminMenuBtn')?.classList.toggle('active',name==='settings');const mobile=document.querySelector('#mobileNav');if(mobile&&name!=='settings')mobile.value=name;if(name==='logs'&&previous!=='logs'){logScrollLatestOnce=true;loadCurrentLog()}if(name==='records'){if(recordsMeta)recordsMeta.textContent='正在读取最近24小时 @ 回复记录...';loadAllRecords()}if(name==='feed-records'){if(feedRecordsMeta)feedRecordsMeta.textContent='正在读取最近24小时自动刷帖记录...';loadFeedRecords()}}
+function switchView(name){const previous=activeView;activeView=name;document.querySelectorAll('.view').forEach(view=>view.classList.toggle('active',view.id==='view-'+name));document.querySelectorAll('.nav').forEach(btn=>btn.classList.toggle('active',btn.dataset.view===name));document.querySelector('#adminMenuBtn')?.classList.toggle('active',name==='settings');const mobile=document.querySelector('#mobileNav');if(mobile&&name!=='settings')mobile.value=name;if(name==='logs'&&previous!=='logs'){logScrollLatestOnce=true;loadCurrentLog()}if(name==='records'){if(recordsMeta)recordsMeta.textContent='正在读取最近24小时消息流...';loadAllRecords()}if(name==='feed-records'){if(feedRecordsMeta)feedRecordsMeta.textContent='正在读取最近24小时自动刷帖记录...';loadFeedRecords()}}
 document.querySelectorAll('[data-view], [data-view-button]').forEach(el=>el.addEventListener('click',()=>switchView(el.dataset.view||el.dataset.viewButton)));
 document.querySelector('#adminMenuBtn')?.addEventListener('click',()=>switchView('settings'));
 document.querySelector('#settingsHomeBtn')?.addEventListener('click',()=>switchView('home'));
@@ -2835,11 +3005,10 @@ async function loadCurrentLog(){if(logPaused||hasLogSelection()||isUsingLogContr
 function renderLog(content){rawLogContent=content||'';const box=logOutput.parentElement;const scrollTop=box.scrollTop;const shouldScrollLatest=logScrollLatestOnce;logScrollLatestOnce=false;document.querySelector('#currentSource').textContent=currentLogLabel||'暂无日志源';renderLogLines(filterLogContent(rawLogContent));if(shouldScrollLatest){box.scrollTop=box.scrollHeight;requestAnimationFrame(()=>{box.scrollTop=box.scrollHeight})}else{box.scrollTop=Math.min(scrollTop,box.scrollHeight)}}
 async function loadAllRecords(manual=false){
 	if(!manual&&activeView!=='home'&&activeView!=='records')return
-	const recentView=activeView==='records'
-	const requestPath='/api/records'+(recentView?'?window=24h':'')
-	if(manual&&recordsToast)recordsToast.textContent='正在刷新'+(recentView?'最近24小时':'所有')+'记录...'
+	if(activeView==='records')return loadMessageStream(manual)
+	if(manual&&recordsToast)recordsToast.textContent='正在刷新所有记录...'
 	try{
-		const data=await api(requestPath)
+		const data=await api('/api/records')
 		const lines=(data.content||'').split('\n').filter(Boolean)
 		const interactions=dedupeInteractions(parseInteractions(lines))
 		applyRecordLinks(interactions,data.links)
@@ -2847,24 +3016,43 @@ async function loadAllRecords(manual=false){
 		const failed=interactions.filter(item=>isErrorStatus(item.status)&&item.question&&item.reply).length
 		const pending=interactions.filter(item=>item.status==='待回复'||item.status==='待重试').length
 		const records=interactions.filter(item=>(item.status==='已回复'||isErrorStatus(item.status))&&item.question&&item.reply)
-		const recentCutoff=Date.now()-86400000
-		const visibleRecords=recentView?records.filter(item=>{const time=parseItemTime(item.time);return time&&time.getTime()>=recentCutoff}):records
 		const tokenItems=Array.isArray(data.tokens)&&data.tokens.length?data.tokens:interactions.filter(item=>item.tokens)
-		if(!recentView){
-			document.querySelector('#metricStatus').textContent=formatCount(interactions.length)
-			document.querySelector('#metricLines').textContent=formatCount(completed.length)
-			document.querySelector('#metricErrors').textContent=formatCount(failed)
-			document.querySelector('#metricFiles').textContent=formatCount(pending)
-			renderTrend(completed)
-			renderTokenRecords(tokenItems)
-		}
-		if(recentView)renderRecords(visibleRecords.slice().reverse())
-		if(recordsMeta)recordsMeta.textContent=recentView?'已读取最近24小时 '+formatCount(visibleRecords.length)+' 条@ 回复记录，来源 '+formatCount(data.sources||0)+' 个日志源':'已读取 '+formatCount(records.length)+' 条@ 回复记录，来源 '+formatCount(data.sources||0)+' 个日志源'
-		if(manual&&recordsToast)recordsToast.textContent=recentView?'已刷新最近24小时记录':'已刷新所有记录'
+		document.querySelector('#metricStatus').textContent=formatCount(interactions.length)
+		document.querySelector('#metricLines').textContent=formatCount(completed.length)
+		document.querySelector('#metricErrors').textContent=formatCount(failed)
+		document.querySelector('#metricFiles').textContent=formatCount(pending)
+		renderTrend(completed)
+		renderTokenRecords(tokenItems)
+		if(recordsMeta)recordsMeta.textContent='已读取 '+formatCount(records.length)+' 条日志记录，来源 '+formatCount(data.sources||0)+' 个日志源'
+		if(manual&&recordsToast)recordsToast.textContent='已刷新所有记录'
 	}catch(err){
 		if(recordsMeta)recordsMeta.textContent='记录读取失败：'+err.message
 		if(recordsToast)recordsToast.textContent=err.message
 	}}
+async function loadMessageStream(manual=false){
+	if(!manual&&activeView!=='records')return
+	if(manual&&recordsToast)recordsToast.textContent='正在刷新最近24小时消息流...'
+	try{
+		const data=await api('/api/message-stream?window=24h')
+		const outbound=Array.isArray(data.outbound)?data.outbound:[]
+		const inbound=Array.isArray(data.inbound)?data.inbound:[]
+		renderMessageStream(outbound,inbound)
+		if(recordsMeta)recordsMeta.textContent='最近24小时：我评论的 '+formatCount(outbound.length)+' 条，评论我的 '+formatCount(inbound.length)+' 条'
+		if(manual&&recordsToast)recordsToast.textContent='已刷新最近24小时消息流'
+	}catch(err){
+		if(recordsMeta)recordsMeta.textContent='消息流读取失败：'+err.message
+		if(recordsToast)recordsToast.textContent=err.message
+	}}
+function renderMessageStream(outbound,inbound){const signature=JSON.stringify([outbound.map(streamSignatureItem),inbound.map(streamSignatureItem)]);if(signature===messageStreamSignature)return;messageStreamSignature=signature;renderOutboundStream(outbound);renderInboundStream(inbound)}
+function streamSignatureItem(item){return [item.direction,item.source,item.messageId,item.linkId,item.rootCommentId,item.replyCommentId,item.commentId,item.userId,item.userName,item.text,item.imageUrl,item.createdAt].join('|')}
+function renderOutboundStream(items){if(!outboundRecordsBody)return;outboundRecordsBody.innerHTML='';if(!items.length){appendEmptyRow(outboundRecordsBody,5,'暂无最近24小时机器人评论记录');return}items.forEach(item=>{const row=document.createElement('tr');appendCell(row,formatUnixTime(item.createdAt));appendCell(row,streamSourceText(item.source));appendStreamTextCell(row,item);appendPostCell(row,item);appendStreamActionCell(row,item);outboundRecordsBody.appendChild(row)})}
+function renderInboundStream(items){if(!inboundRecordsBody)return;inboundRecordsBody.innerHTML='';if(!items.length){appendEmptyRow(inboundRecordsBody,5,'暂无最近24小时用户评论记录');return}items.forEach(item=>{const row=document.createElement('tr');appendCell(row,formatUnixTime(item.createdAt));appendCell(row,item.userName||String(item.userId||'未知用户'));appendStreamTextCell(row,item);appendCell(row,streamSourceText(item.source));appendStreamActionCell(row,item);inboundRecordsBody.appendChild(row)})}
+function appendEmptyRow(body,colSpan,text){const row=document.createElement('tr');const cell=document.createElement('td');cell.colSpan=colSpan;cell.textContent=text;row.appendChild(cell);body.appendChild(row)}
+function appendStreamTextCell(row,item){const cell=document.createElement('td');cell.className='content-cell';const inner=document.createElement('div');inner.className='clip-cell';appendEmojiText(inner,item.text||'—');const urls=recordImageUrls(item);if(urls.length){const hint=document.createElement('div');hint.className='stream-muted';hint.textContent='图片 '+formatCount(urls.length)+' 张';inner.appendChild(hint);const images=document.createElement('div');images.className='comment-images';for(const src of urls){const link=document.createElement('a');link.className='comment-image-link';link.href=src;link.target='_blank';link.rel='noopener noreferrer';const img=document.createElement('img');img.src=src;img.alt='评论图片';img.loading='lazy';link.appendChild(img);images.appendChild(link)}inner.appendChild(images)}cell.appendChild(inner);row.appendChild(cell)}
+function appendStreamActionCell(row,item){const cell=document.createElement('td');const stack=document.createElement('div');stack.className='action-stack';const viewBtn=document.createElement('button');viewBtn.type='button';viewBtn.className='copy-btn';viewBtn.textContent='查看楼层';const copyBtn=document.createElement('button');copyBtn.type='button';copyBtn.className='copy-btn';copyBtn.textContent='复制';const feedback=document.createElement('span');feedback.className='action-feedback';viewBtn.addEventListener('click',()=>showCommentThread(streamThreadItem(item),viewBtn,feedback));copyBtn.addEventListener('click',async()=>{await copyText(streamRecordText(item));copyBtn.textContent='已复制';setTimeout(()=>copyBtn.textContent='复制',900)});stack.appendChild(viewBtn);stack.appendChild(copyBtn);const href=postHref(item.linkId);if(href){const openBtn=document.createElement('a');openBtn.className='copy-btn';openBtn.href=href;openBtn.target='_blank';openBtn.rel='noopener noreferrer';openBtn.textContent='打开原帖';stack.appendChild(openBtn)}stack.appendChild(feedback);cell.appendChild(stack);row.appendChild(cell)}
+function streamThreadItem(item){return{msgId:item.messageId||0,commentId:item.commentId||item.rootCommentId||0,linkId:item.linkId||0,replyText:item.text||'',title:''}}
+function streamRecordText(item){const lines=['时间：'+formatUnixTime(item.createdAt),'方向：'+(item.direction==='outbound'?'我评论的':'评论我的'),'来源：'+streamSourceText(item.source),'内容：'+(item.text||'—')];if(item.userName||item.userId)lines.push('用户：'+(item.userName||item.userId));if(item.commentId)lines.push('评论ID：'+item.commentId);if(item.rootCommentId)lines.push('根评论ID：'+item.rootCommentId);if(item.replyCommentId)lines.push('回复评论ID：'+item.replyCommentId);if(item.linkId)lines.push('帖子ID：'+item.linkId);const imageUrls=recordImageUrls(item);if(imageUrls.length)lines.push('图片：'+imageUrls.join(' '));return lines.join('\n')}
+function streamSourceText(source){switch(source){case'ai_reply':return'AI 回复';case'image_reply':return'图片回复';case'image_post':return'图片发帖';case'feed_reply':return'自动刷帖';case'at_comment':return'@ 评论';case'at_post':return'@ 帖子';case'reply_to_bot':return'回复机器人';case'comment_on_bot_floor':return'机器人楼层';default:return source||'未知'}}
 async function loadFeedRecords(manual=false){
 	if(!manual&&activeView!=='feed-records')return
 	if(manual&&feedRecordsToast)feedRecordsToast.textContent='正在刷新自动刷帖记录...'
@@ -2904,7 +3092,7 @@ function parseInteractions(lines){const items=[];const pending=[];const imageUrl
 function dedupeInteractions(items){const result=[];const positions=new Map();for(const item of items){const key=interactionKey(item);if(!key){result.push(item);continue}const index=positions.get(key);if(index===undefined){positions.set(key,result.length);result.push(item);continue}result[index]=mergeInteraction(result[index],item)}return result}
 function parseImageURLLine(line){if(!line.includes('图片 URL 准备完成'))return{};const obj=parseZapJSON(line)||{};return{commentId:numberField(obj,'comment_id','commentId'),imageUrl:cleanText(obj.image_url||obj.imageUrl||'')}}
 function attachImageURL(item,lookup){if(!item||!item.commentId)return item;const imageUrl=lookup[item.commentId];if(imageUrl&&!recordImageUrls(item).includes(imageUrl))item.imageUrls=recordImageUrls(item).concat(imageUrl);return item}
-function recordImageUrls(item){return Array.isArray(item?.imageUrls)?item.imageUrls.filter(Boolean):[]}
+function recordImageUrls(item){const urls=Array.isArray(item?.imageUrls)?item.imageUrls.filter(Boolean):[];if(item?.imageUrl)urls.push(item.imageUrl);return [...new Set(urls)]}
 function interactionKey(item){if(item?.msgId)return'msg:'+item.msgId;if(item?.commentId)return'comment:'+item.commentId;const user=normalizeText(item?.user||'');const question=normalizeText(item?.question||'');return user&&question?'text:'+user+'|'+question:''}
 function mergeInteraction(existing,next){const primary=statusRank(next.status)>statusRank(existing.status)?next:existing;const secondary=primary===next?existing:next;return{...secondary,...primary,msgId:primary.msgId||secondary.msgId,commentId:primary.commentId||secondary.commentId,linkId:primary.linkId||secondary.linkId,userId:primary.userId||secondary.userId,user:primary.user||secondary.user,question:primary.question||secondary.question,reply:primary.reply||secondary.reply,tokens:primary.tokens||secondary.tokens,time:primary.time||secondary.time,lastError:primary.lastError||secondary.lastError}}
 function statusRank(status){switch(status){case'异常发送':return 4;case'已回复':return 3;case'失败':return 2;case'待重试':return 1;default:return 0}}

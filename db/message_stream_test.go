@@ -1,0 +1,84 @@
+package db
+
+import (
+	"database/sql"
+	"openxhh/config"
+	"openxhh/sqlite"
+	"testing"
+)
+
+func setupSQLiteMessageStreamTest(t *testing.T) {
+	t.Helper()
+	oldType := config.ConfigStruct.DataBase.Type
+	oldDB := sqlite.Db
+	database, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	sqlite.Db = database
+	config.ConfigStruct.DataBase.Type = "sqlite"
+	t.Cleanup(func() {
+		database.Close()
+		sqlite.Db = oldDB
+		config.ConfigStruct.DataBase.Type = oldType
+	})
+	migrateMessageStreamTables()
+	migrateMessageStreamTables()
+}
+
+func TestSaveOutboundMessageDedupesByCommentID(t *testing.T) {
+	setupSQLiteMessageStreamTest(t)
+	first := OutboundMessage{Source: "ai_reply", LinkID: 1, RootCommentID: 2, ReplyCommentID: 3, CommentID: 4, Text: "first", CreatedAt: 10}
+	second := first
+	second.Text = "second"
+	second.CreatedAt = 20
+	if !SaveOutboundMessage(first) || !SaveOutboundMessage(second) {
+		t.Fatal("SaveOutboundMessage returned false")
+	}
+	var count int
+	var text string
+	if err := sqlite.Db.QueryRow("SELECT COUNT(*), MAX(text) FROM outbound_messages WHERE comment_id=?", 4).Scan(&count, &text); err != nil {
+		t.Fatalf("query outbound_messages: %v", err)
+	}
+	if count != 1 || text != "second" {
+		t.Fatalf("outbound row = (%d,%q), want (1,second)", count, text)
+	}
+}
+
+func TestSaveInboundMessageDedupesByMessageID(t *testing.T) {
+	setupSQLiteMessageStreamTest(t)
+	first := InboundMessage{Source: "at_comment", MessageID: 100, LinkID: 1, CommentID: 2, UserID: 3, UserName: "用户", Text: "first", CreatedAt: 10}
+	second := first
+	second.Text = "second"
+	second.CreatedAt = 20
+	if !SaveInboundMessage(first) || !SaveInboundMessage(second) {
+		t.Fatal("SaveInboundMessage returned false")
+	}
+	var count int
+	var text string
+	if err := sqlite.Db.QueryRow("SELECT COUNT(*), MAX(text) FROM inbound_messages WHERE message_id=?", 100).Scan(&count, &text); err != nil {
+		t.Fatalf("query inbound_messages: %v", err)
+	}
+	if count != 1 || text != "second" {
+		t.Fatalf("inbound row = (%d,%q), want (1,second)", count, text)
+	}
+}
+
+func TestRecentOutboundMessagesAndUpdateComment(t *testing.T) {
+	setupSQLiteMessageStreamTest(t)
+	record := OutboundMessage{Source: "feed_reply", LinkID: 10, RootCommentID: -1, ReplyCommentID: -1, Text: "hello", CreatedAt: 100}
+	if !SaveOutboundMessage(record) {
+		t.Fatal("SaveOutboundMessage returned false")
+	}
+	records := RecentOutboundMessages(90, 10)
+	if len(records) != 1 {
+		t.Fatalf("len(RecentOutboundMessages) = %d, want 1", len(records))
+	}
+	if !UpdateOutboundMessageComment(records[0].UniqueKey, 55, 55) {
+		t.Fatal("UpdateOutboundMessageComment returned false")
+	}
+	records = RecentOutboundMessages(90, 10)
+	if records[0].CommentID != 55 || records[0].RootCommentID != 55 {
+		t.Fatalf("updated ids = (%d,%d), want (55,55)", records[0].CommentID, records[0].RootCommentID)
+	}
+}

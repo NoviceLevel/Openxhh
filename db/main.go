@@ -26,6 +26,7 @@ func Init() {
 	}
 	migrateAtTable()
 	migrateFeedReplyTable()
+	migrateMessageStreamTables()
 }
 
 func migrateAtTable() {

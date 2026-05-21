@@ -17,15 +17,15 @@ import (
 var lock = &sync.Mutex{}
 
 func Reply(text, link_id, reply_id, root_id, iscy string) (isok bool) {
-	return createComment(text, link_id, reply_id, root_id, iscy, "")
+	return createComment("ai_reply", text, link_id, reply_id, root_id, iscy, "")
 }
 
 func ReplyImage(text, linkID, replyID, rootID, imageURL string) bool {
-	return createComment(text, linkID, replyID, rootID, "0", imageURL)
+	return createComment("image_reply", text, linkID, replyID, rootID, "0", imageURL)
 }
 
 func CommentPostImage(text, linkID, imageURL string) bool {
-	return createComment(text, linkID, "-1", "-1", "0", imageURL)
+	return createComment("image_post", text, linkID, "-1", "-1", "0", imageURL)
 }
 
 func CommentCreateFormData(text, linkID, replyID, rootID, iscy, imageURL string) url.Values {
@@ -42,7 +42,7 @@ func CommentCreateFormData(text, linkID, replyID, rootID, iscy, imageURL string)
 	return form
 }
 
-func createComment(text, link_id, reply_id, root_id, iscy, imageURL string) (isok bool) {
+func createComment(source, text, link_id, reply_id, root_id, iscy, imageURL string) (isok bool) {
 	lock.Lock()
 	defer lock.Unlock()
 	Path := "/bbs/app/comment/create"
@@ -53,10 +53,6 @@ func createComment(text, link_id, reply_id, root_id, iscy, imageURL string) (iso
 		return
 	}
 	defer resp.Body.Close()
-	var resps struct {
-		Status string `json:"status"`
-		Msg    string `json:"msg"`
-	}
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
 		loger.Loger.Error("[XHH]无法解析Body", zap.Error(err), zap.Int("status", resp.StatusCode), zap.String("link_id", link_id), zap.String("reply_id", reply_id), zap.String("root_id", root_id), zap.Bool("has_image", imageURL != ""))
@@ -66,29 +62,114 @@ func createComment(text, link_id, reply_id, root_id, iscy, imageURL string) (iso
 		loger.Loger.Error("[XHH]评论发送 HTTP 失败", zap.Int("status", resp.StatusCode), zap.String("link_id", link_id), zap.String("reply_id", reply_id), zap.String("root_id", root_id), zap.Bool("has_image", imageURL != ""), zap.String("body", limitXHHResponseBody(string(data))))
 		return false
 	}
-	err = json.Unmarshal(data, &resps)
-	if err != nil {
-		loger.Loger.Error("[XHH]无法反序列化", zap.String("body", string(data)), zap.Error(err))
+	status, msg, commentID := parseCommentCreateResponse(data)
+	if status == "" {
+		loger.Loger.Error("[XHH]无法反序列化", zap.String("body", string(data)))
 		return false
 	}
-	if resps.Status != "ok" {
-		if resps.Status == "failed" {
+	if status != "ok" {
+		if status == "failed" {
 			CommentID, err := strconv.Atoi(reply_id)
 			if err != nil {
-				loger.Loger.Fatal("[XHH]不可能发生的事", zap.Error(err), zap.Any("info", resps), zap.Any("errs", reply_id))
+				loger.Loger.Fatal("[XHH]不可能发生的事", zap.String("info", string(data)), zap.Any("errs", reply_id))
 			}
 			db.Replyed(CommentID)
-			loger.Loger.Warn("[XHH]异常发送：AI回复已生成但评论发送失败，已标记完成避免重复发送", zap.Any("Resp", resps), zap.String("link_id", link_id), zap.String("reply_id", reply_id), zap.String("root_id", root_id))
+			loger.Loger.Warn("[XHH]异常发送：AI回复已生成但评论发送失败，已标记完成避免重复发送", zap.String("Resp", string(data)), zap.String("link_id", link_id), zap.String("reply_id", reply_id), zap.String("root_id", root_id))
 			time.Sleep(5 * time.Second)
 			return true
 		}
-		if resps.Msg == "评论已被删除" {
+		if msg == "评论已被删除" {
 			time.Sleep(5 * time.Second)
 			return true
 		}
-		loger.Loger.Error("[XHH]评论发送失败", zap.Any("info", resps))
+		loger.Loger.Error("[XHH]评论发送失败", zap.String("status", status), zap.String("msg", msg))
 		return false
 	}
+	recordOutboundComment(source, text, link_id, reply_id, root_id, imageURL, data, commentID)
 	time.Sleep(5 * time.Second)
 	return true
+}
+
+func recordOutboundComment(source, text, linkIDText, replyIDText, rootIDText, imageURL string, response []byte, commentID int64) {
+	linkID := positiveInt64(linkIDText)
+	replyID := positiveInt64(replyIDText)
+	rootID := positiveInt64(rootIDText)
+	if rootID <= 0 && replyID <= 0 && commentID > 0 {
+		rootID = commentID
+	}
+	db.SaveOutboundMessage(db.OutboundMessage{
+		Source:         source,
+		LinkID:         linkID,
+		RootCommentID:  rootID,
+		ReplyCommentID: replyID,
+		CommentID:      commentID,
+		Text:           text,
+		ImageURL:       imageURL,
+		CreatedAt:      time.Now().Unix(),
+		RawResponse:    string(response),
+	})
+}
+
+func parseCommentCreateResponse(data []byte) (string, string, int64) {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	var payload map[string]any
+	if err := decoder.Decode(&payload); err != nil {
+		return "", "", 0
+	}
+	return jsonString(payload["status"]), jsonString(payload["msg"]), findJSONInt(payload, "comment_id", "commentid", "commentId")
+}
+
+func findJSONInt(value any, names ...string) int64 {
+	switch typed := value.(type) {
+	case map[string]any:
+		for _, name := range names {
+			if found, ok := typed[name]; ok {
+				if number := jsonInt64(found); number > 0 {
+					return number
+				}
+			}
+		}
+		for _, child := range typed {
+			if number := findJSONInt(child, names...); number > 0 {
+				return number
+			}
+		}
+	case []any:
+		for _, child := range typed {
+			if number := findJSONInt(child, names...); number > 0 {
+				return number
+			}
+		}
+	}
+	return 0
+}
+
+func jsonInt64(value any) int64 {
+	switch typed := value.(type) {
+	case json.Number:
+		number, _ := typed.Int64()
+		return number
+	case float64:
+		return int64(typed)
+	case string:
+		number, _ := strconv.ParseInt(typed, 10, 64)
+		return number
+	}
+	return 0
+}
+
+func jsonString(value any) string {
+	if text, ok := value.(string); ok {
+		return text
+	}
+	return ""
+}
+
+func positiveInt64(value string) int64 {
+	number, _ := strconv.ParseInt(value, 10, 64)
+	if number > 0 {
+		return number
+	}
+	return 0
 }

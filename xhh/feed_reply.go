@@ -169,7 +169,7 @@ func processFeedLink(link feedLink) db.FeedReplyRecord {
 }
 
 func ReplyPost(text, linkID string) bool {
-	return createComment(text, linkID, "-1", "-1", "0", "")
+	return createComment("feed_reply", text, linkID, "-1", "-1", "0", "")
 }
 
 func fallbackFeedContents(link feedLink) []ai.Content {

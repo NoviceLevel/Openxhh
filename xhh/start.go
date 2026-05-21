@@ -13,6 +13,9 @@ func Start() {
 	go func() {
 		AutoReply()
 	}()
+	go func() {
+		TrackInboundReplies()
+	}()
 	if config.ConfigStruct.FeedReply.Enabled {
 		go func() {
 			AutoFeedReply()

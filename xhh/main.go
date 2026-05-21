@@ -222,6 +222,7 @@ func CheckAt() {
 			}
 
 			for _, v := range data.Result.Messages {
+				saveInboundMessageFromApp(v)
 				if shouldQueueMessage(v) {
 					db.InsertWithUserName(v.MsgID, v.CommentID, v.RootCommentID, v.LinkID, v.UserID, v.UserName, v.CommentText, DontReply)
 				}
@@ -236,6 +237,24 @@ func CheckAt() {
 	DontReply = false
 	time.Sleep(time.Duration(CheckTime) * time.Second)
 	CheckAt()
+}
+
+func saveInboundMessageFromApp(v Msg) {
+	source := "at_comment"
+	if v.IsPost {
+		source = "at_post"
+	}
+	db.SaveInboundMessage(db.InboundMessage{
+		Source:        source,
+		MessageID:     int64(v.MsgID),
+		LinkID:        int64(v.LinkID),
+		RootCommentID: int64(v.RootCommentID),
+		CommentID:     int64(v.CommentID),
+		UserID:        int64(v.UserID),
+		UserName:      v.UserName,
+		Text:          v.CommentText,
+		CreatedAt:     time.Now().Unix(),
+	})
 }
 
 func shouldQueueMessage(v Msg) bool {
