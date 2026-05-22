@@ -71,6 +71,26 @@ func TestSaveInboundMessageDedupesByMessageID(t *testing.T) {
 	}
 }
 
+func TestSaveInboundMessageUpdatesToEarlierCommentTime(t *testing.T) {
+	setupSQLiteMessageStreamTest(t)
+	first := InboundMessage{Source: "reply_to_bot", LinkID: 1, CommentID: 2, UserID: 3, UserName: "用户", Text: "hello", CreatedAt: 200}
+	second := first
+	second.CreatedAt = 100
+	if !SaveInboundMessage(first) {
+		t.Fatal("first SaveInboundMessage returned false")
+	}
+	if SaveInboundMessage(second) {
+		t.Fatal("duplicate SaveInboundMessage returned true")
+	}
+	var createdAt int64
+	if err := sqlite.Db.QueryRow("SELECT created_at FROM inbound_messages WHERE comment_id=?", 2).Scan(&createdAt); err != nil {
+		t.Fatalf("query inbound created_at: %v", err)
+	}
+	if createdAt != 100 {
+		t.Fatalf("created_at = %d, want 100", createdAt)
+	}
+}
+
 func TestRecentOutboundMessagesAndUpdateComment(t *testing.T) {
 	setupSQLiteMessageStreamTest(t)
 	record := OutboundMessage{Source: "feed_reply", LinkID: 10, RootCommentID: -1, ReplyCommentID: -1, Text: "hello", CreatedAt: 100}

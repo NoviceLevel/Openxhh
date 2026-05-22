@@ -197,3 +197,10 @@ func TestInboundMessageStreamPostSource(t *testing.T) {
 		t.Fatalf("nested post comment source = %q", got)
 	}
 }
+
+func TestTrackedCommentCreatedAtUsesCommentTimestamp(t *testing.T) {
+	comment := CommentInfo{CreatedAt: []byte(`1716350000000`)}
+	if got := trackedCommentCreatedAt(comment); got != 1716350000 {
+		t.Fatalf("trackedCommentCreatedAt = %d, want 1716350000", got)
+	}
+}

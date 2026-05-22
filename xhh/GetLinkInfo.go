@@ -7,9 +7,11 @@ import (
 	"openxhh/ai"
 	"openxhh/db"
 	"openxhh/loger"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -112,6 +114,7 @@ const (
 
 var xhhCaptchaCooldownUntil atomic.Int64
 var xhhCaptchaCooldownLastLog atomic.Int64
+var xhhCooldownExitOnce sync.Once
 
 func xhhCaptchaCooldownRemaining() time.Duration {
 	until := xhhCaptchaCooldownUntil.Load()
@@ -134,12 +137,12 @@ func xhhCaptchaCoolingDown(endpoint string, fields ...zap.Field) bool {
 	last := xhhCaptchaCooldownLastLog.Load()
 	if now-last >= int64(xhhCaptchaCooldownLogPeriod/time.Second) && xhhCaptchaCooldownLastLog.CompareAndSwap(last, now) {
 		fields = append(fields, zap.String("endpoint", endpoint), zap.Duration("remaining", remaining))
-		loger.Loger.Warn("[XHH]验证码冷却中，跳过请求", fields...)
+		loger.Loger.Warn("[XHH]小黑盒请求冷却中，跳过请求", fields...)
 	}
 	return true
 }
 
-func enterXHHCaptchaCooldown(endpoint string, fields ...zap.Field) {
+func enterXHHRequestCooldown(reason string, endpoint string, fields ...zap.Field) {
 	until := time.Now().Add(xhhCaptchaCooldown).Unix()
 	for {
 		current := xhhCaptchaCooldownUntil.Load()
@@ -147,8 +150,46 @@ func enterXHHCaptchaCooldown(endpoint string, fields ...zap.Field) {
 			break
 		}
 	}
-	fields = append(fields, zap.String("endpoint", endpoint), zap.Duration("cooldown", xhhCaptchaCooldown))
-	loger.Loger.Warn("[XHH]小黑盒要求验证码，暂停帖子详情请求", fields...)
+	xhhCooldownExitOnce.Do(func() {
+		go exitAfterXHHCooldown()
+	})
+	fields = append(fields, zap.String("endpoint", endpoint), zap.String("reason", reason), zap.Duration("cooldown", xhhCaptchaCooldown))
+	loger.Loger.Warn("[XHH]小黑盒请求触发冷却，暂停请求", fields...)
+}
+
+func exitAfterXHHCooldown() {
+	for {
+		until := xhhCaptchaCooldownUntil.Load()
+		if until <= 0 {
+			time.Sleep(5 * time.Second)
+			continue
+		}
+		if wait := time.Until(time.Unix(until, 0)); wait > 0 {
+			time.Sleep(wait)
+			continue
+		}
+		if xhhCaptchaCooldownRemaining() > 0 {
+			continue
+		}
+		loger.Loger.Warn("[XHH]小黑盒请求冷却结束，退出进程等待 systemd 重启", zap.Time("cooldown_until", time.Unix(until, 0)))
+		os.Exit(2)
+	}
+}
+
+func enterXHHCaptchaCooldown(endpoint string, fields ...zap.Field) {
+	enterXHHRequestCooldown("show_captcha", endpoint, fields...)
+}
+
+func enterXHHForbiddenCooldown(endpoint string, fields ...zap.Field) {
+	enterXHHRequestCooldown("http_403", endpoint, fields...)
+}
+
+func handleXHHHTTPFailure(endpoint string, statusCode int, body string, fields ...zap.Field) {
+	if statusCode != 403 {
+		return
+	}
+	fields = append(fields, zap.Int("status", statusCode), zap.String("body", limitXHHResponseBody(body)))
+	enterXHHForbiddenCooldown(endpoint, fields...)
 }
 
 func isXHHCaptchaStatus(status string) bool {
@@ -257,7 +298,9 @@ func fetchLinkInfoPage(linkID int, page int) (LinkInfoS, bool) {
 		return data, false
 	}
 	if !isHTTPSuccess(resp.StatusCode) {
-		loger.Loger.Warn("[XHH]获取帖子详情 HTTP 失败", zap.Int("link_id", linkID), zap.Int("page", page), zap.Int("status", resp.StatusCode), zap.String("body", limitXHHResponseBody(string(Dbyte))))
+		body := string(Dbyte)
+		loger.Loger.Warn("[XHH]获取帖子详情 HTTP 失败", zap.Int("link_id", linkID), zap.Int("page", page), zap.Int("status", resp.StatusCode), zap.String("body", limitXHHResponseBody(body)))
+		handleXHHHTTPFailure("link_tree", resp.StatusCode, body, zap.Int("link_id", linkID), zap.Int("page", page))
 		return data, false
 	}
 
@@ -333,12 +376,24 @@ func commentImageURLs(comment CommentInfo) []string {
 }
 
 func commentCreatedAt(comment CommentInfo) string {
+	if unixTime := commentCreatedAtUnix(comment); unixTime > 0 {
+		return formatCommentUnixTime(unixTime)
+	}
 	for _, value := range []json.RawMessage{comment.CreateAt, comment.CreatedAt, comment.CreateTime, comment.CreatedTime, comment.Time, comment.Dateline, comment.PublishTime, comment.TimeDesc} {
 		if normalized := normalizeCommentTimeValue(value); normalized != "" {
 			return normalized
 		}
 	}
 	return ""
+}
+
+func commentCreatedAtUnix(comment CommentInfo) int64 {
+	for _, value := range []json.RawMessage{comment.CreateAt, comment.CreatedAt, comment.CreateTime, comment.CreatedTime, comment.Time, comment.Dateline, comment.PublishTime} {
+		if unixTime := normalizeCommentTimeUnixValue(value); unixTime > 0 {
+			return unixTime
+		}
+	}
+	return 0
 }
 
 func normalizeCommentTimeValue(value json.RawMessage) string {
@@ -360,6 +415,61 @@ func normalizeCommentTimeValue(value json.RawMessage) string {
 		}
 	}
 	return strings.Trim(raw, `"`)
+}
+
+func normalizeCommentTimeUnixValue(value json.RawMessage) int64 {
+	raw := strings.TrimSpace(string(value))
+	if raw == "" || raw == "null" {
+		return 0
+	}
+	var text string
+	if err := json.Unmarshal(value, &text); err == nil {
+		return parseCommentTimeTextUnix(text)
+	}
+	var number json.Number
+	if err := json.Unmarshal(value, &number); err == nil {
+		if unixTime, err := number.Int64(); err == nil {
+			return normalizeUnixTimestamp(unixTime)
+		}
+		if unixTime, err := strconv.ParseFloat(number.String(), 64); err == nil {
+			return normalizeUnixTimestamp(int64(unixTime))
+		}
+	}
+	return parseCommentTimeTextUnix(strings.Trim(raw, `"`))
+}
+
+func parseCommentTimeTextUnix(value string) int64 {
+	value = strings.TrimSpace(value)
+	if value == "" || value == "0" {
+		return 0
+	}
+	if unixTime, err := strconv.ParseInt(value, 10, 64); err == nil {
+		return normalizeUnixTimestamp(unixTime)
+	}
+	if unixTime, err := strconv.ParseFloat(value, 64); err == nil {
+		return normalizeUnixTimestamp(int64(unixTime))
+	}
+	for _, layout := range []string{time.RFC3339, "2006-01-02 15:04:05", "2006-01-02 15:04"} {
+		if parsed, err := time.ParseInLocation(layout, value, time.Local); err == nil {
+			return parsed.Unix()
+		}
+	}
+	return 0
+}
+
+func normalizeUnixTimestamp(value int64) int64 {
+	switch {
+	case value >= 1000000000000000000:
+		return value / 1000000000
+	case value >= 1000000000000000:
+		return value / 1000000
+	case value >= 1000000000000:
+		return value / 1000
+	case value >= 1000000000:
+		return value
+	default:
+		return 0
+	}
 }
 
 func normalizeCommentTimeText(value string) string {
@@ -468,7 +578,9 @@ func fetchMoreSubComments(rootCommentID int, targetCommentID int, comments []Com
 			return comments
 		}
 		if !isHTTPSuccess(resp.StatusCode) {
-			loger.Loger.Warn("[XHH]获取子评论 HTTP 失败", zap.Int("root_comment_id", rootCommentID), zap.Int("target_comment_id", targetCommentID), zap.Int("status", resp.StatusCode), zap.String("body", limitXHHResponseBody(string(Dbyte))))
+			body := string(Dbyte)
+			loger.Loger.Warn("[XHH]获取子评论 HTTP 失败", zap.Int("root_comment_id", rootCommentID), zap.Int("target_comment_id", targetCommentID), zap.Int("status", resp.StatusCode), zap.String("body", limitXHHResponseBody(body)))
+			handleXHHHTTPFailure("sub_comments", resp.StatusCode, body, zap.Int("root_comment_id", rootCommentID), zap.Int("target_comment_id", targetCommentID))
 			return comments
 		}
 
@@ -847,7 +959,9 @@ func fetchAllSubComments(rootCommentID int, comments []CommentInfo, subCommentPa
 			return comments
 		}
 		if !isHTTPSuccess(resp.StatusCode) {
-			loger.Loger.Warn("[XHH]获取子评论 HTTP 失败", zap.Int("root_comment_id", rootCommentID), zap.Int("status", resp.StatusCode), zap.String("body", limitXHHResponseBody(string(Dbyte))))
+			body := string(Dbyte)
+			loger.Loger.Warn("[XHH]获取子评论 HTTP 失败", zap.Int("root_comment_id", rootCommentID), zap.Int("status", resp.StatusCode), zap.String("body", limitXHHResponseBody(body)))
+			handleXHHHTTPFailure("sub_comments", resp.StatusCode, body, zap.Int("root_comment_id", rootCommentID))
 			return comments
 		}
 

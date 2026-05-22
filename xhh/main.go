@@ -161,8 +161,8 @@ func jsonInt(raw json.RawMessage) int {
 
 func firstJSONInt64(values ...json.RawMessage) int64 {
 	for _, value := range values {
-		if number := jsonRawInt64(value); number > 0 {
-			return number
+		if unixTime := normalizeCommentTimeUnixValue(value); unixTime > 0 {
+			return unixTime
 		}
 	}
 	return 0
@@ -214,6 +214,12 @@ func IsErr() {
 
 func CheckAt() {
 	fmt.Println("[XHH]检查@", time.Now().Format("2006-01-02 15:04:05"))
+	if remaining := xhhCaptchaCooldownRemaining(); remaining > 0 {
+		xhhCaptchaCoolingDown("user_message")
+		time.Sleep(remaining)
+		CheckAt()
+		return
+	}
 
 	for _, messageType := range []int{messageTypeAtPost, messageTypeAtComment} {
 		for page := 0; page < maxMessagePages; page++ {
@@ -232,6 +238,20 @@ func CheckAt() {
 			if err != nil {
 				loger.Loger.Error("[XHH]无法读取Body", zap.Error(err))
 				IsErr()
+				return
+			}
+			if !isHTTPSuccess(resp.StatusCode) {
+				body := string(Dbyte)
+				loger.Loger.Warn("[XHH]检查@ HTTP 失败", zap.Int("message_type", messageType), zap.Int("offset", offset), zap.Int("status", resp.StatusCode), zap.String("body", limitXHHResponseBody(body)))
+				handleXHHHTTPFailure("user_message", resp.StatusCode, body, zap.Int("message_type", messageType), zap.Int("offset", offset))
+				if resp.StatusCode != 403 {
+					IsErr()
+					return
+				}
+				if remaining := xhhCaptchaCooldownRemaining(); remaining > 0 {
+					time.Sleep(remaining)
+				}
+				CheckAt()
 				return
 			}
 			err = json.Unmarshal(Dbyte, &data)

@@ -84,6 +84,9 @@ func processFeedReplyOnce() {
 }
 
 func fetchFeedLinks() []feedLink {
+	if xhhCaptchaCoolingDown("feeds") {
+		return nil
+	}
 	resp := SendReq("GET", "/bbs/app/feeds", nil, "?pull=1")
 	if resp == nil {
 		loger.Loger.Error("[FeedReply]feeds 请求失败")
@@ -97,7 +100,9 @@ func fetchFeedLinks() []feedLink {
 		return nil
 	}
 	if !isHTTPSuccess(resp.StatusCode) {
-		loger.Loger.Warn("[FeedReply]feeds HTTP 失败", zap.Int("status", resp.StatusCode), zap.String("body", limitXHHResponseBody(string(data))))
+		body := string(data)
+		loger.Loger.Warn("[FeedReply]feeds HTTP 失败", zap.Int("status", resp.StatusCode), zap.String("body", limitXHHResponseBody(body)))
+		handleXHHHTTPFailure("feeds", resp.StatusCode, body)
 		return nil
 	}
 	var parsed feedResponse

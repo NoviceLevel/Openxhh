@@ -170,7 +170,7 @@ func SaveInboundMessage(record InboundMessage) bool {
 	if cfg.Type == "pg" {
 		_, err := pg.Conn.Exec(ctx, `INSERT INTO inbound_messages (source,message_id,link_id,root_comment_id,reply_comment_id,comment_id,user_id,user_name,text,created_at,raw_response,unique_key)
 			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
-			ON CONFLICT (unique_key) DO UPDATE SET source=$1, message_id=$2, link_id=$3, root_comment_id=$4, reply_comment_id=$5, comment_id=$6, user_id=$7, user_name=$8, text=$9, created_at=CASE WHEN inbound_messages.created_at > 0 THEN inbound_messages.created_at ELSE EXCLUDED.created_at END, raw_response=$11`,
+			ON CONFLICT (unique_key) DO UPDATE SET source=$1, message_id=$2, link_id=$3, root_comment_id=$4, reply_comment_id=$5, comment_id=$6, user_id=$7, user_name=$8, text=$9, created_at=CASE WHEN EXCLUDED.created_at > 0 AND (inbound_messages.created_at <= 0 OR EXCLUDED.created_at < inbound_messages.created_at) THEN EXCLUDED.created_at ELSE inbound_messages.created_at END, raw_response=$11`,
 			record.Source, record.MessageID, record.LinkID, record.RootCommentID, record.ReplyCommentID, record.CommentID, record.UserID, record.UserName, record.Text, record.CreatedAt, record.RawResponse, record.UniqueKey)
 		if err != nil {
 			loger.Loger.Warn("[DB]无法保存收到消息", zap.Error(err), zap.String("source", record.Source), zap.Int64("comment_id", record.CommentID))
@@ -181,7 +181,7 @@ func SaveInboundMessage(record InboundMessage) bool {
 	if cfg.Type == "sqlite" {
 		_, err := sqlite.Db.Exec(`INSERT INTO inbound_messages (source,message_id,link_id,root_comment_id,reply_comment_id,comment_id,user_id,user_name,text,created_at,raw_response,unique_key)
 			VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-			ON CONFLICT (unique_key) DO UPDATE SET source=excluded.source, message_id=excluded.message_id, link_id=excluded.link_id, root_comment_id=excluded.root_comment_id, reply_comment_id=excluded.reply_comment_id, comment_id=excluded.comment_id, user_id=excluded.user_id, user_name=excluded.user_name, text=excluded.text, created_at=CASE WHEN inbound_messages.created_at > 0 THEN inbound_messages.created_at ELSE excluded.created_at END, raw_response=excluded.raw_response`,
+			ON CONFLICT (unique_key) DO UPDATE SET source=excluded.source, message_id=excluded.message_id, link_id=excluded.link_id, root_comment_id=excluded.root_comment_id, reply_comment_id=excluded.reply_comment_id, comment_id=excluded.comment_id, user_id=excluded.user_id, user_name=excluded.user_name, text=excluded.text, created_at=CASE WHEN excluded.created_at > 0 AND (inbound_messages.created_at <= 0 OR excluded.created_at < inbound_messages.created_at) THEN excluded.created_at ELSE inbound_messages.created_at END, raw_response=excluded.raw_response`,
 			record.Source, record.MessageID, record.LinkID, record.RootCommentID, record.ReplyCommentID, record.CommentID, record.UserID, record.UserName, record.Text, record.CreatedAt, record.RawResponse, record.UniqueKey)
 		if err != nil {
 			loger.Loger.Warn("[DB]无法保存收到消息", zap.Error(err), zap.String("source", record.Source), zap.Int64("comment_id", record.CommentID))

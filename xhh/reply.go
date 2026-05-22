@@ -43,6 +43,9 @@ func CommentCreateFormData(text, linkID, replyID, rootID, iscy, imageURL string)
 }
 
 func createComment(source, text, link_id, reply_id, root_id, iscy, imageURL string) (isok bool) {
+	if xhhCaptchaCoolingDown("comment_create", zap.String("source", source), zap.String("link_id", link_id), zap.String("reply_id", reply_id), zap.String("root_id", root_id)) {
+		return false
+	}
 	lock.Lock()
 	defer lock.Unlock()
 	Path := "/bbs/app/comment/create"
@@ -59,10 +62,12 @@ func createComment(source, text, link_id, reply_id, root_id, iscy, imageURL stri
 		return false
 	}
 	if !isHTTPSuccess(resp.StatusCode) {
-		loger.Loger.Error("[XHH]评论发送 HTTP 失败", zap.Int("status", resp.StatusCode), zap.String("link_id", link_id), zap.String("reply_id", reply_id), zap.String("root_id", root_id), zap.Bool("has_image", imageURL != ""), zap.String("body", limitXHHResponseBody(string(data))))
+		body := string(data)
+		loger.Loger.Error("[XHH]评论发送 HTTP 失败", zap.Int("status", resp.StatusCode), zap.String("link_id", link_id), zap.String("reply_id", reply_id), zap.String("root_id", root_id), zap.Bool("has_image", imageURL != ""), zap.String("body", limitXHHResponseBody(body)))
+		handleXHHHTTPFailure("comment_create", resp.StatusCode, body, zap.String("link_id", link_id), zap.String("reply_id", reply_id), zap.String("root_id", root_id), zap.Bool("has_image", imageURL != ""))
 		return false
 	}
-	status, msg, commentID := parseCommentCreateResponse(data)
+	status, msg, commentID, createdAt := parseCommentCreateResponse(data)
 	if status == "" {
 		loger.Loger.Error("[XHH]无法反序列化", zap.String("body", string(data)))
 		return false
@@ -85,17 +90,20 @@ func createComment(source, text, link_id, reply_id, root_id, iscy, imageURL stri
 		loger.Loger.Error("[XHH]评论发送失败", zap.String("status", status), zap.String("msg", msg))
 		return false
 	}
-	recordOutboundComment(source, text, link_id, reply_id, root_id, imageURL, data, commentID)
+	recordOutboundComment(source, text, link_id, reply_id, root_id, imageURL, data, commentID, createdAt)
 	time.Sleep(5 * time.Second)
 	return true
 }
 
-func recordOutboundComment(source, text, linkIDText, replyIDText, rootIDText, imageURL string, response []byte, commentID int64) {
+func recordOutboundComment(source, text, linkIDText, replyIDText, rootIDText, imageURL string, response []byte, commentID int64, createdAt int64) {
 	linkID := positiveInt64(linkIDText)
 	replyID := positiveInt64(replyIDText)
 	rootID := positiveInt64(rootIDText)
 	if rootID <= 0 && replyID <= 0 && commentID > 0 {
 		rootID = commentID
+	}
+	if createdAt <= 0 {
+		createdAt = time.Now().Unix()
 	}
 	db.SaveOutboundMessage(db.OutboundMessage{
 		Source:         source,
@@ -105,19 +113,19 @@ func recordOutboundComment(source, text, linkIDText, replyIDText, rootIDText, im
 		CommentID:      commentID,
 		Text:           text,
 		ImageURL:       imageURL,
-		CreatedAt:      time.Now().Unix(),
+		CreatedAt:      createdAt,
 		RawResponse:    string(response),
 	})
 }
 
-func parseCommentCreateResponse(data []byte) (string, string, int64) {
+func parseCommentCreateResponse(data []byte) (string, string, int64, int64) {
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.UseNumber()
 	var payload map[string]any
 	if err := decoder.Decode(&payload); err != nil {
-		return "", "", 0
+		return "", "", 0, 0
 	}
-	return jsonString(payload["status"]), jsonString(payload["msg"]), findJSONInt(payload, "comment_id", "commentid", "commentId")
+	return jsonString(payload["status"]), jsonString(payload["msg"]), findJSONInt(payload, "comment_id", "commentid", "commentId"), findJSONUnixTime(payload, "create_at", "created_at", "create_time", "created_time", "dateline", "publish_time")
 }
 
 func findJSONInt(value any, names ...string) int64 {
@@ -141,6 +149,48 @@ func findJSONInt(value any, names ...string) int64 {
 				return number
 			}
 		}
+	}
+	return 0
+}
+
+func findJSONUnixTime(value any, names ...string) int64 {
+	switch typed := value.(type) {
+	case map[string]any:
+		for _, name := range names {
+			if found, ok := typed[name]; ok {
+				if unixTime := jsonUnixTime(found); unixTime > 0 {
+					return unixTime
+				}
+			}
+		}
+		for _, child := range typed {
+			if unixTime := findJSONUnixTime(child, names...); unixTime > 0 {
+				return unixTime
+			}
+		}
+	case []any:
+		for _, child := range typed {
+			if unixTime := findJSONUnixTime(child, names...); unixTime > 0 {
+				return unixTime
+			}
+		}
+	}
+	return 0
+}
+
+func jsonUnixTime(value any) int64 {
+	switch typed := value.(type) {
+	case json.Number:
+		if number, err := typed.Int64(); err == nil {
+			return normalizeUnixTimestamp(number)
+		}
+		if number, err := strconv.ParseFloat(typed.String(), 64); err == nil {
+			return normalizeUnixTimestamp(int64(number))
+		}
+	case float64:
+		return normalizeUnixTimestamp(int64(typed))
+	case string:
+		return parseCommentTimeTextUnix(typed)
 	}
 	return 0
 }

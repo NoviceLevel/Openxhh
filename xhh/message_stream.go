@@ -101,6 +101,13 @@ type messageStreamTrackResult struct {
 	Saved                int
 }
 
+func trackedCommentCreatedAt(comment CommentInfo) int64 {
+	if createdAt := commentCreatedAtUnix(comment); createdAt > 0 {
+		return createdAt
+	}
+	return time.Now().Unix()
+}
+
 type trackedFloorCandidate struct {
 	Comments     []CommentInfo
 	RootID       int
@@ -142,7 +149,7 @@ func trackOutboundReplies(outbound db.OutboundMessage) messageStreamTrackResult 
 			UserID:         int64(comment.UserID),
 			UserName:       CleanXHHRichText(comment.User.UserName),
 			Text:           CleanXHHRichText(comment.Text),
-			CreatedAt:      time.Now().Unix(),
+			CreatedAt:      trackedCommentCreatedAt(comment),
 		}) {
 			result.Saved++
 		}
@@ -192,7 +199,7 @@ func trackBotPostReplies(outbound db.OutboundMessage) (messageStreamTrackResult,
 					UserID:         int64(comment.UserID),
 					UserName:       CleanXHHRichText(comment.User.UserName),
 					Text:           CleanXHHRichText(comment.Text),
-					CreatedAt:      time.Now().Unix(),
+					CreatedAt:      trackedCommentCreatedAt(comment),
 				}) {
 					result.Saved++
 				}

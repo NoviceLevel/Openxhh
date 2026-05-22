@@ -107,6 +107,13 @@ func TestParseMentionControlWakeOnly(t *testing.T) {
 	}
 }
 
+func TestParseCommentCreateResponseCreatedAt(t *testing.T) {
+	status, msg, commentID, createdAt := parseCommentCreateResponse([]byte(`{"status":"ok","msg":"","result":{"commentid":123,"created_at":1716350000000}}`))
+	if status != "ok" || msg != "" || commentID != 123 || createdAt != 1716350000 {
+		t.Fatalf("parseCommentCreateResponse = (%q,%q,%d,%d)", status, msg, commentID, createdAt)
+	}
+}
+
 func TestExtractExplicitMentionTargetConversationCommands(t *testing.T) {
 	cases := []struct {
 		text string
