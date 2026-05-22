@@ -1,6 +1,11 @@
 package main
 
-import "testing"
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+)
 
 func TestCollectXHHEmojisAddsGroupCodeAliases(t *testing.T) {
 	const zombieURL = "https://imgheybox.max-c.com/heybox/emoji/cube_95.png"
@@ -42,5 +47,108 @@ func TestCollectXHHEmojisDoesNotDoublePrefix(t *testing.T) {
 	}
 	if _, ok := emojis["cube_cube_喜欢"]; ok {
 		t.Fatal("unexpected cube_cube_喜欢 alias")
+	}
+}
+
+func TestCachedXHHEmojiLibraryUsesFreshCache(t *testing.T) {
+	state := &serverState{
+		emojiCache:        map[string]string{"cube_喜欢": "https://example.com/like.png"},
+		emojiCacheVersion: "v1",
+		emojiCacheUntil:   time.Now().Add(time.Hour),
+	}
+	originalFetch := fetchEmojiLibrary
+	t.Cleanup(func() { fetchEmojiLibrary = originalFetch })
+	fetchEmojiLibrary = func(context.Context, appConfig, xhhSession) (map[string]string, string, error) {
+		t.Fatal("fresh cache should avoid fetching")
+		return nil, "", nil
+	}
+
+	emojis, version, warning, err := state.cachedXHHEmojiLibrary(context.Background(), appConfig{}, xhhSession{}, time.Now())
+	if err != nil {
+		t.Fatalf("cachedXHHEmojiLibrary returned error: %v", err)
+	}
+	if warning != "" {
+		t.Fatalf("warning = %q, want empty", warning)
+	}
+	if version != "v1" {
+		t.Fatalf("version = %q, want v1", version)
+	}
+	if emojis["cube_喜欢"] != "https://example.com/like.png" {
+		t.Fatalf("cached emoji = %q", emojis["cube_喜欢"])
+	}
+	emojis["cube_喜欢"] = "changed"
+	if state.emojiCache["cube_喜欢"] != "https://example.com/like.png" {
+		t.Fatal("cached map was mutated by caller")
+	}
+}
+
+func TestCachedXHHEmojiLibraryFallsBackToStaleCache(t *testing.T) {
+	state := &serverState{
+		emojiCache:        map[string]string{"cube_哭": "https://example.com/cry.png"},
+		emojiCacheVersion: "old",
+		emojiCacheUntil:   time.Now().Add(-time.Hour),
+	}
+	originalFetch := fetchEmojiLibrary
+	t.Cleanup(func() { fetchEmojiLibrary = originalFetch })
+	fetchEmojiLibrary = func(context.Context, appConfig, xhhSession) (map[string]string, string, error) {
+		return nil, "", errors.New("network down")
+	}
+
+	emojis, version, warning, err := state.cachedXHHEmojiLibrary(context.Background(), appConfig{}, xhhSession{}, time.Now())
+	if err != nil {
+		t.Fatalf("cachedXHHEmojiLibrary returned error: %v", err)
+	}
+	if version != "old" {
+		t.Fatalf("version = %q, want old", version)
+	}
+	if warning != "network down" {
+		t.Fatalf("warning = %q, want network down", warning)
+	}
+	if emojis["cube_哭"] != "https://example.com/cry.png" {
+		t.Fatalf("cached emoji = %q", emojis["cube_哭"])
+	}
+}
+
+func TestCachedXHHEmojiLibraryReturnsFetchErrorWithoutCache(t *testing.T) {
+	state := &serverState{}
+	originalFetch := fetchEmojiLibrary
+	t.Cleanup(func() { fetchEmojiLibrary = originalFetch })
+	fetchEmojiLibrary = func(context.Context, appConfig, xhhSession) (map[string]string, string, error) {
+		return nil, "", errors.New("network down")
+	}
+
+	emojis, version, warning, err := state.cachedXHHEmojiLibrary(context.Background(), appConfig{}, xhhSession{}, time.Now())
+	if err == nil {
+		t.Fatal("expected fetch error")
+	}
+	if emojis != nil || version != "" || warning != "" {
+		t.Fatalf("unexpected fallback values: emojis=%v version=%q warning=%q", emojis, version, warning)
+	}
+}
+
+func TestCachedXHHEmojiLibraryStoresSuccessfulFetch(t *testing.T) {
+	state := &serverState{}
+	now := time.Now()
+	originalFetch := fetchEmojiLibrary
+	t.Cleanup(func() { fetchEmojiLibrary = originalFetch })
+	fetchEmojiLibrary = func(context.Context, appConfig, xhhSession) (map[string]string, string, error) {
+		return map[string]string{"cube_笑": "https://example.com/smile.png"}, "new", nil
+	}
+
+	emojis, version, warning, err := state.cachedXHHEmojiLibrary(context.Background(), appConfig{}, xhhSession{}, now)
+	if err != nil {
+		t.Fatalf("cachedXHHEmojiLibrary returned error: %v", err)
+	}
+	if warning != "" || version != "new" {
+		t.Fatalf("version=%q warning=%q", version, warning)
+	}
+	if emojis["cube_笑"] != "https://example.com/smile.png" {
+		t.Fatalf("emoji = %q", emojis["cube_笑"])
+	}
+	if state.emojiCacheVersion != "new" || !state.emojiCacheUntil.Equal(now.Add(xhhEmojiCacheTTL)) {
+		t.Fatalf("cache metadata not stored: version=%q until=%v", state.emojiCacheVersion, state.emojiCacheUntil)
+	}
+	if state.emojiCache["cube_笑"] != "https://example.com/smile.png" {
+		t.Fatalf("stored emoji = %q", state.emojiCache["cube_笑"])
 	}
 }

@@ -78,6 +78,10 @@ type serverState struct {
 	cacheFillUntil      map[int64]time.Time
 	messageStreamMetaMu sync.RWMutex
 	messageStreamMeta   map[int64]messageStreamPostInfo
+	emojiCacheMu        sync.RWMutex
+	emojiCache          map[string]string
+	emojiCacheVersion   string
+	emojiCacheUntil     time.Time
 }
 
 type loginFail struct {
@@ -97,6 +101,10 @@ type tokenRecord struct {
 	Model  string `json:"model,omitempty"`
 	Tokens int64  `json:"tokens"`
 }
+
+const xhhEmojiCacheTTL = 6 * time.Hour
+
+var fetchEmojiLibrary = fetchXHHEmojiLibrary
 
 type recordLinkLookup struct {
 	ByMsg             map[int64]int64  `json:"byMsg"`
@@ -962,12 +970,16 @@ func (s *serverState) handleEmojis(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
-	emojis, version, err := fetchXHHEmojiLibrary(r.Context(), cfg, s.loadXHHSession())
+	emojis, version, warning, err := s.cachedXHHEmojiLibrary(r.Context(), cfg, s.loadXHHSession(), time.Now())
 	if err != nil {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "version": "", "emojis": map[string]string{}, "warning": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "version": version, "emojis": emojis})
+	response := map[string]any{"ok": true, "version": version, "emojis": emojis}
+	if warning != "" {
+		response["warning"] = warning
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 
 func (s *serverState) handleCommentThread(w http.ResponseWriter, r *http.Request) {
@@ -1290,6 +1302,58 @@ func fetchXHHCommentThread(ctx context.Context, cfg appConfig, session xhhSessio
 		return items, nil
 	}
 	return fetchXHHBackendCommentThread(ctx, cfg, session, record)
+}
+
+func (s *serverState) cachedXHHEmojiLibrary(ctx context.Context, cfg appConfig, session xhhSession, now time.Time) (map[string]string, string, string, error) {
+	if emojis, version, ok := s.readFreshEmojiCache(now); ok {
+		return emojis, version, "", nil
+	}
+	emojis, version, err := fetchEmojiLibrary(ctx, cfg, session)
+	if err != nil {
+		if cached, cachedVersion, ok := s.readStaleEmojiCache(); ok {
+			return cached, cachedVersion, err.Error(), nil
+		}
+		return nil, "", "", err
+	}
+	s.writeEmojiCache(emojis, version, now.Add(xhhEmojiCacheTTL))
+	return cloneEmojiMap(emojis), version, "", nil
+}
+
+func (s *serverState) readFreshEmojiCache(now time.Time) (map[string]string, string, bool) {
+	s.emojiCacheMu.RLock()
+	defer s.emojiCacheMu.RUnlock()
+	if s.emojiCache == nil || !s.emojiCacheUntil.After(now) {
+		return nil, "", false
+	}
+	return cloneEmojiMap(s.emojiCache), s.emojiCacheVersion, true
+}
+
+func (s *serverState) readStaleEmojiCache() (map[string]string, string, bool) {
+	s.emojiCacheMu.RLock()
+	defer s.emojiCacheMu.RUnlock()
+	if s.emojiCache == nil {
+		return nil, "", false
+	}
+	return cloneEmojiMap(s.emojiCache), s.emojiCacheVersion, true
+}
+
+func (s *serverState) writeEmojiCache(emojis map[string]string, version string, until time.Time) {
+	s.emojiCacheMu.Lock()
+	defer s.emojiCacheMu.Unlock()
+	s.emojiCache = cloneEmojiMap(emojis)
+	s.emojiCacheVersion = version
+	s.emojiCacheUntil = until
+}
+
+func cloneEmojiMap(emojis map[string]string) map[string]string {
+	if emojis == nil {
+		return nil
+	}
+	result := make(map[string]string, len(emojis))
+	for key, value := range emojis {
+		result[key] = value
+	}
+	return result
 }
 
 func fetchXHHEmojiLibrary(ctx context.Context, cfg appConfig, session xhhSession) (map[string]string, string, error) {
@@ -3869,8 +3933,13 @@ let failedRecordsSignature='';
 let messageStreamSignature='';
 let feedRecordsSignature='';
 let emojiLibrary={};
+let emojiLibraryVersion=0;
 const recordScrollMemory=new Map();
 const activeViewStorageKey='openxhh.webui.activeView';
+const emojiCacheStorageKey='openxhh.webui.emojiLibrary.v1';
+const emojiCacheTTL=24*60*60*1000;
+const recordSummaryCacheStorageKey='openxhh.webui.recordSummary.v1';
+const recordSummaryCacheTTL=5*60*1000;
 
 function showApp(ok){loginView.classList.toggle('hidden',ok);appView.classList.toggle('hidden',!ok);if(ok){switchView(savedActiveView());bootstrap()}}
 function savedActiveView(){const name=localStorage.getItem(activeViewStorageKey)||'home';return document.querySelector('#view-'+name)?name:'home'}
@@ -3921,7 +3990,10 @@ function commentCard(item){const card=document.createElement('article');const cl
 function commentThreadText(data){const lines=['帖子ID：'+(data.linkId||'—'),'帖子标题：'+(data.postTitle||'—'),'原帖：'+(data.postUrl||'—'),''];for(const item of orderedCommentItems(data)){const labels=[];if(item.isTarget)labels.push('当前回复');if(item.isCurrentComment)labels.push('当前评论');if(item.isReplyTarget)labels.push('被回复评论');const title=(labels.length?'['+labels.join('/')+'] ':'')+(item.userName||'未知用户')+(item.floorNum?' · 楼层 '+item.floorNum:'')+(item.createdAt?' · '+formatCommentTime(item.createdAt):'');lines.push(title);lines.push(item.text||'—');if(Array.isArray(item.images)&&item.images.length)lines.push('图片：'+item.images.join(' '));lines.push('')}return lines.join('\n')}
 async function bootstrap(){clearInterval(logTimer);clearInterval(statusTimer);clearInterval(recordsTimer);await Promise.allSettled([refreshStatus(),loadEmojiLibrary(),loadConfig(),loadLogs(),loadAllRecords()]);statusTimer=setInterval(refreshStatus,4000);logTimer=setInterval(loadCurrentLog,1800);recordsTimer=setInterval(loadAllRecords,10000)}
 
-async function loadEmojiLibrary(){try{const data=await api('/api/emojis');emojiLibrary=data.emojis&&typeof data.emojis==='object'?data.emojis:{}}catch(err){emojiLibrary={}}}
+async function loadEmojiLibrary(){applyCachedEmojiLibrary();try{const data=await api('/api/emojis');const emojis=data.emojis&&typeof data.emojis==='object'?data.emojis:{};applyEmojiLibrary(emojis,data.version||'',true)}catch(err){if(!Object.keys(emojiLibrary).length)emojiLibrary={}}}
+function applyCachedEmojiLibrary(){try{const raw=localStorage.getItem(emojiCacheStorageKey);if(!raw)return;const cached=JSON.parse(raw);if(!cached||typeof cached!=='object')return;if(Date.now()-Number(cached.cachedAt||0)>emojiCacheTTL)return;const emojis=cached.emojis&&typeof cached.emojis==='object'?cached.emojis:null;if(emojis)applyEmojiLibrary(emojis,cached.version||'',false)}catch(err){localStorage.removeItem(emojiCacheStorageKey)}}
+function applyEmojiLibrary(emojis,version,persist){const next=emojis&&typeof emojis==='object'?emojis:{};const changed=JSON.stringify(next)!==JSON.stringify(emojiLibrary);emojiLibrary=next;if(persist){try{localStorage.setItem(emojiCacheStorageKey,JSON.stringify({version:version||'',cachedAt:Date.now(),emojis:emojiLibrary}))}catch(err){}}if(changed){emojiLibraryVersion++;rerenderEmojiText()}}
+function rerenderEmojiText(){if(!recordsSignature&&!failedRecordsSignature&&!messageStreamSignature&&!feedRecordsSignature)return;recordsSignature='';failedRecordsSignature='';messageStreamSignature='';feedRecordsSignature='';loadAllRecords();if(activeView==='feed-records')loadFeedRecords()}
 
 async function refreshStatus(){try{const data=await api('/api/status');const running=data.running;const serviceState=document.querySelector('#serviceState');if(serviceState)serviceState.textContent=(data.active||'unknown')+(data.detail?' · '+data.detail:'');document.querySelector('#listenAddr').textContent=data.listenAddr||'—';document.querySelector('#rootDir').textContent=data.rootDir||'—';document.querySelector('#statusText').textContent=data.statusText||'—';document.querySelector('#metricPort').textContent=extractPort(data.listenAddr)||'29173';for(const id of ['serviceStartBtn'])document.querySelector('#'+id).disabled=running;for(const id of ['serviceStopBtn'])document.querySelector('#'+id).disabled=!running;topStatus.innerHTML='<span class="dot '+(running?'on':'')+'"></span><span>'+(running?'运行中':'待机')+'</span>'}catch(err){topStatus.innerHTML='<span class="dot"></span><span>认证失效</span>'}}
 
@@ -3940,31 +4012,13 @@ async function loadAllRecords(manual=false){
 	if(!manual&&activeView!=='home'&&activeView!=='records'&&activeView!=='inbound-records'&&activeView!=='failed-records')return
 	if(activeView==='records'||activeView==='inbound-records')return loadMessageStream(manual)
 	const toast=activeView==='failed-records'?failedRecordsToast:recordsToast
+	if(!manual)renderCachedRecordSummary()
 	if(manual&&toast)toast.textContent=activeView==='failed-records'?'正在刷新失败发送...':'正在刷新所有记录...'
 	try{
 		const data=await api('/api/records')
-		const lines=(data.content||'').split('\n').filter(Boolean)
-		const interactions=dedupeInteractions(parseInteractions(lines))
-		applyRecordLinks(interactions,data.links)
-		const completed=interactions.filter(item=>item.status==='已回复'&&item.question&&item.reply)
-		const failedRecords=interactions.filter(item=>isErrorStatus(item.status)&&item.question&&item.reply)
-		const pending=interactions.filter(item=>item.status==='待回复'||item.status==='待重试').length
-		const records=interactions.filter(item=>(item.status==='已回复'||isErrorStatus(item.status))&&item.question&&item.reply)
-		const tokenItems=Array.isArray(data.tokens)&&data.tokens.length?data.tokens:interactions.filter(item=>item.tokens)
-		if(activeView==='failed-records'){
-			renderFailedRecords(failedRecords)
-			if(failedRecordsMeta)failedRecordsMeta.textContent='已读取 '+formatCount(failedRecords.length)+' 条失败发送，来源 '+formatCount(data.sources||0)+' 个日志源'
-			if(manual&&failedRecordsToast)failedRecordsToast.textContent='已刷新失败发送'
-			return
-		}
-		document.querySelector('#metricStatus').textContent=formatCount(interactions.length)
-		document.querySelector('#metricLines').textContent=formatCount(completed.length)
-		document.querySelector('#metricErrors').textContent=formatCount(failedRecords.length)
-		document.querySelector('#metricFiles').textContent=formatCount(pending)
-		renderTrend(completed)
-		renderTokenRecords(tokenItems)
-		if(recordsMeta)recordsMeta.textContent='已读取 '+formatCount(records.length)+' 条日志记录，来源 '+formatCount(data.sources||0)+' 个日志源'
-		if(manual&&recordsToast)recordsToast.textContent='已刷新所有记录'
+		const summary=recordSummaryFromData(data)
+		saveRecordSummaryCache(summary)
+		renderRecordSummary(summary,manual,false)
 	}catch(err){
 		if(activeView==='failed-records'){
 			if(failedRecordsMeta)failedRecordsMeta.textContent='失败发送读取失败：'+err.message
@@ -3974,6 +4028,10 @@ async function loadAllRecords(manual=false){
 		if(recordsMeta)recordsMeta.textContent='记录读取失败：'+err.message
 		if(recordsToast)recordsToast.textContent=err.message
 	}}
+function recordSummaryFromData(data){const lines=(data.content||'').split('\n').filter(Boolean);const interactions=dedupeInteractions(parseInteractions(lines));applyRecordLinks(interactions,data.links);const completed=interactions.filter(item=>item.status==='已回复'&&item.question&&item.reply);const failedRecords=interactions.filter(item=>isErrorStatus(item.status)&&item.question&&item.reply);const pending=interactions.filter(item=>item.status==='待回复'||item.status==='待重试').length;const records=interactions.filter(item=>(item.status==='已回复'||isErrorStatus(item.status))&&item.question&&item.reply);const tokenItems=Array.isArray(data.tokens)&&data.tokens.length?data.tokens:interactions.filter(item=>item.tokens);return{cachedAt:Date.now(),sources:Number(data.sources||0),interactionsCount:interactions.length,completedCount:completed.length,failedCount:failedRecords.length,failedRecords,pending,recordsCount:records.length,trendItems:completed.map(item=>({time:item.time})),tokenStats:tokenStats(tokenItems)}}
+function renderCachedRecordSummary(){try{const raw=sessionStorage.getItem(recordSummaryCacheStorageKey);if(!raw)return;const summary=JSON.parse(raw);if(!summary||typeof summary!=='object')return;if(Date.now()-Number(summary.cachedAt||0)>recordSummaryCacheTTL)return;renderRecordSummary(summary,false,true)}catch(err){sessionStorage.removeItem(recordSummaryCacheStorageKey)}}
+function saveRecordSummaryCache(summary){try{sessionStorage.setItem(recordSummaryCacheStorageKey,JSON.stringify(summary))}catch(err){try{sessionStorage.setItem(recordSummaryCacheStorageKey,JSON.stringify({...summary,failedRecords:(summary.failedRecords||[]).slice(0,200)}))}catch(innerErr){}}}
+function renderRecordSummary(summary,manual,fromCache){const failedRecords=Array.isArray(summary.failedRecords)?summary.failedRecords:[];if(activeView==='failed-records'){renderFailedRecords(failedRecords);if(failedRecordsMeta)failedRecordsMeta.textContent=(fromCache?'已显示缓存 ':'已读取 ')+formatCount(summary.failedCount??failedRecords.length)+' 条失败发送，来源 '+formatCount(summary.sources||0)+' 个日志源';if(manual&&!fromCache&&failedRecordsToast)failedRecordsToast.textContent='已刷新失败发送';return}document.querySelector('#metricStatus').textContent=formatCount(summary.interactionsCount||0);document.querySelector('#metricLines').textContent=formatCount(summary.completedCount||0);document.querySelector('#metricErrors').textContent=formatCount(summary.failedCount??failedRecords.length);document.querySelector('#metricFiles').textContent=formatCount(summary.pending||0);renderTrend(Array.isArray(summary.trendItems)?summary.trendItems:[]);renderTokenStats(summary.tokenStats||{});if(recordsMeta)recordsMeta.textContent=(fromCache?'已显示缓存 ':'已读取 ')+formatCount(summary.recordsCount||0)+' 条日志记录，来源 '+formatCount(summary.sources||0)+' 个日志源';if(manual&&!fromCache&&recordsToast)recordsToast.textContent='已刷新所有记录'}
 async function loadMessageStream(manual=false){
 	if(!manual&&activeView!=='records'&&activeView!=='inbound-records')return
 	const toast=activeStreamToast()
@@ -3992,7 +4050,7 @@ async function loadMessageStream(manual=false){
 		if(toast)toast.textContent=err.message
 	}}
 function activeStreamToast(){return activeView==='inbound-records'?inboundRecordsToast:recordsToast}
-function renderMessageStream(outbound,inbound){const signature=JSON.stringify([outbound.map(streamSignatureItem),inbound.map(streamSignatureItem)]);if(signature===messageStreamSignature)return;messageStreamSignature=signature;renderOutboundStream(outbound);renderInboundStream(inbound)}
+function renderMessageStream(outbound,inbound){const signature=JSON.stringify([emojiLibraryVersion,outbound.map(streamSignatureItem),inbound.map(streamSignatureItem)]);if(signature===messageStreamSignature)return;messageStreamSignature=signature;renderOutboundStream(outbound);renderInboundStream(inbound)}
 function streamSignatureItem(item){return [item.direction,item.source,item.messageId,item.linkId,item.rootCommentId,item.replyCommentId,item.commentId,item.userId,item.userName,item.text,item.imageUrl,item.postTitle,item.commentUserName,item.createdAt].join('|')}
 function streamSourceText(source){switch(source){case'at_comment':return'@我的评论';case'at_post':return'@我的帖子';case'reply_to_bot':return'回复我的评论';case'nested_reply_to_bot':return'楼中楼评论我的';case'comment_on_bot_floor':return'评论我的楼层';case'comment_on_bot_post':return'评论我的帖子';case'nested_comment_on_bot_post':return'帖子下楼中楼评论';case'ai_reply':return'AI 回复';case'image_reply':return'图片回复';case'image_post':return'图片发帖';case'feed_reply':return'自动刷帖';default:return source||'消息'}}
 function renderOutboundStream(items){if(!outboundRecordsBody)return;outboundRecordsBody.innerHTML='';if(!items.length){appendEmptyRow(outboundRecordsBody,5,'暂无最近24小时机器人评论记录');return}items.forEach(item=>{const row=document.createElement('tr');appendCell(row,formatUnixTimeMinute(item.createdAt));appendStreamTargetUserCell(row,item);appendStreamTextCell(row,item);appendPostCell(row,item);appendStreamActionCell(row,item,false);outboundRecordsBody.appendChild(row)})}
@@ -4016,15 +4074,15 @@ async function loadFeedRecords(manual=false){
 		if(feedRecordsMeta)feedRecordsMeta.textContent='自动刷帖记录读取失败：'+err.message
 		if(feedRecordsToast)feedRecordsToast.textContent=err.message
 	}}
-function renderFeedRecords(items){if(!feedRecordsBody)return;const signature=JSON.stringify(items.map(item=>[item.linkId,item.repliedAt,item.replyText,item.status,item.reason].join('|')));if(signature===feedRecordsSignature)return;feedRecordsSignature=signature;feedRecordsBody.innerHTML='';if(!items.length){const row=document.createElement('tr');const cell=document.createElement('td');cell.colSpan=7;cell.textContent='暂无最近24小时自动刷帖记录';row.appendChild(cell);feedRecordsBody.appendChild(row);return}items.forEach(item=>{const row=document.createElement('tr');appendCell(row,formatUnixTime(item.repliedAt||item.createdAt));appendCell(row,item.title||('帖子 '+(item.linkId||'')),'content-cell');appendCell(row,item.author||String(item.authorId||'未知作者'));appendCell(row,item.replyText||'—','content-cell');const statusCell=document.createElement('td');const badge=document.createElement('span');badge.className='badge '+feedStatusClass(item.status);badge.textContent=feedStatusText(item.status);statusCell.appendChild(badge);row.appendChild(statusCell);appendCell(row,item.reason||'—','content-cell');appendFeedActionCell(row,item);feedRecordsBody.appendChild(row)})}
+function renderFeedRecords(items){if(!feedRecordsBody)return;const signature=JSON.stringify([emojiLibraryVersion,items.map(item=>[item.linkId,item.repliedAt,item.replyText,item.status,item.reason].join('|'))]);if(signature===feedRecordsSignature)return;feedRecordsSignature=signature;feedRecordsBody.innerHTML='';if(!items.length){const row=document.createElement('tr');const cell=document.createElement('td');cell.colSpan=7;cell.textContent='暂无最近24小时自动刷帖记录';row.appendChild(cell);feedRecordsBody.appendChild(row);return}items.forEach(item=>{const row=document.createElement('tr');appendCell(row,formatUnixTime(item.repliedAt||item.createdAt));appendCell(row,item.title||('帖子 '+(item.linkId||'')),'content-cell');appendCell(row,item.author||String(item.authorId||'未知作者'));appendCell(row,item.replyText||'—','content-cell');const statusCell=document.createElement('td');const badge=document.createElement('span');badge.className='badge '+feedStatusClass(item.status);badge.textContent=feedStatusText(item.status);statusCell.appendChild(badge);row.appendChild(statusCell);appendCell(row,item.reason||'—','content-cell');appendFeedActionCell(row,item);feedRecordsBody.appendChild(row)})}
 function appendFeedActionCell(row,item){const cell=document.createElement('td');const stack=document.createElement('div');stack.className='action-stack';const viewBtn=document.createElement('button');viewBtn.type='button';viewBtn.className='copy-btn';viewBtn.textContent='查看楼层';const feedback=document.createElement('span');feedback.className='action-feedback';viewBtn.addEventListener('click',()=>showCommentThread(item,viewBtn,feedback));stack.appendChild(viewBtn);const href=postHref(item.linkId);if(href){const openBtn=document.createElement('a');openBtn.className='copy-btn';openBtn.href=href;openBtn.target='_blank';openBtn.rel='noopener noreferrer';openBtn.textContent='打开原帖';stack.appendChild(openBtn)}stack.appendChild(feedback);cell.appendChild(stack);row.appendChild(cell)}
 function feedStatusText(status){switch(status){case'sent':return'已发送';case'dry_run':return'试运行';case'skipped':return'已跳过';case'failed':return'失败';default:return status||'未知'}}
 function feedStatusClass(status){switch(status){case'sent':return'ok';case'dry_run':return'info';case'skipped':return'warn';case'failed':return'error';default:return'warn'}}
 function formatUnixTime(value){const num=Number(value||0);if(!num)return'—';const date=new Date(num*1000);return Number.isNaN(date.getTime())?'—':date.getFullYear()+'-'+String(date.getMonth()+1).padStart(2,'0')+'-'+String(date.getDate()).padStart(2,'0')+' '+String(date.getHours()).padStart(2,'0')+':'+String(date.getMinutes()).padStart(2,'0')+':'+String(date.getSeconds()).padStart(2,'0')}
 function formatUnixTimeMinute(value){const num=Number(value||0);if(!num)return'—';const date=new Date(num*1000);return Number.isNaN(date.getTime())?'—':date.getFullYear()+'-'+String(date.getMonth()+1).padStart(2,'0')+'-'+String(date.getDate()).padStart(2,'0')+' '+String(date.getHours()).padStart(2,'0')+':'+String(date.getMinutes()).padStart(2,'0')}
 function formatCommentTime(value){const text=cleanText(value);if(!text)return'—';const normalized=text.replace('T',' ');const match=normalized.match(/^(20\d{2}-\d{2}-\d{2}\s+\d{2}:\d{2})(?::\d{2})?(.*)$/);return match?match[1]+match[2]:text}
-function renderRecords(items){if(!recordsBody)return;const signature=JSON.stringify(items.map(item=>recordKey(item)+'|'+(item.reply||'')+'|'+(item.status||'')+'|'+(item.tokens||0)+'|'+(item.linkId||0)+'|'+recordImageUrls(item).join(',')));if(signature===recordsSignature)return;rememberRecordScrolls();recordsSignature=signature;recordsBody.innerHTML='';if(!items.length){const row=document.createElement('tr');const cell=document.createElement('td');cell.colSpan=7;cell.textContent='暂无最近24小时可识别的用户提问/机器人回复记录';row.appendChild(cell);recordsBody.appendChild(row);return}items.forEach((item,index)=>{const key=recordKey(item,index);const row=document.createElement('tr');appendCell(row,item.time);appendCell(row,item.user||'未知用户');appendCell(row,item.question,'content-cell',key+':question');appendReplyCell(row,item,key+':reply');const statusCell=document.createElement('td');const badge=document.createElement('span');badge.className='badge '+(item.status==='已回复'?'ok':isErrorStatus(item.status)?'error':'warn');badge.textContent=item.status;statusCell.appendChild(badge);const copyBtn=document.createElement('button');copyBtn.type='button';copyBtn.className='copy-btn';copyBtn.textContent='复制';copyBtn.addEventListener('click',async()=>{await copyText(recordText(item));copyBtn.textContent='已复制';setTimeout(()=>copyBtn.textContent='复制',900)});statusCell.appendChild(copyBtn);row.appendChild(statusCell);appendPostCell(row,item);const actionCell=document.createElement('td');const stack=document.createElement('div');stack.className='action-stack';const viewThreadBtn=document.createElement('button');viewThreadBtn.type='button';viewThreadBtn.className='copy-btn';viewThreadBtn.textContent='查看楼层';const regenerateBtn=document.createElement('button');regenerateBtn.type='button';regenerateBtn.className='copy-btn';regenerateBtn.textContent='重新生成';const feedback=document.createElement('span');feedback.className='action-feedback';viewThreadBtn.addEventListener('click',()=>showCommentThread(item,viewThreadBtn,feedback));regenerateBtn.addEventListener('click',()=>regenerateMessage(item,regenerateBtn,feedback));stack.appendChild(viewThreadBtn);stack.appendChild(regenerateBtn);stack.appendChild(feedback);actionCell.appendChild(stack);row.appendChild(actionCell);recordsBody.appendChild(row)})}
-function renderFailedRecords(items){if(!failedRecordsBody)return;const sorted=items.slice().sort((a,b)=>recordTimeValue(b)-recordTimeValue(a));const signature=JSON.stringify(sorted.map(item=>recordKey(item)+'|'+(item.reply||'')+'|'+(item.lastError||'')+'|'+(item.status||'')+'|'+(item.linkId||0)+'|'+recordImageUrls(item).join(',')));if(signature===failedRecordsSignature)return;failedRecordsSignature=signature;failedRecordsBody.innerHTML='';if(!sorted.length){appendEmptyRow(failedRecordsBody,7,'暂无失败发送记录');return}sorted.forEach((item,index)=>{const key='failed:'+recordKey(item,index);const row=document.createElement('tr');appendCell(row,item.time);appendCell(row,item.user||'未知用户');appendCell(row,item.question,'content-cell',key+':question');appendReplyCell(row,{...item,reply:failedRecordErrorText(item)},key+':error');const statusCell=document.createElement('td');const badge=document.createElement('span');badge.className='badge error';badge.textContent=item.status||'失败';statusCell.appendChild(badge);row.appendChild(statusCell);appendPostCell(row,item);appendFailedActionCell(row,item);failedRecordsBody.appendChild(row)})}
+function renderRecords(items){if(!recordsBody)return;const signature=JSON.stringify([emojiLibraryVersion,items.map(item=>recordKey(item)+'|'+(item.reply||'')+'|'+(item.status||'')+'|'+(item.tokens||0)+'|'+(item.linkId||0)+'|'+recordImageUrls(item).join(','))]);if(signature===recordsSignature)return;rememberRecordScrolls();recordsSignature=signature;recordsBody.innerHTML='';if(!items.length){const row=document.createElement('tr');const cell=document.createElement('td');cell.colSpan=7;cell.textContent='暂无最近24小时可识别的用户提问/机器人回复记录';row.appendChild(cell);recordsBody.appendChild(row);return}items.forEach((item,index)=>{const key=recordKey(item,index);const row=document.createElement('tr');appendCell(row,item.time);appendCell(row,item.user||'未知用户');appendCell(row,item.question,'content-cell',key+':question');appendReplyCell(row,item,key+':reply');const statusCell=document.createElement('td');const badge=document.createElement('span');badge.className='badge '+(item.status==='已回复'?'ok':isErrorStatus(item.status)?'error':'warn');badge.textContent=item.status;statusCell.appendChild(badge);const copyBtn=document.createElement('button');copyBtn.type='button';copyBtn.className='copy-btn';copyBtn.textContent='复制';copyBtn.addEventListener('click',async()=>{await copyText(recordText(item));copyBtn.textContent='已复制';setTimeout(()=>copyBtn.textContent='复制',900)});statusCell.appendChild(copyBtn);row.appendChild(statusCell);appendPostCell(row,item);const actionCell=document.createElement('td');const stack=document.createElement('div');stack.className='action-stack';const viewThreadBtn=document.createElement('button');viewThreadBtn.type='button';viewThreadBtn.className='copy-btn';viewThreadBtn.textContent='查看楼层';const regenerateBtn=document.createElement('button');regenerateBtn.type='button';regenerateBtn.className='copy-btn';regenerateBtn.textContent='重新生成';const feedback=document.createElement('span');feedback.className='action-feedback';viewThreadBtn.addEventListener('click',()=>showCommentThread(item,viewThreadBtn,feedback));regenerateBtn.addEventListener('click',()=>regenerateMessage(item,regenerateBtn,feedback));stack.appendChild(viewThreadBtn);stack.appendChild(regenerateBtn);stack.appendChild(feedback);actionCell.appendChild(stack);row.appendChild(actionCell);recordsBody.appendChild(row)})}
+function renderFailedRecords(items){if(!failedRecordsBody)return;const sorted=items.slice().sort((a,b)=>recordTimeValue(b)-recordTimeValue(a));const signature=JSON.stringify([emojiLibraryVersion,sorted.map(item=>recordKey(item)+'|'+(item.reply||'')+'|'+(item.lastError||'')+'|'+(item.status||'')+'|'+(item.linkId||0)+'|'+recordImageUrls(item).join(','))]);if(signature===failedRecordsSignature)return;failedRecordsSignature=signature;failedRecordsBody.innerHTML='';if(!sorted.length){appendEmptyRow(failedRecordsBody,7,'暂无失败发送记录');return}sorted.forEach((item,index)=>{const key='failed:'+recordKey(item,index);const row=document.createElement('tr');appendCell(row,item.time);appendCell(row,item.user||'未知用户');appendCell(row,item.question,'content-cell',key+':question');appendReplyCell(row,{...item,reply:failedRecordErrorText(item)},key+':error');const statusCell=document.createElement('td');const badge=document.createElement('span');badge.className='badge error';badge.textContent=item.status||'失败';statusCell.appendChild(badge);row.appendChild(statusCell);appendPostCell(row,item);appendFailedActionCell(row,item);failedRecordsBody.appendChild(row)})}
 function recordTimeValue(item){const time=parseItemTime(item?.time);return time?time.getTime():0}
 function failedRecordErrorText(item){if(item.lastError)return item.lastError;if(item.status==='异常发送'&&item.reply)return 'AI 已生成但发送失败：'+item.reply;return item.reply||'发送失败'}
 function appendFailedActionCell(row,item){const cell=document.createElement('td');const stack=document.createElement('div');stack.className='action-stack';const resendBtn=document.createElement('button');resendBtn.type='button';resendBtn.className='copy-btn';resendBtn.textContent='重新发送';const viewThreadBtn=document.createElement('button');viewThreadBtn.type='button';viewThreadBtn.className='copy-btn';viewThreadBtn.textContent='查看楼层';const copyBtn=document.createElement('button');copyBtn.type='button';copyBtn.className='copy-btn';copyBtn.textContent='复制';const feedback=document.createElement('span');feedback.className='action-feedback';resendBtn.addEventListener('click',()=>resendFailedMessage(item,resendBtn,feedback));viewThreadBtn.addEventListener('click',()=>showCommentThread(item,viewThreadBtn,feedback));copyBtn.addEventListener('click',async()=>{await copyText(recordText(item));copyBtn.textContent='已复制';setTimeout(()=>copyBtn.textContent='复制',900)});stack.appendChild(resendBtn);stack.appendChild(viewThreadBtn);stack.appendChild(copyBtn);stack.appendChild(feedback);cell.appendChild(stack);row.appendChild(cell)}
@@ -4038,13 +4096,15 @@ function matchesLogFilter(line,mode){switch(mode){case'error':return isFailureLi
 function formatLogLine(line){const start=line.indexOf('{');if(start<0)return line;const obj=parseZapJSON(line);if(!obj)return line;const prefix=line.slice(0,start).trimEnd();const fields=[];for(const [key,value] of Object.entries(obj)){let text;if(Array.isArray(value)){text=value.map(item=>item&&typeof item==='object'?(item.text||JSON.stringify(item)):String(item||'')).filter(Boolean).join('\n')}else if(value&&typeof value==='object'){text=JSON.stringify(value)}else{text=String(value??'')}if(text)fields.push(key+'：'+cleanText(text))}return prefix+'\n  '+fields.join('\n  ')}
 function appendCell(row,text,className,scrollKey){const cell=document.createElement('td');if(className){cell.className=className;const inner=document.createElement('div');inner.className='clip-cell';appendEmojiText(inner,text||'—');if(scrollKey){inner.dataset.scrollKey=scrollKey;inner.scrollTop=recordScrollMemory.get(scrollKey)||0;inner.addEventListener('scroll',()=>recordScrollMemory.set(scrollKey,inner.scrollTop),{passive:true})}cell.appendChild(inner)}else{cell.textContent=text||'—'}row.appendChild(cell)}
 function appendReplyCell(row,item,scrollKey){const cell=document.createElement('td');cell.className='content-cell';const inner=document.createElement('div');inner.className='clip-cell';if(scrollKey){inner.dataset.scrollKey=scrollKey;inner.scrollTop=recordScrollMemory.get(scrollKey)||0;inner.addEventListener('scroll',()=>recordScrollMemory.set(scrollKey,inner.scrollTop),{passive:true})}const text=document.createElement('div');appendEmojiText(text,item.reply||'—');inner.appendChild(text);const urls=recordImageUrls(item);if(urls.length){const images=document.createElement('div');images.className='comment-images';for(const src of urls){const link=document.createElement('a');link.className='comment-image-link';link.href=src;link.target='_blank';link.rel='noopener noreferrer';const img=document.createElement('img');img.src=src;img.alt='回复图片';img.loading='lazy';link.appendChild(img);images.appendChild(link)}inner.appendChild(images)}cell.appendChild(inner);row.appendChild(cell)}
-function appendEmojiText(target,text){target.textContent='';const value=String(text||'');const pattern=/\[([^\[\]\s]{1,32})\]/g;let last=0;let match;while((match=pattern.exec(value))){if(match.index>last)target.appendChild(document.createTextNode(value.slice(last,match.index)));const token=match[0];const name=match[1];const src=emojiURL(name);if(src){const wrap=document.createElement('span');wrap.className='xhh-emoji-token';wrap.title=token;const img=document.createElement('img');img.className='xhh-emoji-img';img.src=src;img.alt=token;img.loading='lazy';wrap.appendChild(img);target.appendChild(wrap)}else if(!isXHHEmojiName(name)){target.appendChild(document.createTextNode(token))}last=pattern.lastIndex}if(last<value.length)target.appendChild(document.createTextNode(value.slice(last)))}
+function appendEmojiText(target,text){target.textContent='';const value=String(text||'');const pattern=/\[([^\[\]\s]{1,32})\]/g;let last=0;let match;while((match=pattern.exec(value))){if(match.index>last)target.appendChild(document.createTextNode(value.slice(last,match.index)));const token=match[0];const name=match[1];const src=emojiURL(name);if(src){const wrap=document.createElement('span');wrap.className='xhh-emoji-token';wrap.title=token;const img=document.createElement('img');img.className='xhh-emoji-img';img.src=src;img.alt=token;img.decoding='async';wrap.appendChild(img);target.appendChild(wrap)}else{target.appendChild(document.createTextNode(token))}last=pattern.lastIndex}if(last<value.length)target.appendChild(document.createTextNode(value.slice(last)))}
 function emojiURL(name){return emojiLibrary[name]||emojiLibrary['['+name+']']||''}
 function isXHHEmojiName(name){return /^(cube|heygirl|grandemoji|bigemoji)_[^\s\[\]]+$/.test(String(name||''))}
 function appendPostCell(row,item){const cell=document.createElement('td');const title=postTitleText(item);const href=postHref(item.linkId);if(href&&title){const link=document.createElement('a');link.className='stream-post-title';link.href=href;link.target='_blank';link.rel='noopener noreferrer';link.textContent=title;cell.appendChild(link)}else{cell.textContent=title||'—'}row.appendChild(cell)}
 function postTitleText(item){return cleanText(item?.postTitle||item?.title||'')||(item?.linkId?('帖子 '+item.linkId):'')}
 function postHref(linkId){const id=Number(linkId||0);if(!Number.isFinite(id)||id<=0)return'';return 'https://www.xiaoheihe.cn/app/bbs/link/'+id}
-function renderTokenRecords(items){const totalEl=document.querySelector('#tokenTotal');const hourEl=document.querySelector('#tokenHour');const dayEl=document.querySelector('#tokenDay');const now=Date.now();let total=0;let hour=0;let day=0;for(const item of items){if(!item.tokens)continue;total+=item.tokens;const time=parseItemTime(item.time);if(!time)continue;const age=now-time.getTime();if(age>=0&&age<=3600000)hour+=item.tokens;if(age>=0&&age<=86400000)day+=item.tokens}setTokenText(totalEl,total);setTokenText(hourEl,hour);setTokenText(dayEl,day)}
+function renderTokenRecords(items){renderTokenStats(tokenStats(items))}
+function tokenStats(items){const now=Date.now();let total=0;let hour=0;let day=0;for(const item of items||[]){if(!item.tokens)continue;total+=item.tokens;const time=parseItemTime(item.time);if(!time)continue;const age=now-time.getTime();if(age>=0&&age<=3600000)hour+=item.tokens;if(age>=0&&age<=86400000)day+=item.tokens}return{total,hour,day}}
+function renderTokenStats(stats){setTokenText(document.querySelector('#tokenTotal'),stats.total||0);setTokenText(document.querySelector('#tokenHour'),stats.hour||0);setTokenText(document.querySelector('#tokenDay'),stats.day||0)}
 function setTokenText(el,value){if(!el)return;el.textContent=formatTokenCount(value);el.title=formatCount(value)+' token'}
 function parseInteractions(lines){const items=[];const pending=[];const imageUrlsByComment={};let lastAnswered=null;let currentMessage=null;for(const line of lines){const imageContext=parseImageURLLine(line);if(imageContext.commentId&&imageContext.imageUrl){imageUrlsByComment[imageContext.commentId]=imageContext.imageUrl;for(const item of items.concat(pending))attachImageURL(item,imageUrlsByComment)}if(isFeedReplyLine(line))continue;if(line.includes('[XHH]正在处理@消息')){currentMessage=parseProcessingLine(line);continue}if(line.includes('[Ai]正在询问Ai')){const context=parseProcessingLine(line)||currentMessage;const next=attachImageURL(attachMessageContext(parseQuestionLine(line),context),imageUrlsByComment);if(next.question&&!pending.some(item=>sameInteraction(item,next)))pending.push(next);currentMessage=null;continue}if(line.includes('[Ai]Ai说：')){const context=parseProcessingLine(line);let index=findPendingIndex(pending,context);if(index<0&&pending.length)index=0;const item=index>=0?pending.splice(index,1)[0]:attachMessageContext({reply:'',status:'待回复'},context);if(!item.question)continue;item.reply=extractJsonField(line,'text')||stripLogPrefix(line);item.tokens=extractToken(line);item.status='已回复';attachImageURL(item,imageUrlsByComment);items.push(item);lastAnswered=item;continue}if(isSendAnomalyLine(line)&&lastAnswered&&lastAnswered.status==='已回复'){attachMessageContext(lastAnswered,parseAnomalyLine(line));lastAnswered.status='异常发送';lastAnswered.lastError=stripLogPrefix(line);continue}if(isFailureLine(line)){const failed=attachMessageContext(parseStandaloneFailureLine(line),currentMessage);const index=findPendingIndex(pending,failed);if(index>=0){const item=pending.splice(index,1)[0];item.lastError=failed.reply;item.status='失败';attachImageURL(item,imageUrlsByComment);items.push(finalizePending(item));currentMessage=null;continue}if(failed.question&&failed.reply){attachImageURL(failed,imageUrlsByComment);items.push(failed);currentMessage=null}}}for(const item of pending){if(item.question){attachImageURL(item,imageUrlsByComment);items.push(finalizePending(item))}}return items}
 function dedupeInteractions(items){const result=[];const positions=new Map();for(const item of items){const key=interactionKey(item);if(!key){result.push(item);continue}const index=positions.get(key);if(index===undefined){positions.set(key,result.length);result.push(item);continue}result[index]=mergeInteraction(result[index],item)}return result}
