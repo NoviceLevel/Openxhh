@@ -67,13 +67,17 @@ type xhhSession struct {
 }
 
 type serverState struct {
-	rootDir    string
-	authPath   string
-	listenAddr string
-	service    string
-	sessions   map[string]time.Time
-	loginFails map[string]loginFail
-	mu         sync.Mutex
+	rootDir             string
+	authPath            string
+	listenAddr          string
+	service             string
+	sessions            map[string]time.Time
+	loginFails          map[string]loginFail
+	mu                  sync.Mutex
+	cacheFillMu         sync.Mutex
+	cacheFillUntil      map[int64]time.Time
+	messageStreamMetaMu sync.RWMutex
+	messageStreamMeta   map[int64]messageStreamPostInfo
 }
 
 type loginFail struct {
@@ -153,6 +157,21 @@ type messageStreamPostInfo struct {
 	Title           string
 	Author          string
 	CommentUserName string
+}
+
+type messageStreamCacheComment struct {
+	LinkID        int64
+	RootCommentID int64
+	CommentID     int64
+	ReplyID       int64
+	FloorNum      int64
+	UserID        int64
+	UserName      string
+	AvatarURL     string
+	ReplyUserName string
+	CreatedAt     string
+	Text          string
+	Images        []string
 }
 
 type commentThreadRequest struct {
@@ -385,11 +404,13 @@ func main() {
 		log.Fatal(err)
 	}
 	state := &serverState{
-		rootDir:    rootDir,
-		authPath:   filepath.Join(rootDir, "webui_auth.json"),
-		service:    *service,
-		sessions:   map[string]time.Time{},
-		loginFails: map[string]loginFail{},
+		rootDir:           rootDir,
+		authPath:          filepath.Join(rootDir, "webui_auth.json"),
+		service:           *service,
+		sessions:          map[string]time.Time{},
+		loginFails:        map[string]loginFail{},
+		cacheFillUntil:    map[int64]time.Time{},
+		messageStreamMeta: map[int64]messageStreamPostInfo{},
 	}
 
 	password, created, err := ensureAuth(state.authPath)
@@ -2284,8 +2305,9 @@ func (s *serverState) handleMessageStream(w http.ResponseWriter, r *http.Request
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
-	outbound = s.enrichMessageStreamRecords(r.Context(), cfg, outbound)
-	inbound = s.enrichMessageStreamRecords(r.Context(), cfg, inbound)
+	outbound = s.enrichMessageStreamRecords(cfg, outbound)
+	inbound = s.enrichMessageStreamRecords(cfg, inbound)
+	s.scheduleMessageStreamCacheFill(cfg, outbound, inbound)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "outbound": outbound, "inbound": inbound})
 }
 
@@ -2401,14 +2423,14 @@ func (s *serverState) readMessageStreamRecords(cfg appConfig, recentOnly bool) (
 	}
 }
 
-func (s *serverState) enrichMessageStreamRecords(ctx context.Context, cfg appConfig, records []messageStreamRecord) []messageStreamRecord {
+func (s *serverState) enrichMessageStreamRecords(cfg appConfig, records []messageStreamRecord) []messageStreamRecord {
 	if len(records) == 0 {
 		return records
 	}
 	postInfo := map[int64]messageStreamPostInfo{}
 	commentUsers := map[int64]string{}
 	_ = s.fillLocalMessageStreamInfo(cfg, messageStreamLinkIDs(records), messageStreamReplyCommentIDs(records), postInfo, commentUsers)
-	s.fillXHHMessageStreamInfo(ctx, cfg, records, postInfo, commentUsers)
+	s.applyMessageStreamMeta(records, postInfo)
 	for i := range records {
 		info := postInfo[records[i].LinkID]
 		records[i].PostTitle = cleanXHHCommentText(info.Title)
@@ -2420,6 +2442,38 @@ func (s *serverState) enrichMessageStreamRecords(ctx context.Context, cfg appCon
 		}
 	}
 	return records
+}
+
+func (s *serverState) applyMessageStreamMeta(records []messageStreamRecord, postInfo map[int64]messageStreamPostInfo) {
+	s.messageStreamMetaMu.RLock()
+	defer s.messageStreamMetaMu.RUnlock()
+	for i := range records {
+		meta := s.messageStreamMeta[records[i].LinkID]
+		info := postInfo[records[i].LinkID]
+		info.Title = firstNonEmpty(info.Title, meta.Title)
+		info.Author = firstNonEmpty(info.Author, meta.Author)
+		postInfo[records[i].LinkID] = info
+	}
+}
+
+func (s *serverState) rememberMessageStreamMeta(linkID int64, title, author string) {
+	if linkID <= 0 {
+		return
+	}
+	title = strings.TrimSpace(title)
+	author = strings.TrimSpace(author)
+	if title == "" && author == "" {
+		return
+	}
+	s.messageStreamMetaMu.Lock()
+	defer s.messageStreamMetaMu.Unlock()
+	if s.messageStreamMeta == nil {
+		s.messageStreamMeta = map[int64]messageStreamPostInfo{}
+	}
+	meta := s.messageStreamMeta[linkID]
+	meta.Title = firstNonEmpty(meta.Title, title)
+	meta.Author = firstNonEmpty(meta.Author, author)
+	s.messageStreamMeta[linkID] = meta
 }
 
 func messageStreamLinkIDs(records []messageStreamRecord) []int64 {
@@ -2465,7 +2519,12 @@ func (s *serverState) fillSQLiteMessageStreamInfo(linkIDs []int64, replyCommentI
 	if err := fillSQLiteMessageStreamFeedInfo(database, linkIDs, postInfo); err != nil {
 		return err
 	}
-	return fillSQLiteMessageStreamCommentUsers(database, replyCommentIDs, commentUsers)
+	_ = s.fillSQLiteMessageStreamCachedPostInfo(database, linkIDs, postInfo)
+	if err := fillSQLiteMessageStreamCommentUsers(database, replyCommentIDs, commentUsers); err != nil {
+		return err
+	}
+	_ = s.fillSQLiteMessageStreamCachedCommentUsers(database, replyCommentIDs, commentUsers)
+	return nil
 }
 
 func fillSQLiteMessageStreamFeedInfo(database *sql.DB, linkIDs []int64, postInfo map[int64]messageStreamPostInfo) error {
@@ -2529,7 +2588,12 @@ func fillPostgresMessageStreamInfo(cfg appConfig, linkIDs []int64, replyCommentI
 	if err := fillPostgresMessageStreamFeedInfo(ctx, pool, linkIDs, postInfo); err != nil {
 		return err
 	}
-	return fillPostgresMessageStreamCommentUsers(ctx, pool, replyCommentIDs, commentUsers)
+	_ = fillPostgresMessageStreamCachedPostInfo(ctx, pool, linkIDs, postInfo)
+	if err := fillPostgresMessageStreamCommentUsers(ctx, pool, replyCommentIDs, commentUsers); err != nil {
+		return err
+	}
+	_ = fillPostgresMessageStreamCachedCommentUsers(ctx, pool, replyCommentIDs, commentUsers)
+	return nil
 }
 
 func fillPostgresMessageStreamFeedInfo(ctx context.Context, pool *pgxpool.Pool, linkIDs []int64, postInfo map[int64]messageStreamPostInfo) error {
@@ -2614,6 +2678,326 @@ func (s *serverState) fillXHHMessageStreamInfo(ctx context.Context, cfg appConfi
 		}
 		fetched[record.LinkID] = struct{}{}
 	}
+}
+
+func (s *serverState) fillSQLiteMessageStreamCachedPostInfo(database *sql.DB, linkIDs []int64, postInfo map[int64]messageStreamPostInfo) error {
+	if len(linkIDs) == 0 {
+		return nil
+	}
+	query := "SELECT link_id, COALESCE(title, '') FROM xhh_post_cache WHERE link_id IN (" + sqlitePlaceholders(len(linkIDs)) + ")"
+	rows, err := database.Query(query, int64Args(linkIDs)...)
+	if err != nil {
+		if isMissingMessageCacheTable(err) {
+			return nil
+		}
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var linkID int64
+		var title string
+		if err := rows.Scan(&linkID, &title); err != nil {
+			return err
+		}
+		info := postInfo[linkID]
+		info.Title = firstNonEmpty(info.Title, title)
+		postInfo[linkID] = info
+	}
+	return rows.Err()
+}
+
+func (s *serverState) fillSQLiteMessageStreamCachedCommentUsers(database *sql.DB, replyCommentIDs []int64, commentUsers map[int64]string) error {
+	if len(replyCommentIDs) == 0 {
+		return nil
+	}
+	query := "SELECT comment_id, COALESCE(user_name, '') FROM xhh_comment_cache WHERE comment_id IN (" + sqlitePlaceholders(len(replyCommentIDs)) + ")"
+	rows, err := database.Query(query, int64Args(replyCommentIDs)...)
+	if err != nil {
+		if isMissingMessageCacheTable(err) {
+			return nil
+		}
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var commentID int64
+		var userName string
+		if err := rows.Scan(&commentID, &userName); err != nil {
+			return err
+		}
+		if commentID > 0 && strings.TrimSpace(userName) != "" && strings.TrimSpace(commentUsers[commentID]) == "" {
+			commentUsers[commentID] = userName
+		}
+	}
+	return rows.Err()
+}
+
+func fillPostgresMessageStreamCachedPostInfo(ctx context.Context, pool *pgxpool.Pool, linkIDs []int64, postInfo map[int64]messageStreamPostInfo) error {
+	if len(linkIDs) == 0 {
+		return nil
+	}
+	query := "SELECT link_id, COALESCE(title, '') FROM xhh_post_cache WHERE link_id IN (" + postgresPlaceholders(len(linkIDs)) + ")"
+	rows, err := pool.Query(ctx, query, int64Args(linkIDs)...)
+	if err != nil {
+		if isMissingMessageCacheTable(err) {
+			return nil
+		}
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var linkID int64
+		var title string
+		if err := rows.Scan(&linkID, &title); err != nil {
+			return err
+		}
+		info := postInfo[linkID]
+		info.Title = firstNonEmpty(info.Title, title)
+		postInfo[linkID] = info
+	}
+	return rows.Err()
+}
+
+func fillPostgresMessageStreamCachedCommentUsers(ctx context.Context, pool *pgxpool.Pool, replyCommentIDs []int64, commentUsers map[int64]string) error {
+	if len(replyCommentIDs) == 0 {
+		return nil
+	}
+	query := "SELECT comment_id, COALESCE(user_name, '') FROM xhh_comment_cache WHERE comment_id IN (" + postgresPlaceholders(len(replyCommentIDs)) + ")"
+	rows, err := pool.Query(ctx, query, int64Args(replyCommentIDs)...)
+	if err != nil {
+		if isMissingMessageCacheTable(err) {
+			return nil
+		}
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var commentID int64
+		var userName string
+		if err := rows.Scan(&commentID, &userName); err != nil {
+			return err
+		}
+		if commentID > 0 && strings.TrimSpace(userName) != "" && strings.TrimSpace(commentUsers[commentID]) == "" {
+			commentUsers[commentID] = userName
+		}
+	}
+	return rows.Err()
+}
+
+func isMissingMessageCacheTable(err error) bool {
+	text := strings.ToLower(err.Error())
+	return strings.Contains(text, "no such table") || strings.Contains(text, "does not exist") || strings.Contains(text, "undefined_table")
+}
+
+func (s *serverState) scheduleMessageStreamCacheFill(cfg appConfig, records ...[]messageStreamRecord) {
+	session := s.loadXHHSession()
+	if strings.TrimSpace(session.Cookie) == "" && strings.TrimSpace(session.HeyBoxID) == "" {
+		return
+	}
+	linkIDs := []int64{}
+	seen := map[int64]struct{}{}
+	for _, group := range records {
+		for _, record := range group {
+			if record.LinkID <= 0 {
+				continue
+			}
+			needsTitle := strings.TrimSpace(record.PostTitle) == ""
+			needsCommentUser := record.Direction == "outbound" && strings.TrimSpace(record.CommentUserName) == ""
+			if !needsTitle && !needsCommentUser {
+				continue
+			}
+			if _, ok := seen[record.LinkID]; ok {
+				continue
+			}
+			seen[record.LinkID] = struct{}{}
+			linkIDs = append(linkIDs, record.LinkID)
+		}
+	}
+	if len(linkIDs) == 0 {
+		return
+	}
+	now := time.Now()
+	s.cacheFillMu.Lock()
+	if s.cacheFillUntil == nil {
+		s.cacheFillUntil = map[int64]time.Time{}
+	}
+	selected := make([]int64, 0, 8)
+	for _, linkID := range linkIDs {
+		if until, ok := s.cacheFillUntil[linkID]; ok && until.After(now) {
+			continue
+		}
+		s.cacheFillUntil[linkID] = now.Add(10 * time.Minute)
+		selected = append(selected, linkID)
+		if len(selected) >= 8 {
+			break
+		}
+	}
+	s.cacheFillMu.Unlock()
+	if len(selected) == 0 {
+		return
+	}
+	go s.fillMessageStreamCache(cfg, selected)
+}
+
+func (s *serverState) fillMessageStreamCache(cfg appConfig, linkIDs []int64) {
+	if len(linkIDs) == 0 {
+		return
+	}
+	session := s.loadXHHSession()
+	if strings.TrimSpace(session.Cookie) == "" && strings.TrimSpace(session.HeyBoxID) == "" {
+		return
+	}
+	for _, linkID := range linkIDs {
+		ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+		payload, err := fetchXHHLinkTreePage(ctx, cfg, session, linkID, 1)
+		if err == nil {
+			err = s.saveMessageStreamCacheLinkTree(ctx, cfg, linkID, payload)
+		}
+		cancel()
+		if err != nil {
+			continue
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+}
+
+func (s *serverState) saveMessageStreamCacheLinkTree(ctx context.Context, cfg appConfig, linkID int64, payload xhhPostCommentsResponse) error {
+	title, author, _ := messageStreamCacheFromPayload(linkID, payload)
+	s.rememberMessageStreamMeta(linkID, title, author)
+	switch strings.ToLower(strings.TrimSpace(cfg.DataBase.Type)) {
+	case "", "sqlite":
+		return s.saveSQLiteMessageStreamCacheLinkTree(linkID, payload)
+	case "pg", "postgres", "postgresql":
+		return savePostgresMessageStreamCacheLinkTree(ctx, cfg, linkID, payload)
+	default:
+		return nil
+	}
+}
+
+func (s *serverState) saveSQLiteMessageStreamCacheLinkTree(linkID int64, payload xhhPostCommentsResponse) error {
+	database, err := s.openSQLiteDatabase()
+	if err != nil {
+		return err
+	}
+	defer database.Close()
+	return saveSQLiteMessageStreamCacheSQLite(database, linkID, payload)
+}
+
+func saveSQLiteMessageStreamCacheSQLite(database *sql.DB, linkID int64, payload xhhPostCommentsResponse) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	tx, err := database.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	title, _, comments := messageStreamCacheFromPayload(linkID, payload)
+	if linkID > 0 {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO xhh_post_cache (link_id,title,updated_at)
+			VALUES (?,?,?)
+			ON CONFLICT (link_id) DO UPDATE SET
+			title=CASE WHEN excluded.title <> '' THEN excluded.title ELSE xhh_post_cache.title END,
+			updated_at=excluded.updated_at`, linkID, title, time.Now().Unix()); err != nil {
+			return err
+		}
+	}
+	for _, comment := range comments {
+		images, _ := json.Marshal(comment.Images)
+		if len(images) == 0 {
+			images = []byte("[]")
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO xhh_comment_cache (comment_id,link_id,root_comment_id,reply_id,floor_num,user_id,user_name,avatar_url,reply_user_name,created_at,text,images,updated_at)
+			VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+			ON CONFLICT (comment_id) DO UPDATE SET
+			link_id=CASE WHEN excluded.link_id > 0 THEN excluded.link_id ELSE xhh_comment_cache.link_id END,
+			root_comment_id=CASE WHEN excluded.root_comment_id > 0 THEN excluded.root_comment_id ELSE xhh_comment_cache.root_comment_id END,
+			reply_id=excluded.reply_id,
+			floor_num=CASE WHEN excluded.floor_num > 0 THEN excluded.floor_num ELSE xhh_comment_cache.floor_num END,
+			user_id=CASE WHEN excluded.user_id > 0 THEN excluded.user_id ELSE xhh_comment_cache.user_id END,
+			user_name=CASE WHEN excluded.user_name <> '' THEN excluded.user_name ELSE xhh_comment_cache.user_name END,
+			avatar_url=CASE WHEN excluded.avatar_url <> '' THEN excluded.avatar_url ELSE xhh_comment_cache.avatar_url END,
+			reply_user_name=CASE WHEN excluded.reply_user_name <> '' THEN excluded.reply_user_name ELSE xhh_comment_cache.reply_user_name END,
+			created_at=CASE WHEN excluded.created_at <> '' THEN excluded.created_at ELSE xhh_comment_cache.created_at END,
+			text=CASE WHEN excluded.text <> '' THEN excluded.text ELSE xhh_comment_cache.text END,
+			images=CASE WHEN excluded.images <> '[]' THEN excluded.images ELSE xhh_comment_cache.images END,
+			updated_at=excluded.updated_at`, comment.CommentID, comment.LinkID, comment.RootCommentID, comment.ReplyID, comment.FloorNum, comment.UserID, comment.UserName, comment.AvatarURL, comment.ReplyUserName, comment.CreatedAt, comment.Text, string(images), time.Now().Unix()); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func savePostgresMessageStreamCacheLinkTree(ctx context.Context, cfg appConfig, linkID int64, payload xhhPostCommentsResponse) error {
+	pool, err := pgxpool.New(ctx, postgresDSN(cfg))
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+	title, _, comments := messageStreamCacheFromPayload(linkID, payload)
+	if linkID > 0 {
+		if _, err := pool.Exec(ctx, `INSERT INTO xhh_post_cache (link_id,title,updated_at)
+			VALUES ($1,$2,$3)
+			ON CONFLICT (link_id) DO UPDATE SET
+			title=CASE WHEN EXCLUDED.title <> '' THEN EXCLUDED.title ELSE xhh_post_cache.title END,
+			updated_at=EXCLUDED.updated_at`, linkID, title, time.Now().Unix()); err != nil {
+			return err
+		}
+	}
+	for _, comment := range comments {
+		images, _ := json.Marshal(comment.Images)
+		if len(images) == 0 {
+			images = []byte("[]")
+		}
+		if _, err := pool.Exec(ctx, `INSERT INTO xhh_comment_cache (comment_id,link_id,root_comment_id,reply_id,floor_num,user_id,user_name,avatar_url,reply_user_name,created_at,text,images,updated_at)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+			ON CONFLICT (comment_id) DO UPDATE SET
+			link_id=CASE WHEN EXCLUDED.link_id > 0 THEN EXCLUDED.link_id ELSE xhh_comment_cache.link_id END,
+			root_comment_id=CASE WHEN EXCLUDED.root_comment_id > 0 THEN EXCLUDED.root_comment_id ELSE xhh_comment_cache.root_comment_id END,
+			reply_id=EXCLUDED.reply_id,
+			floor_num=CASE WHEN EXCLUDED.floor_num > 0 THEN EXCLUDED.floor_num ELSE xhh_comment_cache.floor_num END,
+			user_id=CASE WHEN EXCLUDED.user_id > 0 THEN EXCLUDED.user_id ELSE xhh_comment_cache.user_id END,
+			user_name=CASE WHEN EXCLUDED.user_name <> '' THEN EXCLUDED.user_name ELSE xhh_comment_cache.user_name END,
+			avatar_url=CASE WHEN EXCLUDED.avatar_url <> '' THEN EXCLUDED.avatar_url ELSE xhh_comment_cache.avatar_url END,
+			reply_user_name=CASE WHEN EXCLUDED.reply_user_name <> '' THEN EXCLUDED.reply_user_name ELSE xhh_comment_cache.reply_user_name END,
+			created_at=CASE WHEN EXCLUDED.created_at <> '' THEN EXCLUDED.created_at ELSE xhh_comment_cache.created_at END,
+			text=CASE WHEN EXCLUDED.text <> '' THEN EXCLUDED.text ELSE xhh_comment_cache.text END,
+			images=CASE WHEN EXCLUDED.images <> '[]' THEN EXCLUDED.images ELSE xhh_comment_cache.images END,
+			updated_at=EXCLUDED.updated_at`, comment.CommentID, comment.LinkID, comment.RootCommentID, comment.ReplyID, comment.FloorNum, comment.UserID, comment.UserName, comment.AvatarURL, comment.ReplyUserName, comment.CreatedAt, comment.Text, string(images), time.Now().Unix()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func messageStreamCacheFromPayload(linkID int64, payload xhhPostCommentsResponse) (string, string, []messageStreamCacheComment) {
+	title := cleanXHHCommentText(payload.Result.Link.Title)
+	author := cleanXHHCommentText(payload.Result.Link.User.UserName)
+	comments := make([]messageStreamCacheComment, 0)
+	for _, group := range payload.Result.Comments {
+		if len(group.Comment) == 0 {
+			continue
+		}
+		rootID := group.Comment[0].CommentID
+		for i, comment := range group.Comment {
+			item := xhhCommentToThreadItem(comment, i == 0, false)
+			item.RootCommentID = rootID
+			comments = append(comments, messageStreamCacheComment{
+				LinkID:        linkID,
+				RootCommentID: firstNonZeroInt64(rootID, item.RootCommentID, item.CommentID),
+				CommentID:     item.CommentID,
+				ReplyID:       item.ReplyID,
+				FloorNum:      item.FloorNum,
+				UserID:        item.UserID,
+				UserName:      item.UserName,
+				AvatarURL:     item.AvatarURL,
+				ReplyUserName: item.ReplyUserName,
+				CreatedAt:     item.CreatedAt,
+				Text:          item.Text,
+				Images:        append([]string{}, item.Images...),
+			})
+		}
+	}
+	return title, author, comments
 }
 
 func (s *serverState) readSQLiteMessageStreamRecords(recentOnly bool) ([]messageStreamRecord, []messageStreamRecord, error) {
@@ -3535,7 +3919,7 @@ function renderCommentActions(data){if(!commentActions)return;commentActions.inn
 function commentAvatar(item){const avatar=document.createElement('div');avatar.className='comment-avatar';if(item.avatarUrl){const img=document.createElement('img');img.src=item.avatarUrl;img.alt=(item.userName||'用户')+'头像';img.loading='lazy';avatar.appendChild(img)}else{avatar.textContent=(item.userName||'？').trim().slice(0,1)||'？'}return avatar}
 function commentCard(item){const card=document.createElement('article');const classes=['comment-card',item.isRoot?'root':'child'];if(item.isTarget)classes.push('target');if(item.isCurrentComment)classes.push('current-comment');if(item.isReplyTarget)classes.push('reply-target');card.className=classes.join(' ');const head=document.createElement('div');head.className='comment-card-head';const avatar=commentAvatar(item);const title=document.createElement('div');const author=document.createElement('div');author.className='comment-author';author.textContent=item.userName||'未知用户';const meta=document.createElement('div');meta.className='comment-meta';const parts=[];if(item.floorNum)parts.push('楼层 '+item.floorNum);if(item.createdAt)parts.push(item.createdAt);if(item.commentId)parts.push('评论 '+item.commentId);if(item.rootCommentId&&item.rootCommentId!==item.commentId)parts.push('根 '+item.rootCommentId);if(item.replyUserName)parts.push('回复 '+item.replyUserName);meta.textContent=parts.join(' · ')||'评论';title.appendChild(author);title.appendChild(meta);head.appendChild(avatar);head.appendChild(title);card.appendChild(head);const text=document.createElement('div');text.className='comment-text';appendEmojiText(text,item.text||'—');card.appendChild(text);if(Array.isArray(item.images)&&item.images.length){const images=document.createElement('div');images.className='comment-images';for(const src of item.images){const link=document.createElement('a');link.className='comment-image-link';link.href=src;link.target='_blank';link.rel='noopener noreferrer';const img=document.createElement('img');img.src=src;img.alt='评论图片';img.loading='lazy';link.appendChild(img);images.appendChild(link)}card.appendChild(images)}return card}
 function commentThreadText(data){const lines=['帖子ID：'+(data.linkId||'—'),'帖子标题：'+(data.postTitle||'—'),'根评论ID：'+(data.rootCommentId||'—'),'当前评论ID：'+(data.commentId||'—'),'原帖：'+(data.postUrl||'—'),''];for(const item of orderedCommentItems(data)){const labels=[];if(item.isTarget)labels.push('当前回复');if(item.isCurrentComment)labels.push('当前评论');if(item.isReplyTarget)labels.push('被回复评论');const title=(labels.length?'['+labels.join('/')+'] ':'')+(item.userName||'未知用户')+(item.floorNum?' · 楼层 '+item.floorNum:'')+(item.createdAt?' · '+item.createdAt:'')+(item.commentId?' · '+item.commentId:'');lines.push(title);lines.push(item.text||'—');if(Array.isArray(item.images)&&item.images.length)lines.push('图片：'+item.images.join(' '));lines.push('')}return lines.join('\n')}
-async function bootstrap(){clearInterval(logTimer);clearInterval(statusTimer);clearInterval(recordsTimer);await refreshStatus();await loadEmojiLibrary();await loadConfig();await loadLogs();await loadAllRecords();statusTimer=setInterval(refreshStatus,4000);logTimer=setInterval(loadCurrentLog,1800);recordsTimer=setInterval(loadAllRecords,10000)}
+async function bootstrap(){clearInterval(logTimer);clearInterval(statusTimer);clearInterval(recordsTimer);await Promise.allSettled([refreshStatus(),loadEmojiLibrary(),loadConfig(),loadLogs(),loadAllRecords()]);statusTimer=setInterval(refreshStatus,4000);logTimer=setInterval(loadCurrentLog,1800);recordsTimer=setInterval(loadAllRecords,10000)}
 
 async function loadEmojiLibrary(){try{const data=await api('/api/emojis');emojiLibrary=data.emojis&&typeof data.emojis==='object'?data.emojis:{}}catch(err){emojiLibrary={}}}
 
@@ -3548,8 +3932,8 @@ function configFields(){return Array.from(configForm.querySelectorAll('[data-pat
 function getPath(obj,path){return path.split('.').reduce((acc,key)=>acc&&acc[key],obj)}
 function setPath(obj,path,value){const parts=path.split('.');let cur=obj;for(let i=0;i<parts.length-1;i++){cur[parts[i]]??={};cur=cur[parts[i]]}cur[parts[parts.length-1]]=value}
 
-async function loadLogs(){const data=await api('/api/logs');const files=data.files||[];const previous=currentLog;logSelect.innerHTML='';for(const file of files){const option=document.createElement('option');option.value=file.name;option.textContent=(file.label||file.name)+(file.size?' · '+formatBytes(file.size):'')+(file.modTime?' · '+file.modTime:'');logSelect.appendChild(option)}currentLog=files.some(file=>file.name===previous)?previous:(files[0]?.name||'');logSelect.value=currentLog;currentLogLabel=logSelect.selectedOptions[0]?.textContent||currentLog;await loadCurrentLog()}
-async function loadCurrentLog(){if(logPaused||hasLogSelection()||isUsingLogControls())return;if(!currentLog){renderLog('');return}try{const data=await api('/api/logs/read?file='+encodeURIComponent(currentLog));renderLog(data.content||'')}catch(err){renderLog('日志读取失败: '+err.message)}}
+async function loadLogs(){const data=await api('/api/logs');const files=data.files||[];const previous=currentLog;logSelect.innerHTML='';for(const file of files){const option=document.createElement('option');option.value=file.name;option.textContent=(file.label||file.name)+(file.size?' · '+formatBytes(file.size):'')+(file.modTime?' · '+file.modTime:'');logSelect.appendChild(option)}currentLog=files.some(file=>file.name===previous)?previous:(files[0]?.name||'');logSelect.value=currentLog;currentLogLabel=logSelect.selectedOptions[0]?.textContent||currentLog;if(activeView==='logs')await loadCurrentLog()}
+async function loadCurrentLog(){if(activeView!=='logs'||logPaused||hasLogSelection()||isUsingLogControls())return;if(!currentLog){renderLog('');return}try{const data=await api('/api/logs/read?file='+encodeURIComponent(currentLog));renderLog(data.content||'')}catch(err){renderLog('日志读取失败: '+err.message)}}
 
 function renderLog(content){rawLogContent=content||'';const box=logOutput.parentElement;const scrollTop=box.scrollTop;const shouldScrollLatest=logScrollLatestOnce;logScrollLatestOnce=false;document.querySelector('#currentSource').textContent=currentLogLabel||'暂无日志源';renderLogLines(filterLogContent(rawLogContent));if(shouldScrollLatest){box.scrollTop=box.scrollHeight;requestAnimationFrame(()=>{box.scrollTop=box.scrollHeight})}else{box.scrollTop=Math.min(scrollTop,box.scrollHeight)}}
 async function loadAllRecords(manual=false){
