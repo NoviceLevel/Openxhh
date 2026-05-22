@@ -26,7 +26,7 @@ func TestParseCommentRouteContentImage(t *testing.T) {
 }
 
 func TestParseCommentRouteContentDefaultsUnknownToReply(t *testing.T) {
-	got, err := ParseCommentRouteContent(`{"action":"unknown","image_prompt":"","reason":"无法判断"}`, "")
+	got, err := ParseCommentRouteContent(`{"action":"ignore","image_prompt":"","reason":"无法判断"}`, "")
 	if err != nil {
 		t.Fatalf("ParseCommentRouteContent returned error: %v", err)
 	}
@@ -60,7 +60,7 @@ func TestApplyCommentRouteRuleHintsFillsContextPrompt(t *testing.T) {
 
 func TestCommentRouteSystemPromptPreservesContextSubject(t *testing.T) {
 	prompt := commentRouteSystemPrompt()
-	for _, want := range []string{"不要凭空编造主体", "不要覆盖上下文主体", "后续 prompt refine 会填入细节"} {
+	for _, want := range []string{"默认都应该回复", "白名单开关", "示例，不是硬关键词匹配", "@张三 你看看", "不要凭空编造主体", "不要覆盖上下文主体", "后续 prompt refine 会填入细节"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("commentRouteSystemPrompt should contain %q", want)
 		}

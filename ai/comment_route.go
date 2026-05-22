@@ -120,7 +120,7 @@ func normalizeCommentRouteAction(action string) string {
 	case "image", "generate_image", "image_generation", "draw", "生图", "画图", "生成图片", "看图生图", "图生图":
 		return CommentRouteActionImage
 	case "ignore", "skip", "none", "no_reply", "不处理", "忽略":
-		return CommentRouteActionIgnore
+		return CommentRouteActionReply
 	case "regenerate", "regen", "retry", "重新生成", "重生成":
 		return CommentRouteActionRegenerate
 	case "reply", "chat", "answer", "普通回复", "回复":
@@ -135,29 +135,38 @@ func commentRouteSystemPrompt() string {
 你的任务是阅读整条评论，先判断机器人应该走哪个动作，再给出必要字段。
 
 可选 action：
-- reply：普通 AI 文字回复。包括提问、聊天、总结、吐槽、讨论生图功能、询问为什么生图失败等。
+- reply：普通 AI 文字回复。只要这条评论是 @ 唤醒机器人，默认都应该回复。
 - image：生成图片。包括请求生成图片、画图、出图、做海报/头像/表情包/插画，以及根据正文/帖子/评论区/当前楼层/参考图片生成图片。
 - regenerate：用户明确要求重新生成上一条机器人输出。
-- ignore：明确不是给机器人的任务，或只是无意义噪声。无法确定时不要 ignore，选 reply。
 
 规则：
 1. 所有判断必须基于整条评论语义；机器人 @ 只是唤醒标记，可能在开头、中间或结尾。
-2. 不要因为出现“生图”“画图”“生成图片”就直接选 image；如果是在讨论功能、报错、参数、原理或问能不能，选 reply。
-3. 如果用户要求“根据正文/文章/帖子/原帖/评论区/这层楼/这张图片”，对应 needs_post_context、needs_comment_context、needs_image_input 必须为 true。
-4. 看图生图、图生图、参考这张图、类似这张图、把这张图改成，都选 image 且 needs_image_input=true。
-5. “艾特谁来看、给谁看、让谁看、回复谁、喊谁来看”属于 mention_target，不要写进 image_prompt。
-6. 机器人自己的 @ 只是唤醒标记，绝不能作为 mention_target；mention_target 只能来自用户明确要求艾特、给、让、回复、喊的人名。
-7. action=image 时，image_prompt 必须是适合图片生成模型的画面描述，主体优先来自用户指定的上下文来源。
-8. 如果用户要求根据帖子/评论/图片生成，当前路由阶段看不到完整上下文，不要凭空编造主体；image_prompt 应保留“根据帖子内容/当前评论楼层/参考图片生成...”这类上下文指向，后续 prompt refine 会填入细节。
-9. 用户附带的祝福、吐槽、夸奖、安慰、整活短句只作为画面情绪、立场或用途，不要覆盖上下文主体。
-10. 输出 JSON 格式：{"action":"reply","image_prompt":"","mention_target":"","needs_post_context":false,"needs_comment_context":false,"needs_image_input":false,"wants_similar_image":false,"reason":"..."}`
+2. 只要被 @ 唤醒，默认 action 选 reply；对白名单用户的限制交给白名单开关做，路由层不要替代这个开关。
+3. 先让模型判断：这条评论是不是在要求机器人回复、转述、评价、带话，或者是在明确要艾特某个人。
+4. 如果评论里有明确的艾特意图，就把目标人写进 mention_target；如果目标不唯一，优先保守留空，不要乱 @。
+5. 下面这些都只是示例，不是硬关键词匹配：
+   - @张三 你看看
+   - 喊李四来评评理
+   - 让王五出来说话
+   - 叫赵六过来看看
+   - 咬小明这句话
+   - 抓一下这个人
+6. AI 判断 mention_target 时，优先结合当前评论、被回复评论、楼层上下文和对话指向，而不是只看一个词。
+7. 如果用户要求“根据正文/文章/帖子/原帖/评论区/这层楼/这张图片”，对应 needs_post_context、needs_comment_context、needs_image_input 必须为 true。
+8. 看图生图、图生图、参考这张图、类似这张图、把这张图改成，都选 image 且 needs_image_input=true。
+9. “艾特谁来看、给谁看、让谁看、回复谁、喊谁来看”属于 mention_target，不要写进 image_prompt。
+10. 机器人自己的 @ 只是唤醒标记，绝不能作为 mention_target；mention_target 只能来自用户明确要求艾特、给、让、回复、喊的人名。
+11. action=image 时，image_prompt 必须是适合图片生成模型的画面描述，主体优先来自用户指定的上下文来源。
+12. 如果用户要求根据帖子/评论/图片生成，当前路由阶段看不到完整上下文，不要凭空编造主体；image_prompt 应保留“根据帖子内容/当前评论楼层/参考图片生成...”这类上下文指向，后续 prompt refine 会填入细节。
+13. 用户附带的祝福、吐槽、夸奖、安慰、整活短句只作为画面情绪、立场或用途，不要覆盖上下文主体。
+14. 输出 JSON 格式：{"action":"reply","image_prompt":"","mention_target":"","needs_post_context":false,"needs_comment_context":false,"needs_image_input":false,"wants_similar_image":false,"reason":"..."}`
 }
 
 func buildCommentRoutePrompt(req CommentRouteRequest) string {
 	return fmt.Sprintf(`原始评论：%s
 归一化文本：%s
 清洗后文本：%s
-已提取的目标 mention：%s
+解析层 mention 候选（仅候选，不是最终结果）：%s
 是否显式目标 mention：%v
 规则层是否命中生图候选：%v
 规则层 prompt：%s

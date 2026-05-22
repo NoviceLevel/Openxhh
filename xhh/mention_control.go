@@ -19,7 +19,7 @@ var mentionTokenPattern = regexp.MustCompile(`@[^\s，,。.!！?？:：、@]{1,2
 var mentionControlPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?:并|，|,|。|、|\s)*(?:顺便|帮我|请|可以|能不能)?(?:给|让|发给|拿给)\s*(?:他|她|ta|TA|对方|那个人|这个人)?\s*(?:看|看看|查看|看下|来看)\s*@` + mentionNamePattern),
 	regexp.MustCompile(`(?:并|，|,|。|、|\s)*(?:顺便|帮我|请|可以|能不能)?(?:给|让|发给|拿给)\s*@` + mentionNamePattern + `\s*(?:看|看看|查看|看下|来看)?`),
-	regexp.MustCompile(`(?:并|，|,|。|、|\s)*(?:顺便|帮我|请|可以|能不能)?(?:艾特|提到|喊|叫)\s*@?` + mentionNamePattern + `(?:看|看看|查看|看下|来看|评价|一下)?`),
+	regexp.MustCompile(`(?:并|，|,|。|、|\s)*(?:顺便|帮我|请|可以|能不能)?(?:艾特|提到|喊|叫|咬|抓)\s*@?` + mentionNamePattern + `(?:看|看看|查看|看下|来看|评价|一下)?`),
 	regexp.MustCompile(`(?:并|，|,|。|、|\s)*(?:顺便|帮我|请|可以|能不能)\s*@` + mentionNamePattern + `(?:看|看看|查看|看下|来看|评价|一下)?`),
 	regexp.MustCompile(`(?:并|，|,|。|、|\s)*(?:问问|告诉|回复|反驳|怼|喷|骂|夸|安慰)\s*@?` + mentionNamePattern + `(?:怎么看|怎么想|的观点|的说法|的评论|的话|看看|查看|看下|来看|评价|一下|一口)?`),
 }

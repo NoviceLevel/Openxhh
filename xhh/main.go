@@ -466,9 +466,6 @@ func replyComment(v db.CommStruct) {
 		switch route.Action {
 		case ai.CommentRouteActionImage:
 			isok = processRoutedImageComment(v, mentionControl, &route)
-		case ai.CommentRouteActionIgnore, ai.CommentRouteActionRegenerate:
-			db.ReplyedMsg(v.MsgID)
-			return
 		default:
 			isok = replyWithAiComment(v, mentionControl)
 		}
