@@ -111,6 +111,7 @@ type recordLinkLookup struct {
 	ByComment         map[int64]int64  `json:"byComment"`
 	QuestionByMsg     map[int64]string `json:"questionByMsg"`
 	QuestionByComment map[int64]string `json:"questionByComment"`
+	PostTitles        map[int64]string `json:"postTitles,omitempty"`
 }
 
 type regenerateCandidate struct {
@@ -2457,7 +2458,187 @@ func (s *serverState) readRecordLinkLookup(logContent string) recordLinkLookup {
 	case "pg", "postgres", "postgresql":
 		_ = fillPostgresRecordLinkLookup(cfg, msgIDs, commentIDs, &lookup)
 	}
+	s.fillRecordPostTitles(cfg, &lookup)
 	return lookup
+}
+
+func recordLookupLinkIDs(lookup recordLinkLookup) []int64 {
+	set := map[int64]struct{}{}
+	for _, id := range lookup.ByMsg {
+		if id > 0 {
+			set[id] = struct{}{}
+		}
+	}
+	for _, id := range lookup.ByComment {
+		if id > 0 {
+			set[id] = struct{}{}
+		}
+	}
+	result := make([]int64, 0, len(set))
+	for id := range set {
+		result = append(result, id)
+	}
+	return result
+}
+
+func (s *serverState) fillRecordPostTitles(cfg appConfig, lookup *recordLinkLookup) {
+	linkIDs := recordLookupLinkIDs(*lookup)
+	if len(linkIDs) == 0 {
+		return
+	}
+	titles := map[int64]string{}
+	switch strings.ToLower(strings.TrimSpace(cfg.DataBase.Type)) {
+	case "", "sqlite":
+		_ = s.fillSQLiteRecordPostTitles(linkIDs, titles)
+	case "pg", "postgres", "postgresql":
+		_ = fillPostgresRecordPostTitles(cfg, linkIDs, titles)
+	}
+	s.messageStreamMetaMu.RLock()
+	for _, id := range linkIDs {
+		if titles[id] == "" {
+			if info, ok := s.messageStreamMeta[id]; ok && info.Title != "" {
+				titles[id] = info.Title
+			}
+		}
+	}
+	s.messageStreamMetaMu.RUnlock()
+	if len(titles) > 0 {
+		lookup.PostTitles = titles
+	}
+	s.scheduleRecordPostTitlesFill(cfg, linkIDs, titles)
+}
+
+func (s *serverState) scheduleRecordPostTitlesFill(cfg appConfig, linkIDs []int64, existingTitles map[int64]string) {
+	var missing []int64
+	for _, id := range linkIDs {
+		if existingTitles[id] == "" {
+			missing = append(missing, id)
+		}
+	}
+	if len(missing) == 0 {
+		return
+	}
+	now := time.Now()
+	s.cacheFillMu.Lock()
+	if s.cacheFillUntil == nil {
+		s.cacheFillUntil = map[int64]time.Time{}
+	}
+	var selected []int64
+	for _, id := range missing {
+		if until, ok := s.cacheFillUntil[id]; ok && until.After(now) {
+			continue
+		}
+		s.cacheFillUntil[id] = now.Add(10 * time.Minute)
+		selected = append(selected, id)
+		if len(selected) >= 8 {
+			break
+		}
+	}
+	s.cacheFillMu.Unlock()
+	if len(selected) > 0 {
+		go s.fillMessageStreamCache(cfg, selected)
+	}
+}
+
+func (s *serverState) fillSQLiteRecordPostTitles(linkIDs []int64, titles map[int64]string) error {
+	if _, err := os.Stat(filepath.Join(s.rootDir, "sql.db")); err != nil {
+		return nil
+	}
+	db, err := s.openSQLiteDatabase()
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	query := "SELECT link_id, COALESCE(title, '') FROM feed_reply_records WHERE link_id IN (" + sqlitePlaceholders(len(linkIDs)) + ")"
+	rows, err := db.Query(query, int64Args(linkIDs)...)
+	if err != nil {
+		if isMissingFeedReplyTable(err) {
+			return nil
+		}
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var linkID int64
+		var title string
+		if err := rows.Scan(&linkID, &title); err != nil {
+			return err
+		}
+		if title != "" {
+			titles[linkID] = title
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	query2 := "SELECT link_id, COALESCE(title, '') FROM xhh_post_cache WHERE link_id IN (" + sqlitePlaceholders(len(linkIDs)) + ")"
+	rows2, err := db.Query(query2, int64Args(linkIDs)...)
+	if err != nil {
+		if isMissingMessageCacheTable(err) {
+			return nil
+		}
+		return err
+	}
+	defer rows2.Close()
+	for rows2.Next() {
+		var linkID int64
+		var title string
+		if err := rows2.Scan(&linkID, &title); err != nil {
+			return err
+		}
+		if title != "" {
+			if _, exists := titles[linkID]; !exists {
+				titles[linkID] = title
+			}
+		}
+	}
+	return rows2.Err()
+}
+
+func fillPostgresRecordPostTitles(cfg appConfig, linkIDs []int64, titles map[int64]string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, postgresDSN(cfg))
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+	rows, err := pool.Query(ctx, "SELECT link_id, COALESCE(title, '') FROM feed_reply_records WHERE link_id = ANY($1)", linkIDs)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var linkID int64
+		var title string
+		if err := rows.Scan(&linkID, &title); err != nil {
+			return err
+		}
+		if title != "" {
+			titles[linkID] = title
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	rows2, err := pool.Query(ctx, "SELECT link_id, COALESCE(title, '') FROM xhh_post_cache WHERE link_id = ANY($1)", linkIDs)
+	if err != nil {
+		return err
+	}
+	defer rows2.Close()
+	for rows2.Next() {
+		var linkID int64
+		var title string
+		if err := rows2.Scan(&linkID, &title); err != nil {
+			return err
+		}
+		if title != "" {
+			if _, exists := titles[linkID]; !exists {
+				titles[linkID] = title
+			}
+		}
+	}
+	return rows2.Err()
 }
 
 func (s *serverState) readConfigForRecordLookup() (appConfig, error) {
@@ -3930,6 +4111,7 @@ let logPaused=false;
 let lastSelectedLogLine=-1;
 let recordsSignature='';
 let failedRecordsSignature='';
+let postTitlesMap={};
 let messageStreamSignature='';
 let feedRecordsSignature='';
 let emojiLibrary={};
@@ -4015,7 +4197,7 @@ async function loadAllRecords(manual=false){
 	if(!manual)renderCachedRecordSummary()
 	if(manual&&toast)toast.textContent=activeView==='failed-records'?'正在刷新失败发送...':'正在刷新所有记录...'
 	try{
-		const data=await api('/api/records')
+		const data=await api(activeView==='failed-records'?'/api/records?window=24h':'/api/records')
 		const summary=recordSummaryFromData(data)
 		saveRecordSummaryCache(summary)
 		renderRecordSummary(summary,manual,false)
@@ -4028,10 +4210,10 @@ async function loadAllRecords(manual=false){
 		if(recordsMeta)recordsMeta.textContent='记录读取失败：'+err.message
 		if(recordsToast)recordsToast.textContent=err.message
 	}}
-function recordSummaryFromData(data){const lines=(data.content||'').split('\n').filter(Boolean);const interactions=dedupeInteractions(parseInteractions(lines));applyRecordLinks(interactions,data.links);const completed=interactions.filter(item=>item.status==='已回复'&&item.question&&item.reply);const failedRecords=interactions.filter(item=>isErrorStatus(item.status)&&item.question&&item.reply);const pending=interactions.filter(item=>item.status==='待回复'||item.status==='待重试').length;const records=interactions.filter(item=>(item.status==='已回复'||isErrorStatus(item.status))&&item.question&&item.reply);const tokenItems=Array.isArray(data.tokens)&&data.tokens.length?data.tokens:interactions.filter(item=>item.tokens);return{cachedAt:Date.now(),sources:Number(data.sources||0),interactionsCount:interactions.length,completedCount:completed.length,failedCount:failedRecords.length,failedRecords,pending,recordsCount:records.length,trendItems:completed.map(item=>({time:item.time})),tokenStats:tokenStats(tokenItems)}}
+function recordSummaryFromData(data){const lines=(data.content||'').split('\n').filter(Boolean);const interactions=dedupeInteractions(parseInteractions(lines));applyRecordLinks(interactions,data.links);const completed=interactions.filter(item=>item.status==='已回复'&&item.question&&item.reply);const failedRecords=interactions.filter(item=>isErrorStatus(item.status)&&item.question&&item.reply);const pending=interactions.filter(item=>item.status==='待回复'||item.status==='待重试').length;const records=interactions.filter(item=>(item.status==='已回复'||isErrorStatus(item.status))&&item.question&&item.reply);const tokenItems=Array.isArray(data.tokens)&&data.tokens.length?data.tokens:interactions.filter(item=>item.tokens);const postTitles=data.links&&data.links.postTitles?data.links.postTitles:{};return{cachedAt:Date.now(),sources:Number(data.sources||0),interactionsCount:interactions.length,completedCount:completed.length,failedCount:failedRecords.length,failedRecords,pending,recordsCount:records.length,trendItems:completed.map(item=>({time:item.time})),tokenStats:tokenStats(tokenItems),postTitles}}
 function renderCachedRecordSummary(){try{const raw=sessionStorage.getItem(recordSummaryCacheStorageKey);if(!raw)return;const summary=JSON.parse(raw);if(!summary||typeof summary!=='object')return;if(Date.now()-Number(summary.cachedAt||0)>recordSummaryCacheTTL)return;renderRecordSummary(summary,false,true)}catch(err){sessionStorage.removeItem(recordSummaryCacheStorageKey)}}
 function saveRecordSummaryCache(summary){try{sessionStorage.setItem(recordSummaryCacheStorageKey,JSON.stringify(summary))}catch(err){try{sessionStorage.setItem(recordSummaryCacheStorageKey,JSON.stringify({...summary,failedRecords:(summary.failedRecords||[]).slice(0,200)}))}catch(innerErr){}}}
-function renderRecordSummary(summary,manual,fromCache){const failedRecords=Array.isArray(summary.failedRecords)?summary.failedRecords:[];if(activeView==='failed-records'){renderFailedRecords(failedRecords);if(failedRecordsMeta)failedRecordsMeta.textContent=(fromCache?'已显示缓存 ':'已读取 ')+formatCount(summary.failedCount??failedRecords.length)+' 条失败发送，来源 '+formatCount(summary.sources||0)+' 个日志源';if(manual&&!fromCache&&failedRecordsToast)failedRecordsToast.textContent='已刷新失败发送';return}document.querySelector('#metricStatus').textContent=formatCount(summary.interactionsCount||0);document.querySelector('#metricLines').textContent=formatCount(summary.completedCount||0);document.querySelector('#metricErrors').textContent=formatCount(summary.failedCount??failedRecords.length);document.querySelector('#metricFiles').textContent=formatCount(summary.pending||0);renderTrend(Array.isArray(summary.trendItems)?summary.trendItems:[]);renderTokenStats(summary.tokenStats||{});if(recordsMeta)recordsMeta.textContent=(fromCache?'已显示缓存 ':'已读取 ')+formatCount(summary.recordsCount||0)+' 条日志记录，来源 '+formatCount(summary.sources||0)+' 个日志源';if(manual&&!fromCache&&recordsToast)recordsToast.textContent='已刷新所有记录'}
+function renderRecordSummary(summary,manual,fromCache){postTitlesMap=summary.postTitles||{};const failedRecords=Array.isArray(summary.failedRecords)?summary.failedRecords:[];if(activeView==='failed-records'){renderFailedRecords(failedRecords);if(failedRecordsMeta)failedRecordsMeta.textContent=(fromCache?'已显示缓存 ':'已读取 ')+formatCount(summary.failedCount??failedRecords.length)+' 条失败发送，来源 '+formatCount(summary.sources||0)+' 个日志源';if(manual&&!fromCache&&failedRecordsToast)failedRecordsToast.textContent='已刷新失败发送';return}document.querySelector('#metricStatus').textContent=formatCount(summary.interactionsCount||0);document.querySelector('#metricLines').textContent=formatCount(summary.completedCount||0);document.querySelector('#metricErrors').textContent=formatCount(summary.failedCount??failedRecords.length);document.querySelector('#metricFiles').textContent=formatCount(summary.pending||0);renderTrend(Array.isArray(summary.trendItems)?summary.trendItems:[]);renderTokenStats(summary.tokenStats||{});if(recordsMeta)recordsMeta.textContent=(fromCache?'已显示缓存 ':'已读取 ')+formatCount(summary.recordsCount||0)+' 条日志记录，来源 '+formatCount(summary.sources||0)+' 个日志源';if(manual&&!fromCache&&recordsToast)recordsToast.textContent='已刷新所有记录'}
 async function loadMessageStream(manual=false){
 	if(!manual&&activeView!=='records'&&activeView!=='inbound-records')return
 	const toast=activeStreamToast()
@@ -4082,7 +4264,7 @@ function formatUnixTime(value){const num=Number(value||0);if(!num)return'—';co
 function formatUnixTimeMinute(value){const num=Number(value||0);if(!num)return'—';const date=new Date(num*1000);return Number.isNaN(date.getTime())?'—':date.getFullYear()+'-'+String(date.getMonth()+1).padStart(2,'0')+'-'+String(date.getDate()).padStart(2,'0')+' '+String(date.getHours()).padStart(2,'0')+':'+String(date.getMinutes()).padStart(2,'0')}
 function formatCommentTime(value){const text=cleanText(value);if(!text)return'—';const normalized=text.replace('T',' ');const match=normalized.match(/^(20\d{2}-\d{2}-\d{2}\s+\d{2}:\d{2})(?::\d{2})?(.*)$/);return match?match[1]+match[2]:text}
 function renderRecords(items){if(!recordsBody)return;const signature=JSON.stringify([emojiLibraryVersion,items.map(item=>recordKey(item)+'|'+(item.reply||'')+'|'+(item.status||'')+'|'+(item.tokens||0)+'|'+(item.linkId||0)+'|'+recordImageUrls(item).join(','))]);if(signature===recordsSignature)return;rememberRecordScrolls();recordsSignature=signature;recordsBody.innerHTML='';if(!items.length){const row=document.createElement('tr');const cell=document.createElement('td');cell.colSpan=7;cell.textContent='暂无最近24小时可识别的用户提问/机器人回复记录';row.appendChild(cell);recordsBody.appendChild(row);return}items.forEach((item,index)=>{const key=recordKey(item,index);const row=document.createElement('tr');appendCell(row,item.time);appendCell(row,item.user||'未知用户');appendCell(row,item.question,'content-cell',key+':question');appendReplyCell(row,item,key+':reply');const statusCell=document.createElement('td');const badge=document.createElement('span');badge.className='badge '+(item.status==='已回复'?'ok':isErrorStatus(item.status)?'error':'warn');badge.textContent=item.status;statusCell.appendChild(badge);const copyBtn=document.createElement('button');copyBtn.type='button';copyBtn.className='copy-btn';copyBtn.textContent='复制';copyBtn.addEventListener('click',async()=>{await copyText(recordText(item));copyBtn.textContent='已复制';setTimeout(()=>copyBtn.textContent='复制',900)});statusCell.appendChild(copyBtn);row.appendChild(statusCell);appendPostCell(row,item);const actionCell=document.createElement('td');const stack=document.createElement('div');stack.className='action-stack';const viewThreadBtn=document.createElement('button');viewThreadBtn.type='button';viewThreadBtn.className='copy-btn';viewThreadBtn.textContent='查看楼层';const regenerateBtn=document.createElement('button');regenerateBtn.type='button';regenerateBtn.className='copy-btn';regenerateBtn.textContent='重新生成';const feedback=document.createElement('span');feedback.className='action-feedback';viewThreadBtn.addEventListener('click',()=>showCommentThread(item,viewThreadBtn,feedback));regenerateBtn.addEventListener('click',()=>regenerateMessage(item,regenerateBtn,feedback));stack.appendChild(viewThreadBtn);stack.appendChild(regenerateBtn);stack.appendChild(feedback);actionCell.appendChild(stack);row.appendChild(actionCell);recordsBody.appendChild(row)})}
-function renderFailedRecords(items){if(!failedRecordsBody)return;const sorted=items.slice().sort((a,b)=>recordTimeValue(b)-recordTimeValue(a));const signature=JSON.stringify([emojiLibraryVersion,sorted.map(item=>recordKey(item)+'|'+(item.reply||'')+'|'+(item.lastError||'')+'|'+(item.status||'')+'|'+(item.linkId||0)+'|'+recordImageUrls(item).join(','))]);if(signature===failedRecordsSignature)return;failedRecordsSignature=signature;failedRecordsBody.innerHTML='';if(!sorted.length){appendEmptyRow(failedRecordsBody,7,'暂无失败发送记录');return}sorted.forEach((item,index)=>{const key='failed:'+recordKey(item,index);const row=document.createElement('tr');appendCell(row,item.time);appendCell(row,item.user||'未知用户');appendCell(row,item.question,'content-cell',key+':question');appendReplyCell(row,{...item,reply:failedRecordErrorText(item)},key+':error');const statusCell=document.createElement('td');const badge=document.createElement('span');badge.className='badge error';badge.textContent=item.status||'失败';statusCell.appendChild(badge);row.appendChild(statusCell);appendPostCell(row,item);appendFailedActionCell(row,item);failedRecordsBody.appendChild(row)})}
+function renderFailedRecords(items){if(!failedRecordsBody)return;const sorted=items.slice().sort((a,b)=>recordTimeValue(b)-recordTimeValue(a));const signature=JSON.stringify([emojiLibraryVersion,sorted.map(item=>recordKey(item)+'|'+(item.reply||'')+'|'+(item.lastError||'')+'|'+(item.status||'')+'|'+(item.linkId||0)+'|'+recordImageUrls(item).join(','))]);if(signature===failedRecordsSignature)return;failedRecordsSignature=signature;failedRecordsBody.innerHTML='';if(!sorted.length){appendEmptyRow(failedRecordsBody,7,'暂无失败发送记录');return}sorted.forEach((item,index)=>{const key='failed:'+recordKey(item,index);const row=document.createElement('tr');appendCell(row,formatCommentTime(item.time));appendCell(row,item.user||'未知用户');appendCell(row,item.question,'content-cell',key+':question');appendReplyCell(row,{...item,reply:failedRecordErrorText(item)},key+':error');const statusCell=document.createElement('td');const badge=document.createElement('span');badge.className='badge error';badge.textContent=item.status||'失败';statusCell.appendChild(badge);row.appendChild(statusCell);appendPostCell(row,item);appendFailedActionCell(row,item);failedRecordsBody.appendChild(row)})}
 function recordTimeValue(item){const time=parseItemTime(item?.time);return time?time.getTime():0}
 function failedRecordErrorText(item){if(item.lastError)return item.lastError;if(item.status==='异常发送'&&item.reply)return 'AI 已生成但发送失败：'+item.reply;return item.reply||'发送失败'}
 function appendFailedActionCell(row,item){const cell=document.createElement('td');const stack=document.createElement('div');stack.className='action-stack';const resendBtn=document.createElement('button');resendBtn.type='button';resendBtn.className='copy-btn';resendBtn.textContent='重新发送';const viewThreadBtn=document.createElement('button');viewThreadBtn.type='button';viewThreadBtn.className='copy-btn';viewThreadBtn.textContent='查看楼层';const copyBtn=document.createElement('button');copyBtn.type='button';copyBtn.className='copy-btn';copyBtn.textContent='复制';const feedback=document.createElement('span');feedback.className='action-feedback';resendBtn.addEventListener('click',()=>resendFailedMessage(item,resendBtn,feedback));viewThreadBtn.addEventListener('click',()=>showCommentThread(item,viewThreadBtn,feedback));copyBtn.addEventListener('click',async()=>{await copyText(recordText(item));copyBtn.textContent='已复制';setTimeout(()=>copyBtn.textContent='复制',900)});stack.appendChild(resendBtn);stack.appendChild(viewThreadBtn);stack.appendChild(copyBtn);stack.appendChild(feedback);cell.appendChild(stack);row.appendChild(cell)}
@@ -4100,7 +4282,7 @@ function appendEmojiText(target,text){target.textContent='';const value=String(t
 function emojiURL(name){return emojiLibrary[name]||emojiLibrary['['+name+']']||''}
 function isXHHEmojiName(name){return /^(cube|heygirl|grandemoji|bigemoji)_[^\s\[\]]+$/.test(String(name||''))}
 function appendPostCell(row,item){const cell=document.createElement('td');const title=postTitleText(item);const href=postHref(item.linkId);if(href&&title){const link=document.createElement('a');link.className='stream-post-title';link.href=href;link.target='_blank';link.rel='noopener noreferrer';link.textContent=title;cell.appendChild(link)}else{cell.textContent=title||'—'}row.appendChild(cell)}
-function postTitleText(item){return cleanText(item?.postTitle||item?.title||'')||(item?.linkId?('帖子 '+item.linkId):'')}
+function postTitleText(item){return cleanText(item?.postTitle||item?.title||postTitlesMap[item?.linkId]||'')||(item?.linkId?('帖子 '+item.linkId):'')}
 function postHref(linkId){const id=Number(linkId||0);if(!Number.isFinite(id)||id<=0)return'';return 'https://www.xiaoheihe.cn/app/bbs/link/'+id}
 function renderTokenRecords(items){renderTokenStats(tokenStats(items))}
 function tokenStats(items){const now=Date.now();let total=0;let hour=0;let day=0;for(const item of items||[]){if(!item.tokens)continue;total+=item.tokens;const time=parseItemTime(item.time);if(!time)continue;const age=now-time.getTime();if(age>=0&&age<=3600000)hour+=item.tokens;if(age>=0&&age<=86400000)day+=item.tokens}return{total,hour,day}}
