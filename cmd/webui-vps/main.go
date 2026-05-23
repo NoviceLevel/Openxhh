@@ -37,6 +37,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/mattn/go-sqlite3"
 	"openxhh/db"
+	"openxhh/xhh"
 )
 
 const defaultAddr = ":29173"
@@ -996,23 +997,40 @@ func (s *serverState) handleEmojis(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *serverState) refreshCommentThreadCache(cfg appConfig, session xhhSession, record commentThreadRecord, replyText string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-	var thread []commentThreadItem
-	var err error
-	if record.CommentID > 0 || record.RootCommentID > 0 {
-		thread, err = fetchXHHCommentThread(ctx, cfg, session, record)
-	} else if record.LinkID > 0 {
-		thread, _, err = fetchXHHPostComments(ctx, cfg, session, record.LinkID, replyText)
+	rootID := int(record.RootCommentID)
+	if rootID <= 0 {
+		rootID = int(record.CommentID)
 	}
-	if err != nil {
-		fmt.Printf("[楼层缓存]后台刷新失败 link_id=%d err=%v\n", record.LinkID, err)
-		return
-	}
-	if len(thread) > 0 {
+	comments := xhh.FetchCommentFloor(int(record.LinkID), rootID)
+	if len(comments) > 0 {
+		thread := commentInfosToThreadItems(comments)
 		saveCommentThreadToCache(record.LinkID, record.RootCommentID, thread)
 		fmt.Printf("[楼层缓存]后台刷新完成 link_id=%d count=%d\n", record.LinkID, len(thread))
+	} else {
+		fmt.Printf("[楼层缓存]后台刷新无数据 link_id=%d\n", record.LinkID)
 	}
+}
+
+func commentInfosToThreadItems(comments []xhh.CommentInfo) []commentThreadItem {
+	items := make([]commentThreadItem, len(comments))
+	for i, c := range comments {
+		items[i] = commentThreadItem{
+			CommentID:     int64(c.CommentID),
+			ReplyID:       int64(c.ReplyID),
+			FloorNum:      int64(c.FloorNum),
+			UserID:        int64(c.UserID),
+			UserName:      c.User.UserName,
+			ReplyUserName: c.ReplyUser.UserName,
+			Text:          c.Text,
+		}
+		if len(c.CreatedAt) > 0 {
+			var ts int64
+			if json.Unmarshal(c.CreatedAt, &ts) == nil && ts > 0 {
+				items[i].CreatedAt = time.Unix(ts, 0).Format("2006-01-02 15:04")
+			}
+		}
+	}
+	return items
 }
 
 func saveCommentThreadToCache(linkID int64, rootCommentID int64, thread []commentThreadItem) {
