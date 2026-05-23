@@ -1040,47 +1040,35 @@ func (s *serverState) handleCommentThread(w http.ResponseWriter, r *http.Request
 	}
 
 	mode := "thread"
-	source := "cache"
+	source := "xhh"
 	postTitle := strings.TrimSpace(payload.Title)
 	session := s.loadXHHSession()
 	var thread []commentThreadItem
 	if record.CommentID > 0 || record.RootCommentID > 0 {
-		var cachedThread []commentThreadItem
-		var cachedTitle string
-		var cachedOK bool
-		if !payload.Force {
-			cachedThread, cachedTitle, _, cachedOK = s.lookupSQLiteCommentThreadCache(cfg, record, payload.ReplyText)
-		}
-		if cachedOK && len(cachedThread) > 0 {
-			thread = cachedThread
-			postTitle = firstNonEmpty(postTitle, cachedTitle)
-		} else {
-			thread, err = fetchXHHCommentThread(r.Context(), cfg, session, record)
-			if err != nil || len(thread) == 0 {
+		thread, err = fetchXHHCommentThread(r.Context(), cfg, session, record)
+		if err != nil || len(thread) == 0 {
+			cachedThread, cachedTitle, _, ok := s.lookupSQLiteCommentThreadCache(cfg, record, payload.ReplyText)
+			if ok && len(cachedThread) > 0 {
+				thread = cachedThread
+				postTitle = firstNonEmpty(postTitle, cachedTitle)
+				source = "cache"
+			} else {
 				thread = fallbackCommentThread(record)
 				source = "local"
-			} else {
-				source = "xhh"
 			}
 		}
 	} else {
 		mode = "post"
-		var cachedThread []commentThreadItem
-		var cachedTitle string
-		var cachedOK bool
-		if !payload.Force {
-			cachedThread, cachedTitle, _, cachedOK = s.lookupSQLiteCommentThreadCache(cfg, record, payload.ReplyText)
-		}
-		if cachedOK && len(cachedThread) > 0 {
-			thread = cachedThread
-			postTitle = firstNonEmpty(postTitle, cachedTitle)
-		} else {
-			thread, postTitle, err = fetchXHHPostComments(r.Context(), cfg, session, record.LinkID, payload.ReplyText)
-			if err != nil || len(thread) == 0 {
+		thread, postTitle, err = fetchXHHPostComments(r.Context(), cfg, session, record.LinkID, payload.ReplyText)
+		if err != nil || len(thread) == 0 {
+			cachedThread, cachedTitle, _, ok := s.lookupSQLiteCommentThreadCache(cfg, record, payload.ReplyText)
+			if ok && len(cachedThread) > 0 {
+				thread = cachedThread
+				postTitle = firstNonEmpty(postTitle, cachedTitle)
+				source = "cache"
+			} else {
 				thread = []commentThreadItem{}
 				source = "post_empty"
-			} else {
-				source = "xhh"
 			}
 		}
 	}
