@@ -11,7 +11,7 @@ import (
 	"go.uber.org/zap"
 )
 
-const messageStreamTrackInterval = 120 * time.Second
+const messageStreamTrackInterval = 60 * time.Second
 const messageStreamTrackStartupDelay = 90 * time.Second
 const messageStreamTrackItemDelay = 800 * time.Millisecond
 const defaultMessageStreamTrackBatchSize = 10
