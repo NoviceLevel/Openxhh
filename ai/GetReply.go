@@ -1,7 +1,6 @@
 package ai
 
 import (
-	"fmt"
 	"openxhh/config"
 	"openxhh/loger"
 	"strings"
@@ -21,14 +20,13 @@ func GetAiReply(Contents []Content, UserSay string, Topics []Topics, Tags []Tags
 }
 
 func GetAiReplyWithPrompt(prompt string, Contents []Content, UserSay string, Topics []Topics, Tags []Tags, logFields ...zap.Field) string {
-	askFields := append([]zap.Field{zap.Any("Content", Contents)}, logFields...)
+	askFields := append([]zap.Field{zap.Int("content_count", len(Contents)), zap.Int("text_len", len(UserSay))}, logFields...)
 	loger.Loger.Info("[Ai]正在询问Ai", askFields...)
 	var SMsg Messages[string]
 	var UMsg Messages[[]Content]
 	var Msgs []any
 	SMsg.Role = "system"
 	prompt = applyPromptVariables(prompt, Topics, Tags)
-	fmt.Println(prompt)
 	SMsg.Content = prompt
 	UMsg.Role = "user"
 	var UserContent Content
@@ -46,7 +44,7 @@ func GetAiReplyWithPrompt(prompt string, Contents []Content, UserSay string, Top
 	}
 	text := resp.Choices[0].Msg.Content
 	appendTokenRecord(aiModel, resp.Usage.TotalToken)
-	replyFields := append([]zap.Field{zap.String("text", text), zap.Int("本次消耗token", resp.Usage.TotalToken)}, logFields...)
+	replyFields := append([]zap.Field{zap.String("text", truncateString(text, 100)), zap.Int("本次消耗token", resp.Usage.TotalToken)}, logFields...)
 	loger.Loger.Info("[Ai]Ai说：", replyFields...)
 	if isRejectionReply(text) {
 		loger.Loger.Warn("[Ai]Ai拒绝回答（安全审核）", append(logFields, zap.String("text", text))...)
@@ -90,4 +88,12 @@ func applyPromptVariables(prompt string, Topics []Topics, Tags []Tags) string {
 	}
 	prompt = strings.ReplaceAll(prompt, "?!tag!?", tagStr.String())
 	return prompt
+}
+
+func truncateString(s string, maxLen int) string {
+	runes := []rune(s)
+	if len(runes) <= maxLen {
+		return s
+	}
+	return string(runes[:maxLen]) + "..."
 }
