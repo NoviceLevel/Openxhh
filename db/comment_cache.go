@@ -210,6 +210,50 @@ func saveCommentCacheItem(comment CommentCacheItem, updatedAt int64) bool {
 	return false
 }
 
+func CachedSubCommentItems(rootCommentID int) []CommentCacheItem {
+	if !commentCacheDatabaseReady() || rootCommentID <= 0 {
+		return nil
+	}
+	ctx := context.Background()
+	if cfg.Type == "pg" {
+		rows, err := pg.Conn.Query(ctx, `SELECT comment_id,root_comment_id,reply_id,floor_num,user_id,COALESCE(user_name,''),COALESCE(text,''),COALESCE(created_at,'')
+			FROM xhh_comment_cache WHERE root_comment_id=$1 AND comment_id<>$1 ORDER BY comment_id ASC`, rootCommentID)
+		if err != nil {
+			loger.Loger.Warn("[DB]无法查询缓存子评论", zap.Error(err), zap.Int("root_comment_id", rootCommentID))
+			return nil
+		}
+		defer rows.Close()
+		var items []CommentCacheItem
+		for rows.Next() {
+			var c CommentCacheItem
+			if err := rows.Scan(&c.CommentID, &c.RootCommentID, &c.ReplyID, &c.FloorNum, &c.UserID, &c.UserName, &c.Text, &c.CreatedAt); err != nil {
+				continue
+			}
+			items = append(items, c)
+		}
+		return items
+	}
+	if cfg.Type == "sqlite" {
+		rows, err := sqlite.Db.Query(`SELECT comment_id,root_comment_id,reply_id,floor_num,user_id,COALESCE(user_name,''),COALESCE(text,''),COALESCE(created_at,'')
+			FROM xhh_comment_cache WHERE root_comment_id=? AND comment_id<>? ORDER BY comment_id ASC`, rootCommentID, rootCommentID)
+		if err != nil {
+			loger.Loger.Warn("[DB]无法查询缓存子评论", zap.Error(err), zap.Int("root_comment_id", rootCommentID))
+			return nil
+		}
+		defer rows.Close()
+		var items []CommentCacheItem
+		for rows.Next() {
+			var c CommentCacheItem
+			if err := rows.Scan(&c.CommentID, &c.RootCommentID, &c.ReplyID, &c.FloorNum, &c.UserID, &c.UserName, &c.Text, &c.CreatedAt); err != nil {
+				continue
+			}
+			items = append(items, c)
+		}
+		return items
+	}
+	return nil
+}
+
 func commentCacheDatabaseReady() bool {
 	if cfg.Type == "pg" {
 		return pg.Conn != nil
