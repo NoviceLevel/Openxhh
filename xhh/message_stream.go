@@ -348,7 +348,11 @@ func trackedInboundCommentIDs(comments []CommentInfo, rootID int, botCommentID i
 		if !isTrackableInboundComment(comment, botCommentID, outbound) {
 			continue
 		}
-		if comment.ReplyID == botCommentID {
+		if rootID == botCommentID {
+			if comment.ReplyID == 0 || comment.ReplyID == botCommentID {
+				tracked[comment.CommentID] = true
+			}
+		} else if comment.ReplyID == botCommentID {
 			tracked[comment.CommentID] = true
 		}
 	}

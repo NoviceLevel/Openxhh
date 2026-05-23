@@ -150,7 +150,7 @@ func TestShouldSaveTrackedInboundForBotFloorComment(t *testing.T) {
 	Info.HeyBoxId = "42"
 	t.Cleanup(func() { Info.HeyBoxId = oldHeyBoxID })
 
-	comment := CommentInfo{CommentID: 71, UserID: 7, ReplyID: 70, Text: "机器人楼层下的新评论"}
+	comment := CommentInfo{CommentID: 71, UserID: 7, Text: "机器人楼层下的新评论"}
 	outbound := db.OutboundMessage{Text: "机器人顶级评论"}
 
 	if !shouldSaveTrackedInbound(comment, 70, 70, outbound) {
