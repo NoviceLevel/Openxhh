@@ -1001,13 +1001,13 @@ func (s *serverState) refreshCommentThreadCache(cfg appConfig, session xhhSessio
 	if rootID <= 0 {
 		rootID = int(record.CommentID)
 	}
-	comments := xhh.FetchCommentFloor(int(record.LinkID), rootID)
-	if len(comments) > 0 {
+	comments, actualRootID := xhh.FetchCommentFloor(int(record.LinkID), rootID)
+	if len(comments) > 0 && actualRootID > 0 {
 		thread := commentInfosToThreadItems(comments)
-		saveCommentThreadToCache(record.LinkID, record.RootCommentID, thread)
-		fmt.Printf("[楼层缓存]后台刷新完成 link_id=%d count=%d\n", record.LinkID, len(thread))
+		saveCommentThreadToCache(record.LinkID, int64(actualRootID), thread)
+		fmt.Printf("[楼层缓存]后台刷新完成 link_id=%d root=%d count=%d\n", record.LinkID, actualRootID, len(thread))
 	} else {
-		fmt.Printf("[楼层缓存]后台刷新无数据 link_id=%d\n", record.LinkID)
+		fmt.Printf("[楼层缓存]后台刷新无数据 link_id=%d root=%d\n", record.LinkID, rootID)
 	}
 }
 

@@ -1189,7 +1189,8 @@ func FindCommentUserName(linkID, rootCommentID, commentID, targetUserID int) str
 }
 
 // FetchCommentFloor 拉取指定楼层的完整评论（含子评论），自动写入缓存。
-func FetchCommentFloor(linkID int, rootCommentID int) []CommentInfo {
+// 返回 (comments, rootCommentID)。
+func FetchCommentFloor(linkID int, rootCommentID int) ([]CommentInfo, int) {
 	maxPage := 1
 	for page := 1; page <= maxPage && page <= maxMessagePages; page++ {
 		resp, ok := fetchLinkInfoPage(linkID, page)
@@ -1210,8 +1211,8 @@ func FetchCommentFloor(linkID int, rootCommentID int) []CommentInfo {
 			comments := make([]CommentInfo, len(group.Comment))
 			copy(comments, group.Comment)
 			budget := 40
-			return fetchAllSubComments(groupRootID, comments, &budget)
+			return fetchAllSubComments(groupRootID, comments, &budget), groupRootID
 		}
 	}
-	return nil
+	return nil, 0
 }
