@@ -114,6 +114,19 @@ type recordLinkLookup struct {
 	PostTitles        map[int64]string `json:"postTitles,omitempty"`
 }
 
+type failedRecord struct {
+	Time      string `json:"time"`
+	User      string `json:"user"`
+	Question  string `json:"question"`
+	Reply     string `json:"reply"`
+	Status    string `json:"status"`
+	LastError string `json:"lastError,omitempty"`
+	MsgID     int64  `json:"msgId,omitempty"`
+	CommentID int64  `json:"commentId,omitempty"`
+	LinkID    int64  `json:"linkId,omitempty"`
+	PostTitle string `json:"postTitle,omitempty"`
+}
+
 type regenerateCandidate struct {
 	MsgID     int64
 	CommentID int64
@@ -448,6 +461,7 @@ func main() {
 	mux.HandleFunc("/api/logs", state.requireAuth(state.handleLogs))
 	mux.HandleFunc("/api/logs/read", state.requireAuth(state.handleReadLog))
 	mux.HandleFunc("/api/records", state.requireAuth(state.handleRecords))
+	mux.HandleFunc("/api/failed-records", state.requireAuth(state.handleFailedRecords))
 	mux.HandleFunc("/api/message-stream", state.requireAuth(state.handleMessageStream))
 	mux.HandleFunc("/api/feed-records", state.requireAuth(state.handleFeedRecords))
 
@@ -2353,6 +2367,502 @@ func (s *serverState) handleRecords(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "content": content, "sources": sources, "tokens": tokens, "links": links})
 }
 
+func (s *serverState) handleFailedRecords(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	content, _, err := s.readRecordLogs(true)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	records := parseFailedRecords(content)
+	cfg, err := s.readConfigForRecordLookup()
+	if err == nil {
+		enrichFailedRecordTitles(s, cfg, records)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "records": records})
+}
+
+func parseFailedRecords(content string) []failedRecord {
+	lines := strings.Split(content, "\n")
+	var items []failedRecord
+	var pending []failedRecord
+	var lastAnswered *failedRecord
+	var currentMsg *failedRecord
+	for _, line := range lines {
+		if strings.Contains(line, "[FeedReply]") || strings.Contains(line, "\"feed_reply\"") || strings.Contains(line, "\"feedReply\"") {
+			continue
+		}
+		if strings.Contains(line, "[XHH]正在处理@消息") {
+			r := parseInteractionLine(line)
+			if r != nil {
+				currentMsg = r
+			}
+			continue
+		}
+		if strings.Contains(line, "[Ai]正在询问Ai") {
+			r := parseInteractionLine(line)
+			if r != nil {
+				if currentMsg != nil {
+					mergeRecordContext(r, currentMsg)
+				}
+				pending = append(pending, *r)
+				currentMsg = nil
+			}
+			continue
+		}
+		if strings.Contains(line, "[Ai]Ai说：") {
+			r := parseInteractionLine(line)
+			if r == nil {
+				continue
+			}
+			idx := findPendingRecordIndex(pending, r)
+			var item failedRecord
+			if idx >= 0 {
+				item = pending[idx]
+				pending = append(pending[:idx], pending[idx+1:]...)
+			} else if len(pending) > 0 {
+				item = pending[0]
+				pending = pending[1:]
+			}
+			if item.Question == "" {
+				continue
+			}
+			text := extractLogTextField(line)
+			if text == "" {
+				text = stripGoLogPrefix(line)
+			}
+			item.Reply = text
+			item.Status = "已回复"
+			if r.MsgID > 0 {
+				item.MsgID = r.MsgID
+			}
+			if r.CommentID > 0 {
+				item.CommentID = r.CommentID
+			}
+			if r.LinkID > 0 {
+				item.LinkID = r.LinkID
+			}
+			if item.Time == "—" && r.Time != "—" && r.Time != "" {
+				item.Time = r.Time
+			}
+			items = append(items, item)
+			lastAnswered = &item
+			if len(items) > 0 {
+				lastAnswered = &items[len(items)-1]
+			}
+			continue
+		}
+		if isGoSendAnomalyLine(line) && lastAnswered != nil && lastAnswered.Status == "已回复" {
+			lastAnswered.Status = "异常发送"
+			lastAnswered.LastError = stripGoLogPrefix(line)
+			continue
+		}
+		if isGoFailureLine(line) {
+			fr := parseStandaloneGoFailure(line)
+			if currentMsg != nil {
+				mergeRecordContext(&fr, currentMsg)
+			}
+			idx := findPendingRecordIndex(pending, &fr)
+			if idx >= 0 {
+				item := pending[idx]
+				pending = append(pending[:idx], pending[idx+1:]...)
+				item.LastError = fr.Reply
+				if item.LastError == "" {
+					item.LastError = "AI 回复失败"
+				}
+				item.Status = "失败"
+				if fr.LinkID > 0 && item.LinkID == 0 {
+					item.LinkID = fr.LinkID
+				}
+				items = append(items, item)
+				currentMsg = nil
+				continue
+			}
+			if fr.Question != "" && fr.Reply != "" {
+				items = append(items, fr)
+				currentMsg = nil
+			}
+		}
+	}
+	for _, item := range pending {
+		if item.Question != "" {
+			if item.Status == "待重试" || item.LastError != "" {
+				if item.LastError != "" {
+					item.Reply = item.LastError
+				} else {
+					item.Reply = "AI 回复失败"
+				}
+				item.Status = "失败"
+			}
+			items = append(items, item)
+		}
+	}
+	result := make([]failedRecord, 0, len(items))
+	for _, item := range items {
+		if isErrorGoStatus(item.Status) && item.Question != "" {
+			result = append(result, item)
+		}
+	}
+	return dedupeFailedRecords(result)
+}
+
+func isErrorGoStatus(status string) bool {
+	return status == "失败" || status == "异常发送"
+}
+
+func isGoFailureLine(line string) bool {
+	return strings.Contains(line, "Ai返回错误") ||
+		strings.Contains(line, "无法回复评论") ||
+		strings.Contains(line, "评论发送失败") ||
+		strings.Contains(line, "图片评论处理失败") ||
+		strings.Contains(line, "无法整理@消息") ||
+		strings.Contains(line, "comment/create image reply failed") ||
+		strings.Contains(line, "错误") ||
+		strings.Contains(line, "失败") ||
+		strings.Contains(line, "异常")
+}
+
+func isGoSendAnomalyLine(line string) bool {
+	return strings.Contains(line, "异常发送") ||
+		strings.Contains(line, "因为无法评论") ||
+		strings.Contains(line, "评论发送失败") ||
+		strings.Contains(line, "comment/create image reply failed")
+}
+
+func parseInteractionLine(line string) *failedRecord {
+	payload := logJSONPayload(line)
+	if payload == nil {
+		return nil
+	}
+	r := &failedRecord{
+		Time: extractGoTime(line),
+	}
+	r.MsgID = goIntField(payload, "msg_id", "msgId", "message_id")
+	r.CommentID = goIntField(payload, "comment_id", "commentId", "reply_id")
+	r.LinkID = goIntField(payload, "link_id", "linkId")
+	r.User = goCleanText(goFirstNonEmpty(
+		payload["user_name"], payload["userName"], payload["user"],
+	))
+	r.Question = goFullQuestionText(payload)
+	return r
+}
+
+func parseStandaloneGoFailure(line string) failedRecord {
+	payload := logJSONPayload(line)
+	r := failedRecord{
+		Time:   extractGoTime(line),
+		Reply:  goFailureText(line),
+		Status: "失败",
+	}
+	if payload != nil {
+		r.CommentID = goIntField(payload, "reply_id", "comment_id", "commentId")
+		r.LinkID = goIntField(payload, "link_id", "linkId")
+		r.User = goCleanText(goFirstNonEmpty(
+			payload["user_name"], payload["userName"], payload["user"],
+		))
+		r.Question = goFullQuestionText(payload)
+	}
+	return r
+}
+
+func mergeRecordContext(target, ctx *failedRecord) {
+	if ctx == nil || target == nil {
+		return
+	}
+	if ctx.MsgID > 0 && target.MsgID == 0 {
+		target.MsgID = ctx.MsgID
+	}
+	if ctx.CommentID > 0 && target.CommentID == 0 {
+		target.CommentID = ctx.CommentID
+	}
+	if ctx.LinkID > 0 && target.LinkID == 0 {
+		target.LinkID = ctx.LinkID
+	}
+	if (target.User == "" || target.User == "未知用户") && ctx.User != "" {
+		target.User = ctx.User
+	}
+	if ctx.Question != "" && target.Question == "" {
+		target.Question = ctx.Question
+	}
+	if (target.Time == "—" || target.Time == "") && ctx.Time != "" && ctx.Time != "—" {
+		target.Time = ctx.Time
+	}
+}
+
+func findPendingRecordIndex(pending []failedRecord, ctx *failedRecord) int {
+	if ctx == nil {
+		return -1
+	}
+	if ctx.MsgID > 0 {
+		for i := range pending {
+			if pending[i].MsgID > 0 && pending[i].MsgID == ctx.MsgID {
+				return i
+			}
+		}
+	}
+	if ctx.CommentID > 0 {
+		for i := range pending {
+			if pending[i].CommentID > 0 && pending[i].CommentID == ctx.CommentID {
+				return i
+			}
+		}
+	}
+	cu := goNormalizeText(ctx.User)
+	cq := goNormalizeText(ctx.Question)
+	for i := range pending {
+		if goNormalizeText(pending[i].User) == cu && goNormalizeText(pending[i].Question) == cq {
+			return i
+		}
+	}
+	return -1
+}
+
+func failedRecordKey(r failedRecord) string {
+	if r.MsgID > 0 || r.CommentID > 0 {
+		return fmt.Sprintf("%d|%d", r.MsgID, r.CommentID)
+	}
+	return fmt.Sprintf("%d|%s|%s|%s|%s", r.LinkID, r.Time, goNormalizeText(r.User), goNormalizeText(r.Question), goNormalizeText(r.Reply))
+}
+
+func dedupeFailedRecords(items []failedRecord) []failedRecord {
+	seen := map[string]int{}
+	var result []failedRecord
+	for _, item := range items {
+		key := failedRecordKey(item)
+		if key == "" {
+			result = append(result, item)
+			continue
+		}
+		if idx, ok := seen[key]; ok {
+			existing := result[idx]
+			if rankGoStatus(item.Status) > rankGoStatus(existing.Status) {
+				result[idx] = item
+			}
+		} else {
+			seen[key] = len(result)
+			result = append(result, item)
+		}
+	}
+	return result
+}
+
+func rankGoStatus(status string) int {
+	switch status {
+	case "异常发送":
+		return 4
+	case "已回复":
+		return 3
+	case "失败":
+		return 2
+	case "待重试":
+		return 1
+	default:
+		return 0
+	}
+}
+
+func enrichFailedRecordTitles(s *serverState, cfg appConfig, records []failedRecord) {
+	seen := map[int64]struct{}{}
+	var linkIDs []int64
+	for i := range records {
+		id := records[i].LinkID
+		if id > 0 {
+			if _, ok := seen[id]; !ok {
+				seen[id] = struct{}{}
+				linkIDs = append(linkIDs, id)
+			}
+		}
+	}
+	if len(linkIDs) == 0 {
+		return
+	}
+	titles := map[int64]string{}
+	switch strings.ToLower(strings.TrimSpace(cfg.DataBase.Type)) {
+	case "", "sqlite":
+		_ = s.fillSQLiteRecordPostTitles(linkIDs, titles)
+	case "pg", "postgres", "postgresql":
+		_ = fillPostgresRecordPostTitles(cfg, linkIDs, titles)
+	}
+	s.messageStreamMetaMu.RLock()
+	for _, id := range linkIDs {
+		if titles[id] == "" {
+			if info, ok := s.messageStreamMeta[id]; ok && info.Title != "" {
+				titles[id] = info.Title
+			}
+		}
+	}
+	s.messageStreamMetaMu.RUnlock()
+	for i := range records {
+		if t := titles[records[i].LinkID]; t != "" {
+			records[i].PostTitle = t
+		}
+	}
+}
+
+func extractGoTime(line string) string {
+	re := regexp.MustCompile(`(20\d{2}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})`)
+	if m := re.FindStringSubmatch(line); len(m) > 2 {
+		return m[1] + " " + m[2]
+	}
+	re2 := regexp.MustCompile(`(20\d{2}-\d{2}-\d{2})`)
+	if m := re2.FindStringSubmatch(line); len(m) > 0 {
+		return m[1]
+	}
+	return "—"
+}
+
+func goIntField(payload map[string]any, fields ...string) int64 {
+	for _, field := range fields {
+		if v, ok := payload[field]; ok {
+			switch val := v.(type) {
+			case float64:
+				if val > 0 {
+					return int64(val)
+				}
+			case int64:
+				if val > 0 {
+					return val
+				}
+			}
+		}
+	}
+	return 0
+}
+
+func goFirstNonEmpty(vals ...any) string {
+	for _, v := range vals {
+		if s, ok := v.(string); ok {
+			s = strings.TrimSpace(s)
+			if s != "" {
+				return s
+			}
+		}
+	}
+	return ""
+}
+
+func goCleanText(text string) string {
+	if text == "" {
+		return "未知用户"
+	}
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return "未知用户"
+	}
+	return text
+}
+
+func goNormalizeText(text string) string {
+	text = strings.TrimSpace(text)
+	text = strings.ToLower(text)
+	return text
+}
+
+func goFullQuestionText(payload map[string]any) string {
+	for _, key := range []string{"raw_text", "rawQuestion", "raw_question", "user_say", "userSay", "comment_text", "text", "question"} {
+		if v, ok := payload[key]; ok {
+			if s, ok := v.(string); ok {
+				s = strings.TrimSpace(s)
+				if s != "" {
+					return s
+				}
+			}
+		}
+	}
+	if content, ok := payload["Content"]; ok {
+		if arr, ok := content.([]any); ok {
+			return extractGoUserQuestion(arr)
+		}
+	}
+	return ""
+}
+
+func extractGoUserQuestion(content []any) string {
+	type candidate struct {
+		user string
+		text string
+	}
+	var candidates []candidate
+	for _, item := range content {
+		obj, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		text, _ := obj["text"].(string)
+		if text == "" || !strings.Contains(text, "评论") || !strings.Contains(text, "上下文") {
+			continue
+		}
+		lines := strings.Split(text, "\n")
+		for _, l := range lines {
+			trimmed := strings.TrimSpace(l)
+			if trimmed == "" {
+				continue
+			}
+			var user, body string
+			if idx := strings.Index(trimmed, " 回复 "); idx > 0 {
+				rest := trimmed[idx+len(" 回复 "):]
+				if ci := strings.Index(rest, "："); ci > 0 {
+					user = trimmed[:idx]
+					body = rest[ci+len("："):]
+				}
+			} else if idx := strings.Index(trimmed, "："); idx > 0 {
+				user = trimmed[:idx]
+				body = trimmed[idx+len("："):]
+			}
+			if user != "" {
+				candidates = append(candidates, candidate{user: user, text: body})
+			}
+		}
+	}
+	if len(candidates) == 0 {
+		return ""
+	}
+	for i := len(candidates) - 1; i >= 0; i-- {
+		if strings.Contains(candidates[i].text, "@") {
+			return candidates[i].text
+		}
+	}
+	return candidates[len(candidates)-1].text
+}
+
+func goFailureText(line string) string {
+	if idx := strings.Index(line, "[Ai]"); idx >= 0 {
+		return strings.TrimSpace(line[idx:])
+	}
+	payload := logJSONPayload(line)
+	if payload != nil {
+		if v, ok := payload["error"]; ok {
+			if s, ok := v.(string); ok && s != "" {
+				return s
+			}
+		}
+	}
+	return strings.TrimSpace(line)
+}
+
+func extractLogTextField(line string) string {
+	payload := logJSONPayload(line)
+	if payload == nil {
+		return ""
+	}
+	if v, ok := payload["text"]; ok {
+		if s, ok := v.(string); ok {
+			return s
+		}
+	}
+	return ""
+}
+
+func stripGoLogPrefix(line string) string {
+	if idx := strings.Index(line, "{"); idx >= 0 {
+		return strings.TrimSpace(line[idx:])
+	}
+	return strings.TrimSpace(line)
+}
+
 func (s *serverState) handleMessageStream(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -4139,7 +4649,7 @@ bindAction(['serviceStopBtn'],'/api/stop','停止命令已发送');
 bindAction(['serviceRestartBtn','homeRestartBtn','configRestartBtn'],'/api/restart','重启命令已发送');
 for(const id of ['homeRefreshBtn','serviceRefreshBtn']){const el=document.querySelector('#'+id);if(el)el.addEventListener('click',()=>{refreshStatus();loadLogs();if(id==='homeRefreshBtn')loadAllRecords(true)})}
 document.querySelector('#recordsRefreshBtn')?.addEventListener('click',()=>loadAllRecords(true));
-document.querySelector('#failedRecordsRefreshBtn')?.addEventListener('click',()=>loadAllRecords(true));
+document.querySelector('#failedRecordsRefreshBtn')?.addEventListener('click',()=>loadFailedRecords(true));
 document.querySelector('#inboundRecordsRefreshBtn')?.addEventListener('click',()=>loadAllRecords(true));
 document.querySelector('#logoutBtn').addEventListener('click',async()=>{await api('/logout',{method:'POST'});location.reload()});
 commentOverlayClose?.addEventListener('click',event=>{event.stopPropagation();hideCommentThread()});
@@ -4190,30 +4700,38 @@ async function loadLogs(){const data=await api('/api/logs');const files=data.fil
 async function loadCurrentLog(force=false){if(activeView!=='logs')return;if(!force&&(logPaused||hasLogSelection()||isUsingLogControls()))return;if(force){clearLogLineSelection();window.getSelection()?.removeAllRanges()}if(!currentLog){renderLog('');return}try{const data=await api('/api/logs/read?file='+encodeURIComponent(currentLog));renderLog(data.content||'')}catch(err){renderLog('日志读取失败: '+err.message)}}
 
 function renderLog(content){rawLogContent=content||'';const box=logOutput.parentElement;const scrollTop=box.scrollTop;const shouldScrollLatest=logScrollLatestOnce;logScrollLatestOnce=false;document.querySelector('#currentSource').textContent=currentLogLabel||'暂无日志源';renderLogLines(filterLogContent(rawLogContent));if(shouldScrollLatest){box.scrollTop=box.scrollHeight;requestAnimationFrame(()=>{box.scrollTop=box.scrollHeight})}else{box.scrollTop=Math.min(scrollTop,box.scrollHeight)}}
+async function loadFailedRecords(manual=false){
+	if(!manual&&activeView!=='failed-records')return
+	if(manual&&failedRecordsToast)failedRecordsToast.textContent='正在刷新失败发送...'
+	try{
+		const data=await api('/api/failed-records')
+		const items=Array.isArray(data.records)?data.records:[]
+		renderFailedRecords(items)
+		if(failedRecordsMeta)failedRecordsMeta.textContent='最近24小时 '+formatCount(items.length)+' 条失败发送'
+		if(manual&&failedRecordsToast)failedRecordsToast.textContent='已刷新失败发送'
+	}catch(err){
+		if(failedRecordsMeta)failedRecordsMeta.textContent='失败发送读取失败：'+err.message
+		if(failedRecordsToast)failedRecordsToast.textContent=err.message
+	}}
 async function loadAllRecords(manual=false){
 	if(!manual&&activeView!=='home'&&activeView!=='records'&&activeView!=='inbound-records'&&activeView!=='failed-records')return
 	if(activeView==='records'||activeView==='inbound-records')return loadMessageStream(manual)
-	const toast=activeView==='failed-records'?failedRecordsToast:recordsToast
+	if(activeView==='failed-records')return loadFailedRecords(manual)
 	if(!manual)renderCachedRecordSummary()
-	if(manual&&toast)toast.textContent=activeView==='failed-records'?'正在刷新失败发送...':'正在刷新所有记录...'
+	if(manual&&recordsToast)recordsToast.textContent='正在刷新所有记录...'
 	try{
-		const data=await api(activeView==='failed-records'?'/api/records?window=24h':'/api/records')
+		const data=await api('/api/records')
 		const summary=recordSummaryFromData(data)
 		saveRecordSummaryCache(summary)
 		renderRecordSummary(summary,manual,false)
 	}catch(err){
-		if(activeView==='failed-records'){
-			if(failedRecordsMeta)failedRecordsMeta.textContent='失败发送读取失败：'+err.message
-			if(failedRecordsToast)failedRecordsToast.textContent=err.message
-			return
-		}
 		if(recordsMeta)recordsMeta.textContent='记录读取失败：'+err.message
 		if(recordsToast)recordsToast.textContent=err.message
 	}}
 function recordSummaryFromData(data){const lines=(data.content||'').split('\n').filter(Boolean);const interactions=dedupeInteractions(parseInteractions(lines));applyRecordLinks(interactions,data.links);const completed=interactions.filter(item=>item.status==='已回复'&&item.question&&item.reply);const failedRecords=interactions.filter(item=>isErrorStatus(item.status)&&item.question&&item.reply);const pending=interactions.filter(item=>item.status==='待回复'||item.status==='待重试').length;const records=interactions.filter(item=>(item.status==='已回复'||isErrorStatus(item.status))&&item.question&&item.reply);const tokenItems=Array.isArray(data.tokens)&&data.tokens.length?data.tokens:interactions.filter(item=>item.tokens);const postTitles=data.links&&data.links.postTitles?data.links.postTitles:{};return{cachedAt:Date.now(),sources:Number(data.sources||0),interactionsCount:interactions.length,completedCount:completed.length,failedCount:failedRecords.length,failedRecords,pending,recordsCount:records.length,trendItems:completed.map(item=>({time:item.time})),tokenStats:tokenStats(tokenItems),postTitles}}
 function renderCachedRecordSummary(){try{const raw=sessionStorage.getItem(recordSummaryCacheStorageKey);if(!raw)return;const summary=JSON.parse(raw);if(!summary||typeof summary!=='object')return;if(Date.now()-Number(summary.cachedAt||0)>recordSummaryCacheTTL)return;renderRecordSummary(summary,false,true)}catch(err){sessionStorage.removeItem(recordSummaryCacheStorageKey)}}
 function saveRecordSummaryCache(summary){try{sessionStorage.setItem(recordSummaryCacheStorageKey,JSON.stringify(summary))}catch(err){try{sessionStorage.setItem(recordSummaryCacheStorageKey,JSON.stringify({...summary,failedRecords:(summary.failedRecords||[]).slice(0,200)}))}catch(innerErr){}}}
-function renderRecordSummary(summary,manual,fromCache){postTitlesMap=summary.postTitles||{};const failedRecords=Array.isArray(summary.failedRecords)?summary.failedRecords:[];if(activeView==='failed-records'){renderFailedRecords(failedRecords);if(failedRecordsMeta)failedRecordsMeta.textContent=(fromCache?'已显示缓存 ':'已读取 ')+formatCount(summary.failedCount??failedRecords.length)+' 条失败发送，来源 '+formatCount(summary.sources||0)+' 个日志源';if(manual&&!fromCache&&failedRecordsToast)failedRecordsToast.textContent='已刷新失败发送';return}document.querySelector('#metricStatus').textContent=formatCount(summary.interactionsCount||0);document.querySelector('#metricLines').textContent=formatCount(summary.completedCount||0);document.querySelector('#metricErrors').textContent=formatCount(summary.failedCount??failedRecords.length);document.querySelector('#metricFiles').textContent=formatCount(summary.pending||0);renderTrend(Array.isArray(summary.trendItems)?summary.trendItems:[]);renderTokenStats(summary.tokenStats||{});if(recordsMeta)recordsMeta.textContent=(fromCache?'已显示缓存 ':'已读取 ')+formatCount(summary.recordsCount||0)+' 条日志记录，来源 '+formatCount(summary.sources||0)+' 个日志源';if(manual&&!fromCache&&recordsToast)recordsToast.textContent='已刷新所有记录'}
+function renderRecordSummary(summary,manual,fromCache){postTitlesMap=summary.postTitles||{};document.querySelector('#metricStatus').textContent=formatCount(summary.interactionsCount||0);document.querySelector('#metricLines').textContent=formatCount(summary.completedCount||0);document.querySelector('#metricErrors').textContent=formatCount(summary.failedCount||0);document.querySelector('#metricFiles').textContent=formatCount(summary.pending||0);renderTrend(Array.isArray(summary.trendItems)?summary.trendItems:[]);renderTokenStats(summary.tokenStats||{});if(recordsMeta)recordsMeta.textContent=(fromCache?'已显示缓存 ':'已读取 ')+formatCount(summary.recordsCount||0)+' 条日志记录，来源 '+formatCount(summary.sources||0)+' 个日志源';if(manual&&!fromCache&&recordsToast)recordsToast.textContent='已刷新所有记录'}
 async function loadMessageStream(manual=false){
 	if(!manual&&activeView!=='records'&&activeView!=='inbound-records')return
 	const toast=activeStreamToast()
