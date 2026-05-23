@@ -253,12 +253,12 @@ func inboundDedupeByCommentID(record InboundMessage) (bool, error) {
 	}
 	if inboundSourceIsFromApp(existingSource) {
 		if cfg.Type == "pg" {
-			_, err := pg.Conn.Exec(context.Background(), "UPDATE inbound_messages SET source=$1 WHERE comment_id=$2 AND source=$3", record.Source, record.CommentID, existingSource)
+			_, err := pg.Conn.Exec(context.Background(), "UPDATE inbound_messages SET source=$1, user_name=$2, text=$3, link_id=$4, root_comment_id=$5, reply_comment_id=$6, user_id=$7 WHERE comment_id=$8 AND source=$9", record.Source, record.UserName, record.Text, record.LinkID, record.RootCommentID, record.ReplyCommentID, record.UserID, record.CommentID, existingSource)
 			if err != nil {
 				return false, err
 			}
 		} else if cfg.Type == "sqlite" {
-			_, err := sqlite.Db.Exec("UPDATE inbound_messages SET source=? WHERE comment_id=? AND source=?", record.Source, record.CommentID, existingSource)
+			_, err := sqlite.Db.Exec("UPDATE inbound_messages SET source=?, user_name=?, text=?, link_id=?, root_comment_id=?, reply_comment_id=?, user_id=? WHERE comment_id=? AND source=?", record.Source, record.UserName, record.Text, record.LinkID, record.RootCommentID, record.ReplyCommentID, record.UserID, record.CommentID, existingSource)
 			if err != nil {
 				return false, err
 			}
