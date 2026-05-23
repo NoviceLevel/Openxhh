@@ -328,15 +328,6 @@ func syncNotificationsOnce() {
 			loger.Loger.Warn("[通知同步]API 返回非 ok", zap.String("stat", stat), zap.String("body", string(data[:min(len(data), 300)])))
 			return
 		}
-		if page == 0 && len(msgResp.Result.Messages) > 0 {
-			v := msgResp.Result.Messages[0]
-			loger.Loger.Info("[通知同步]首条消息字段",
-				zap.Int("msg_id", v.MsgID), zap.Int("link_id", v.LinkID),
-				zap.Int("root_comment_id", v.RootCommentID), zap.Int("comment_id", v.CommentID),
-				zap.Int("user_id", v.UserID), zap.String("user_name", v.UserName),
-				zap.Int64("created_at", v.CreatedAt),
-				zap.String("text", v.CommentText[:min(len(v.CommentText), 80)]))
-		}
 		for _, v := range msgResp.Result.Messages {
 			if db.SaveInboundMessage(db.InboundMessage{
 				Source:        "notification",
