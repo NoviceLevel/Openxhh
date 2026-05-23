@@ -41,7 +41,7 @@ Openxhh 的目标是让机器人更像一个真的在看帖的人：
 - 支持生图后生成自然短回复，避免暴露 prompt。
 - 支持显式点名 @：例如“给小菲画一张”“问问楼主”“对小菲说”。
 - 支持自动刷帖回复：默认关闭、默认 dry-run，可配置间隔、每轮上限、每日上限和专用 Prompt。
-- 支持消息流追踪：记录“我评论的”和“评论我的”，未 @ 但回复机器人评论的互动也可进入 Web UI。
+- 支持消息流追踪：通过小黑盒通知接口（list_type=0）实时同步”评论我的”，每 60 秒一次；”我评论的”自动记录。
 - 支持 VPS Web UI：配置管理、服务控制、日志筛选、@ 回复记录、机器人发言记录、评论我的、失败记录、token 统计。
 
 ## 最简单安装：VPS / Linux 推荐版
@@ -166,8 +166,6 @@ sudo ./Openxhh -mode start
     "maxReplyThreads": 3,
     "maxPendingReplies": 50,
     "maxPendingRepliesPerUser": 5,
-    "messageStreamTrackDays": 0,
-    "messageStreamTrackBatchSize": 120,
     "enableWhitelist": false,
     "owner": "你的小黑盒数字UID；多个 UID 用英文逗号分隔",
     "deviceID": "",
@@ -230,8 +228,6 @@ sudo ./Openxhh -mode start
 - `xhh.maxPendingReplies` 控制普通用户全局待回复队列上限，默认 `50`。
 - `xhh.maxPendingRepliesPerUser` 控制单个普通用户待回复队列上限，默认 `5`。
 - owner 不受 `maxPendingReplies` 和 `maxPendingRepliesPerUser` 限制。
-- `xhh.messageStreamTrackDays=0` 表示消息流追踪不按天数过期。
-- `xhh.messageStreamTrackBatchSize=120` 是配置默认值；运行时会限制到最多 20 条一批扫描，避免补扫过快触发风控。
 - `ai.baseUrl` 要填完整的 OpenAI 兼容地址，例如 `https://example.com/v1/chat/completions` 或 `https://example.com/v1/responses`。
 - `ai.webSearch=true` 表示普通文字回复默认启用模型联网搜索。
 - `ai.forceWebSearch=false` 表示不强制每次回复都必须调用搜索工具。
@@ -257,7 +253,7 @@ VPS Web UI 提供“配置管理”页，可以读取和保存：
 
 它支持编辑：
 
-- 小黑盒配置：检查间隔、回复间隔、白名单开关、owner UID、普通用户并发、队列上限和消息流追踪参数。
+- 小黑盒配置：检查间隔、回复间隔、白名单开关、owner UID、普通用户并发、队列上限。
 - 数据库配置：SQLite / PostgreSQL。
 - AI 回复配置：模型、Chat Completions / Responses URL、token、回复 prompt、联网搜索开关和搜索上下文强度。
 - 自动刷帖配置：开关、dry-run、刷帖间隔、每轮上限、每日上限和专用 Prompt。
@@ -558,7 +554,7 @@ VPS Web UI 当前重点是运维面板和记录排查。它适合用来：
 - 查看总 token、最近 1 小时 token、最近 24 小时 token；
 - 查看 @ 回复记录，并可从记录打开当前评论所在整层楼；
 - 查看机器人发言记录，包括 AI 回复、图片回复、图片发帖和自动刷帖；
-- 查看“评论我的”，追踪用户直接回复机器人评论或机器人回复链的互动；
+- 查看”评论我的”，通过小黑盒通知接口实时同步评论回复、@ 提及和帖子评论；
 - 查看楼层评论里的头像、评论时间、图片缩略图和小黑盒表情；
 - 查看 AI 失败回复和异常发送状态；
 - 管理日志，支持全部 / 报错 / 用户提问 / AI 回复 / 图片生图 / 自动刷帖筛选；
@@ -910,6 +906,15 @@ sudo systemctl stop Openxhh-webui
 sudo rm -f /opt/Openxhh/webui_auth.json
 sudo systemctl start Openxhh-webui
 sudo journalctl -u Openxhh-webui -n 50 --no-pager
+
+# 手动清理 7 天前的评论缓存（释放 SQLite 空间）
+sqlite3 /opt/Openxhh/sql.db "DELETE FROM xhh_comment_cache WHERE updated_at < strftime('%s','now','-7 days');"
+sqlite3 /opt/Openxhh/sql.db "DELETE FROM xhh_post_cache WHERE updated_at < strftime('%s','now','-7 days');"
+sqlite3 /opt/Openxhh/sql.db "VACUUM;"
+
+# 定期自动清理缓存（建议加入 crontab，每周执行一次）
+# crontab -e 后加入：
+# 0 4 * * 0 sqlite3 /opt/Openxhh/sql.db "DELETE FROM xhh_comment_cache WHERE updated_at < strftime('%s','now','-7 days');" && sqlite3 /opt/Openxhh/sql.db "DELETE FROM xhh_post_cache WHERE updated_at < strftime('%s','now','-7 days');" && sqlite3 /opt/Openxhh/sql.db "VACUUM;"
 ```
 
 ## 默认配置速查
@@ -923,8 +928,6 @@ sudo journalctl -u Openxhh-webui -n 50 --no-pager
 | `xhh.maxReplyThreads` | `3` | 普通用户最高回复并发；owner 不占用普通用户线程槽位 |
 | `xhh.maxPendingReplies` | `50` | 普通用户全局待回复队列上限 |
 | `xhh.maxPendingRepliesPerUser` | `5` | 单个普通用户待回复队列上限 |
-| `xhh.messageStreamTrackDays` | `0` | 消息流追踪不按天数过期 |
-| `xhh.messageStreamTrackBatchSize` | `120`（运行时最多 20） | 每轮追踪历史机器人发言数量，过大也会被限速 |
 | `xhh.enableWhitelist` | `false` | 默认关闭白名单，回复所有 @ |
 | `xhh.baseUrl` | `https://api.xiaoheihe.cn` | 小黑盒 API 地址；VPS 出站 IP 被拒时可改为 Cloudflare Worker 地址 |
 | `xhh.webver` | `2.5` | 小黑盒 Web 版本字段 |
