@@ -135,25 +135,7 @@ func trackOutboundReplies(outbound db.OutboundMessage) messageStreamTrackResult 
 		db.UpdateOutboundMessageComment(outbound.UniqueKey, int64(botCommentID), int64(rootID))
 	}
 	trackedComments := trackedInboundCommentIDs(comments, rootID, botCommentID, outbound)
-	for _, comment := range comments {
-		if !trackedComments[comment.CommentID] {
-			continue
-		}
-		source := inboundMessageStreamSource(comment, rootID, botCommentID)
-		if db.SaveInboundMessage(db.InboundMessage{
-			Source:         source,
-			LinkID:         outbound.LinkID,
-			RootCommentID:  int64(rootID),
-			ReplyCommentID: int64(comment.ReplyID),
-			CommentID:      int64(comment.CommentID),
-			UserID:         int64(comment.UserID),
-			UserName:       CleanXHHRichText(comment.User.UserName),
-			Text:           CleanXHHRichText(comment.Text),
-			CreatedAt:      trackedCommentCreatedAt(comment),
-		}) {
-			result.Saved++
-		}
-	}
+	_ = trackedComments // 缓存已通过 fetchAllSubComments 写入，不再保存 inbound
 	return result
 }
 
@@ -196,19 +178,7 @@ func trackBotPostReplies(outbound db.OutboundMessage) (messageStreamTrackResult,
 				if comment.ReplyID != 0 && !botCommentIDs[comment.ReplyID] {
 					continue
 				}
-				if db.SaveInboundMessage(db.InboundMessage{
-					Source:         inboundMessageStreamPostSource(comment),
-					LinkID:         outbound.LinkID,
-					RootCommentID:  int64(rootID),
-					ReplyCommentID: int64(comment.ReplyID),
-					CommentID:      int64(comment.CommentID),
-					UserID:         int64(comment.UserID),
-					UserName:       CleanXHHRichText(comment.User.UserName),
-					Text:           CleanXHHRichText(comment.Text),
-					CreatedAt:      trackedCommentCreatedAt(comment),
-				}) {
-					result.Saved++
-				}
+				_ = comment // 缓存已通过 fetchAllSubComments 写入
 			}
 		}
 	}
