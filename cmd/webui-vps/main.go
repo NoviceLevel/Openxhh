@@ -2764,10 +2764,7 @@ func goFirstNonEmpty(vals ...any) string {
 }
 
 func goCleanText(text string) string {
-	if text == "" {
-		return "未知用户"
-	}
-	text = strings.TrimSpace(text)
+	text = goStripHTML(text)
 	if text == "" {
 		return "未知用户"
 	}
@@ -2784,7 +2781,7 @@ func goFullQuestionText(payload map[string]any) string {
 	for _, key := range []string{"raw_text", "rawQuestion", "raw_question", "user_say", "userSay", "comment_text", "text", "question"} {
 		if v, ok := payload[key]; ok {
 			if s, ok := v.(string); ok {
-				s = strings.TrimSpace(s)
+				s = goStripHTML(strings.TrimSpace(s))
 				if s != "" {
 					return s
 				}
@@ -2793,7 +2790,7 @@ func goFullQuestionText(payload map[string]any) string {
 	}
 	if content, ok := payload["Content"]; ok {
 		if arr, ok := content.([]any); ok {
-			return extractGoUserQuestion(arr)
+			return goStripHTML(extractGoUserQuestion(arr))
 		}
 	}
 	return ""
@@ -2859,6 +2856,10 @@ func goFailureText(line string) string {
 			}
 		}
 	}
+	msg := extractGoLogMessage(line)
+	if msg != "" {
+		return msg
+	}
 	return strings.TrimSpace(line)
 }
 
@@ -2880,6 +2881,22 @@ func stripGoLogPrefix(line string) string {
 		return strings.TrimSpace(line[idx:])
 	}
 	return strings.TrimSpace(line)
+}
+
+var goLogLineRe = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}\s+\S+\s+`)
+
+func extractGoLogMessage(line string) string {
+	stripped := goLogLineRe.ReplaceAllString(line, "")
+	if jsonIdx := strings.LastIndex(stripped, "{"); jsonIdx > 0 {
+		stripped = strings.TrimSpace(stripped[:jsonIdx])
+	}
+	return strings.TrimSpace(stripped)
+}
+
+var goHTMLTagRe = regexp.MustCompile(`<[^>]*>`)
+
+func goStripHTML(text string) string {
+	return strings.TrimSpace(goHTMLTagRe.ReplaceAllString(text, ""))
 }
 
 func (s *serverState) handleMessageStream(w http.ResponseWriter, r *http.Request) {
