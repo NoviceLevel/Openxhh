@@ -1369,11 +1369,20 @@ func scanPostgresCommentThreadRecord(ctx context.Context, pool *pgxpool.Pool, wh
 }
 
 func fetchXHHCommentThread(ctx context.Context, cfg appConfig, session xhhSession, record commentThreadRecord) ([]commentThreadItem, error) {
+	if record.RootCommentID > 0 {
+		items, err := fetchXHHBackendCommentThread(ctx, cfg, session, record)
+		if err == nil && len(items) > 0 {
+			return expandXHHCommentFloor(ctx, cfg, session, record.RootCommentID, items, record.CommentID, ""), nil
+		}
+	}
 	items, _, err := fetchXHHCommentFloor(ctx, cfg, session, record.LinkID, record.RootCommentID, record.CommentID, "")
 	if err == nil && len(items) > 0 {
 		return items, nil
 	}
-	return fetchXHHBackendCommentThread(ctx, cfg, session, record)
+	if record.RootCommentID <= 0 {
+		return fetchXHHBackendCommentThread(ctx, cfg, session, record)
+	}
+	return nil, err
 }
 
 func (s *serverState) cachedXHHEmojiLibrary(ctx context.Context, cfg appConfig, session xhhSession, now time.Time) (map[string]string, string, string, error) {
