@@ -2200,8 +2200,8 @@ func (s *serverState) openSQLiteDatabase() (*sql.DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	database.SetMaxOpenConns(1)
-	database.SetMaxIdleConns(1)
+	database.SetMaxOpenConns(5)
+	database.SetMaxIdleConns(5)
 	if _, err := database.Exec("PRAGMA busy_timeout=5000"); err != nil {
 		database.Close()
 		return nil, err
