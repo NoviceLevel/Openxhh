@@ -8,7 +8,6 @@ import (
 	"openxhh/ai"
 	"openxhh/db"
 	"openxhh/loger"
-	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -114,13 +113,16 @@ var xhhEmojiPattern = regexp.MustCompile(`\[[^\[\]\s]{1,32}\]`)
 var mentionAnchorPattern = regexp.MustCompile(`data-user-id="(\d+)"[^>]*>\s*@?([^<]+)</a>`)
 
 const (
-	maxXHHResponseLogBytes      = 300
-	xhhCaptchaCooldown          = 10 * time.Minute
-	xhhCaptchaCooldownLogPeriod = 60 * time.Second
+	maxXHHResponseLogBytes          = 300
+	xhhCaptchaCooldownBase          = 2 * time.Minute
+	xhhCaptchaCooldownMax           = 30 * time.Minute
+	xhhCaptchaCooldownResetInterval = 30 * time.Minute
+	xhhCaptchaCooldownLogPeriod     = 60 * time.Second
 )
 
 var xhhCaptchaCooldownUntil atomic.Int64
 var xhhCaptchaCooldownLastLog atomic.Int64
+var xhhCaptchaCooldownLevel atomic.Int32
 var xhhCooldownExitOnce sync.Once
 
 func xhhCaptchaCooldownRemaining() time.Duration {
@@ -149,8 +151,22 @@ func xhhCaptchaCoolingDown(endpoint string, fields ...zap.Field) bool {
 	return true
 }
 
+func currentXHHCooldownDuration() time.Duration {
+	level := int(xhhCaptchaCooldownLevel.Load())
+	duration := xhhCaptchaCooldownBase
+	for i := 0; i < level; i++ {
+		duration *= 2
+		if duration >= xhhCaptchaCooldownMax {
+			return xhhCaptchaCooldownMax
+		}
+	}
+	return duration
+}
+
 func enterXHHRequestCooldown(reason string, endpoint string, fields ...zap.Field) {
-	until := time.Now().Add(xhhCaptchaCooldown).Unix()
+	level := int(xhhCaptchaCooldownLevel.Add(1) - 1)
+	duration := currentXHHCooldownDuration()
+	until := time.Now().Add(duration).Unix()
 	for {
 		current := xhhCaptchaCooldownUntil.Load()
 		if current >= until || xhhCaptchaCooldownUntil.CompareAndSwap(current, until) {
@@ -160,7 +176,7 @@ func enterXHHRequestCooldown(reason string, endpoint string, fields ...zap.Field
 	xhhCooldownExitOnce.Do(func() {
 		go exitAfterXHHCooldown()
 	})
-	fields = append(fields, zap.String("endpoint", endpoint), zap.String("reason", reason), zap.Duration("cooldown", xhhCaptchaCooldown))
+	fields = append(fields, zap.String("endpoint", endpoint), zap.String("reason", reason), zap.Duration("cooldown", duration), zap.Int("level", level))
 	loger.Loger.Warn("[XHH]小黑盒请求触发冷却，暂停请求", fields...)
 }
 
@@ -178,8 +194,14 @@ func exitAfterXHHCooldown() {
 		if xhhCaptchaCooldownRemaining() > 0 {
 			continue
 		}
-		loger.Loger.Warn("[XHH]小黑盒请求冷却结束，退出进程等待 systemd 重启", zap.Time("cooldown_until", time.Unix(until, 0)))
-		os.Exit(2)
+		loger.Loger.Warn("[XHH]小黑盒请求冷却结束", zap.Time("cooldown_until", time.Unix(until, 0)), zap.Int("next_level", int(xhhCaptchaCooldownLevel.Load())))
+		// 冷却结束后等待一段平静期，没有新触发则重置级别
+		time.Sleep(xhhCaptchaCooldownResetInterval)
+		if xhhCaptchaCooldownRemaining() > 0 {
+			continue // 冷却期间又触发了，不重置
+		}
+		xhhCaptchaCooldownLevel.Store(0)
+		loger.Loger.Info("[XHH]冷却级别已重置")
 	}
 }
 

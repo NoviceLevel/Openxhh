@@ -39,6 +39,10 @@ type feedLink struct {
 
 func AutoFeedReply() {
 	for {
+		if remaining := xhhCaptchaCooldownRemaining(); remaining > 0 {
+			time.Sleep(remaining)
+			continue
+		}
 		processFeedReplyOnce()
 		time.Sleep(time.Duration(feedReplyInterval()) * time.Second)
 	}

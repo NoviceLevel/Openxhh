@@ -1102,8 +1102,6 @@ func (s *serverState) handleCommentThread(w http.ResponseWriter, r *http.Request
 				thread = fallbackCommentThread(record)
 				source = "local"
 			}
-		} else {
-			saveCommentThreadToCache(record.LinkID, record.RootCommentID, thread)
 		}
 	} else {
 		mode = "post"
@@ -1118,8 +1116,6 @@ func (s *serverState) handleCommentThread(w http.ResponseWriter, r *http.Request
 				thread = []commentThreadItem{}
 				source = "post_empty"
 			}
-		} else {
-			saveCommentThreadToCache(record.LinkID, record.RootCommentID, thread)
 		}
 	}
 	markCurrentCommentReplyTarget(thread)

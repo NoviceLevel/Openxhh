@@ -289,7 +289,6 @@ func SyncNotifications() {
 	time.Sleep(90 * time.Second)
 	for {
 		syncNotificationsOnce()
-		refreshActiveFloorCache()
 		if time.Now().Hour() == 3 {
 			cleanupOldCommentCache()
 			time.Sleep(time.Hour) // 避免同小时内重复清理
@@ -303,44 +302,6 @@ func cleanupOldCommentCache() {
 	deleted := db.CleanupCommentCache(maxAge)
 	if deleted > 0 {
 		loger.Loger.Info("[缓存清理]已清理旧评论缓存", zap.Int64("deleted", deleted))
-	}
-}
-
-func refreshActiveFloorCache() {
-	since := time.Now().Add(-24 * time.Hour).Unix()
-	linkIDs := db.RecentActiveLinkIDs(since, 50)
-	if len(linkIDs) == 0 {
-		return
-	}
-	refreshed := 0
-	for _, linkID := range linkIDs {
-		if xhhCaptchaCooldownRemaining() > 0 {
-			break
-		}
-		maxPage := 1
-		for page := 1; page <= maxPage && page <= maxMessagePages; page++ {
-			resp, ok := fetchLinkInfoPage(int(linkID), page)
-			if !ok {
-				break
-			}
-			if page == 1 && resp.Result.TotalPage > maxPage {
-				maxPage = resp.Result.TotalPage
-			}
-			for _, group := range resp.Result.Comments {
-				if len(group.Comment) == 0 || group.Comment[0].CommentID <= 0 {
-					continue
-				}
-				rootID := group.Comment[0].CommentID
-				comments := make([]CommentInfo, len(group.Comment))
-				copy(comments, group.Comment)
-				budget := 20
-				fetchAllSubComments(rootID, comments, &budget)
-			}
-		}
-		refreshed++
-	}
-	if refreshed > 0 {
-		loger.Loger.Info("[楼层缓存]后台刷新完成", zap.Int("posts", refreshed))
 	}
 }
 
@@ -454,6 +415,11 @@ func AutoReply() {
 	done := make(chan replyDone, replyThreadLimit()+1)
 	inFlight := make(map[int]string)
 	for {
+		if remaining := xhhCaptchaCooldownRemaining(); remaining > 0 {
+			xhhCaptchaCoolingDown("auto_reply")
+			time.Sleep(remaining)
+			continue
+		}
 		drainCompletedReplies(done, inFlight)
 		launched := launchReplyBatch(nextOwnerReplyBatch(inFlight), replyKindOwner, done, inFlight)
 		launched = launchReplyBatch(nextNormalReplyBatch(inFlight), replyKindNormal, done, inFlight) || launched
