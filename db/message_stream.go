@@ -271,6 +271,44 @@ func inboundSourceIsFromApp(source string) bool {
 	return source == "at_comment" || source == "at_post"
 }
 
+func RecentActiveLinkIDs(since int64, limit int) []int64 {
+	if !messageStreamDatabaseReady() || since <= 0 {
+		return nil
+	}
+	ctx := context.Background()
+	if cfg.Type == "pg" {
+		rows, err := pg.Conn.Query(ctx, "SELECT DISTINCT link_id FROM inbound_messages WHERE link_id > 0 AND created_at >= $1 ORDER BY MAX(created_at) DESC LIMIT $2", since, limit)
+		if err != nil {
+			return nil
+		}
+		defer rows.Close()
+		var ids []int64
+		for rows.Next() {
+			var id int64
+			if err := rows.Scan(&id); err == nil && id > 0 {
+				ids = append(ids, id)
+			}
+		}
+		return ids
+	}
+	if cfg.Type == "sqlite" {
+		rows, err := sqlite.Db.Query("SELECT DISTINCT link_id FROM inbound_messages WHERE link_id > 0 AND created_at >= ? ORDER BY MAX(created_at) DESC LIMIT ?", since, limit)
+		if err != nil {
+			return nil
+		}
+		defer rows.Close()
+		var ids []int64
+		for rows.Next() {
+			var id int64
+			if err := rows.Scan(&id); err == nil && id > 0 {
+				ids = append(ids, id)
+			}
+		}
+		return ids
+	}
+	return nil
+}
+
 func RecentOutboundMessages(since int64, limit int) []OutboundMessage {
 	return OutboundMessagesForTracking(since, 0, "", limit)
 }
