@@ -83,6 +83,8 @@ type serverState struct {
 	emojiCache          map[string]string
 	emojiCacheVersion   string
 	emojiCacheUntil     time.Time
+	dbMu                sync.Mutex
+	db                  *sql.DB
 }
 
 type loginFail struct {
@@ -2185,6 +2187,15 @@ func (s *serverState) markSQLiteMessageUnreplied(req regenerateMessageRequest) (
 }
 
 func (s *serverState) openSQLiteDatabase() (*sql.DB, error) {
+	s.dbMu.Lock()
+	defer s.dbMu.Unlock()
+	if s.db != nil {
+		if err := s.db.Ping(); err == nil {
+			return s.db, nil
+		}
+		s.db.Close()
+		s.db = nil
+	}
 	database, err := sql.Open("sqlite3", filepath.Join(s.rootDir, "sql.db"))
 	if err != nil {
 		return nil, err
@@ -2199,6 +2210,7 @@ func (s *serverState) openSQLiteDatabase() (*sql.DB, error) {
 		database.Close()
 		return nil, err
 	}
+	s.db = database
 	return database, nil
 }
 
