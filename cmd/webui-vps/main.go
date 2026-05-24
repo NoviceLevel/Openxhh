@@ -83,8 +83,9 @@ type serverState struct {
 	emojiCache          map[string]string
 	emojiCacheVersion   string
 	emojiCacheUntil     time.Time
-	dbMu                sync.Mutex
-	db                  *sql.DB
+	recentlyResentMsgIDs sync.Map
+	dbMu                 sync.Mutex
+	db                   *sql.DB
 }
 
 type loginFail struct {
@@ -972,7 +973,26 @@ func (s *serverState) handleRegenerateMessage(w http.ResponseWriter, r *http.Req
 		writeJSON(w, http.StatusNotFound, map[string]any{"ok": false, "error": "未找到对应消息"})
 		return
 	}
+	if payload.MsgID > 0 {
+		s.recentlyResentMsgIDs.Store(payload.MsgID, time.Now())
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *serverState) collectResentMsgIDs() map[int64]struct{} {
+	result := make(map[int64]struct{})
+	cutoff := time.Now().Add(-24 * time.Hour)
+	s.recentlyResentMsgIDs.Range(func(key, value any) bool {
+		if t, ok := value.(time.Time); ok && t.After(cutoff) {
+			if id, ok := key.(int64); ok {
+				result[id] = struct{}{}
+			}
+		} else {
+			s.recentlyResentMsgIDs.Delete(key)
+		}
+		return true
+	})
+	return result
 }
 
 func (s *serverState) handleEmojis(w http.ResponseWriter, r *http.Request) {
@@ -2488,7 +2508,7 @@ func (s *serverState) handleFailedRecords(w http.ResponseWriter, r *http.Request
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
-	records := parseFailedRecords(content)
+	records := parseFailedRecords(content, s.collectResentMsgIDs())
 	cfg, err := s.readConfigForRecordLookup()
 	if err == nil {
 		enrichFailedRecordTitles(s, cfg, records)
@@ -2496,7 +2516,7 @@ func (s *serverState) handleFailedRecords(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "records": records})
 }
 
-func parseFailedRecords(content string) []failedRecord {
+func parseFailedRecords(content string, resentIDs map[int64]struct{}) []failedRecord {
 	lines := strings.Split(content, "\n")
 	var items []failedRecord
 	var pending []failedRecord
@@ -2617,7 +2637,7 @@ func parseFailedRecords(content string) []failedRecord {
 			result = append(result, item)
 		}
 	}
-	return dedupeFailedRecords(result)
+	return dedupeFailedRecords(result, resentIDs)
 }
 
 func isErrorGoStatus(status string) bool {
@@ -2738,7 +2758,7 @@ func failedRecordKey(r failedRecord) string {
 	return fmt.Sprintf("%d|%s|%s|%s|%s", r.LinkID, r.Time, goNormalizeText(r.User), goNormalizeText(r.Question), goNormalizeText(r.Reply))
 }
 
-func dedupeFailedRecords(items []failedRecord) []failedRecord {
+func dedupeFailedRecords(items []failedRecord, resentIDs map[int64]struct{}) []failedRecord {
 	seen := map[string]int{}
 	var result []failedRecord
 	for _, item := range items {
@@ -2749,7 +2769,7 @@ func dedupeFailedRecords(items []failedRecord) []failedRecord {
 		}
 		if idx, ok := seen[key]; ok {
 			existing := result[idx]
-			if rankGoStatus(item.Status) > rankGoStatus(existing.Status) {
+			if rankGoStatusWithResent(item.Status, item.MsgID, resentIDs) > rankGoStatusWithResent(existing.Status, existing.MsgID, resentIDs) {
 				result[idx] = item
 			}
 		} else {
@@ -2773,6 +2793,17 @@ func rankGoStatus(status string) int {
 	default:
 		return 0
 	}
+}
+
+func rankGoStatusWithResent(status string, msgID int64, resentIDs map[int64]struct{}) int {
+	if status == "已回复" {
+		if msgID > 0 {
+			if _, ok := resentIDs[msgID]; ok {
+				return 5
+			}
+		}
+	}
+	return rankGoStatus(status)
 }
 
 func enrichFailedRecordTitles(s *serverState, cfg appConfig, records []failedRecord) {
