@@ -26,12 +26,20 @@ func minSendReqInterval() time.Duration {
 }
 
 func SendReq(Method, Path string, Body io.Reader, other string) *http.Response {
+	return sendReqWithInterval(Method, Path, Body, other, minSendReqInterval())
+}
+
+func SendReqFast(Method, Path string, Body io.Reader, other string) *http.Response {
+	return sendReqWithInterval(Method, Path, Body, other, 200*time.Millisecond)
+}
+
+func sendReqWithInterval(Method, Path string, Body io.Reader, other string, interval time.Duration) *http.Response {
 	sendReqMu.Lock()
 	defer sendReqMu.Unlock()
 
 	if !lastSendReqTime.IsZero() {
 		elapsed := time.Since(lastSendReqTime)
-		if wait := minSendReqInterval() - elapsed; wait > 0 {
+		if wait := interval - elapsed; wait > 0 {
 			time.Sleep(wait)
 		}
 	}

@@ -957,7 +957,7 @@ func fetchAllSubComments(rootCommentID int, comments []CommentInfo, subCommentPa
 		}
 		*subCommentPageBudget--
 		other := "?root_comment_id=" + strconv.Itoa(rootCommentID) + "&lastval=" + strconv.Itoa(lastVal)
-		resp := SendReq("GET", "/bbs/app/comment/sub/comments", nil, other)
+		resp := SendReqFast("GET", "/bbs/app/comment/sub/comments", nil, other)
 		if resp == nil {
 			return comments
 		}
