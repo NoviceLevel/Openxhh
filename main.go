@@ -62,7 +62,7 @@ func CheckNew() {
 func start(mode *string) {
 	switch *mode {
 	case "default":
-		loger.Loger.Info("\nhttps://github.com/Www8881313/Openxhh\n你需要输入启动项\n-mode start | login | test")
+		loger.Loger.Info("\nhttps://github.com/NoviceLevel/Openxhh\n你需要输入启动项\n-mode start | login | test")
 	case "test":
 		fmt.Println("你好")
 	case "login":

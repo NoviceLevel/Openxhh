@@ -4,7 +4,7 @@ set -euo pipefail
 
 
 
-REPO_URL="${REPO_URL:-https://github.com/xiaozou-wine/Openxhh.git}"
+REPO_URL="${REPO_URL:-https://github.com/NoviceLevel/Openxhh.git}"
 
 BRANCH="${BRANCH:-main}"
 

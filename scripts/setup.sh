@@ -3,9 +3,9 @@
 set -euo pipefail
 
 # Openxhh 一键安装脚本
-# 用法：curl -fsSL https://raw.githubusercontent.com/xiaozou-wine/Openxhh/main/scripts/setup.sh | sudo bash
+# 用法：curl -fsSL https://raw.githubusercontent.com/NoviceLevel/Openxhh/main/scripts/setup.sh | sudo bash
 
-REPO_URL="${REPO_URL:-https://github.com/xiaozou-wine/Openxhh.git}"
+REPO_URL="${REPO_URL:-https://github.com/NoviceLevel/Openxhh.git}"
 BRANCH="${BRANCH:-main}"
 INSTALL_DIR="${INSTALL_DIR:-/opt/Openxhh}"
 SERVICE_NAME="${SERVICE_NAME:-Openxhh}"
