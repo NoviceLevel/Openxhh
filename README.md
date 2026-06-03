@@ -44,79 +44,123 @@ Openxhh 的目标是让机器人更像一个真的在看帖的人：
 - 支持消息流追踪：通过小黑盒通知接口（list_type=0）实时同步"评论我的"，每 60 秒一次；"我评论的"自动记录。
 - 支持 VPS Web UI：配置管理、服务控制、日志筛选、@ 回复记录、机器人发言记录、评论我的、失败记录、token 统计。
 
-## 一键安装（VPS / Linux）
+## 一键部署（VPS / Linux）
 
-适合 Ubuntu / Debian VPS。一条命令完成编译、安装和创建 systemd 服务。
+适合 Ubuntu / Debian VPS。复制下面这一条命令到服务器执行即可：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/NoviceLevel/Openxhh/main/scripts/setup.sh | sudo bash
 ```
 
-脚本会自动：安装构建依赖、拉取源码、编译主程序和 Web UI、生成默认配置、创建并启动 systemd 服务。
+部署前确认这几件事：
 
-安装完成后，三步即可运行：
+- 服务器能访问 GitHub；
+- 系统是 Ubuntu / Debian，并且可以使用 `apt-get`；
+- 你知道自己的小黑盒数字 UID；
+- 已准备好 OpenAI 兼容接口的模型名、请求地址和 Token；
+- 服务器安全组准备放行 `29173` 端口，或你会用 SSH 隧道访问 Web UI。
 
-**第一步：填写配置（二选一）**
+脚本会自动完成这些事：
 
-方式 A — Web UI 配置（推荐）：
+- 安装构建依赖；
+- 拉取当前仓库源码；
+- 编译 `Openxhh` 主程序和 `Openxhh-webui`；
+- 生成默认配置文件 `/opt/Openxhh/config.json`；
+- 创建 systemd 服务 `Openxhh` 和 `Openxhh-webui`；
+- 启动 VPS Web UI，方便你在浏览器里改配置。
 
-打开 `http://你的VPS公网IP:29173`，首次登录密码查看：
+安装完成后，按下面 3 步走。
+
+### 1. 打开 Web UI 填配置
+
+先在云服务器安全组或防火墙里放行 `29173` 端口，然后打开：
+
+```text
+http://你的VPS公网IP:29173
+```
+
+首次登录密码在 Web UI 服务日志里：
 
 ```bash
 sudo journalctl -u Openxhh-webui -n 50 --no-pager
 ```
 
-登录后进入「配置管理」，填写 owner UID、AI 模型、接口地址和 Token。
+登录后进入「配置管理」，至少填写：
 
-方式 B — 命令行配置：
+- `xhh.owner`：你的小黑盒数字 UID；
+- `ai.model`：模型名；
+- `ai.baseUrl`：OpenAI 兼容接口地址；
+- `ai.token`：AI API Token。
 
-```bash
-sudo nano /opt/Openxhh/config.json
-```
+保存配置后，先不要急着启动机器人，继续扫码登录。
 
-至少填写 `xhh.owner`、`ai.model`、`ai.baseUrl`、`ai.token`。
+### 2. 扫码登录小黑盒
 
-**第二步：扫码登录**
+在服务器执行：
 
 ```bash
 cd /opt/Openxhh && sudo ./Openxhh -mode login
 ```
 
-**第三步：启动机器人**
+用小黑盒 App 扫终端里的二维码。登录成功后会生成 `/opt/Openxhh/cookie.json`。
+
+### 3. 启动机器人
 
 ```bash
 sudo systemctl start Openxhh
 ```
 
-如果只想更新已有安装（不重新配置），使用更新脚本：
+查看运行日志：
+
+```bash
+sudo journalctl -u Openxhh -f
+```
+
+如果需要重启服务：
+
+```bash
+sudo systemctl restart Openxhh
+```
+
+以后更新已有安装，只需要执行：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/NoviceLevel/Openxhh/main/scripts/update-installed.sh | sudo bash
 ```
 
 <details>
-<summary>手动编译安装（不用一键脚本）</summary>
+<summary>命令行配置方式</summary>
 
-如果你不想用一键脚本，可以手动操作：
+如果不想用 Web UI，也可以直接编辑配置文件：
 
 ```bash
-# 1. 创建目录并编译
-sudo mkdir -p /opt/Openxhh
-curl -fsSL https://raw.githubusercontent.com/NoviceLevel/Openxhh/main/scripts/update-installed.sh | sudo bash
-
-# 2. 生成并编辑配置
-cd /opt/Openxhh
-sudo ./Openxhh
-sudo nano config.json
-
-# 3. 扫码登录
-sudo ./Openxhh -mode login
-
-# 4. 前台试运行
-sudo ./Openxhh -mode start
+sudo nano /opt/Openxhh/config.json
 ```
 
-手动安装时，systemd 服务需要自行创建，参见下方"systemd 后台运行"折叠块。
+至少填写：
+
+- `xhh.owner`
+- `ai.model`
+- `ai.baseUrl`
+- `ai.token`
+
+改完配置后需要重启机器人服务才会生效：
+
+```bash
+sudo systemctl restart Openxhh
+```
+
+</details>
+
+<details>
+<summary>部署常见问题</summary>
+
+- Web UI 打不开：先检查云服务器安全组是否放行 `29173`，再看 `sudo systemctl status Openxhh-webui --no-pager`。
+- 找不到 Web UI 密码：执行 `sudo journalctl -u Openxhh-webui -n 50 --no-pager`。
+- 保存配置后没生效：配置写入后需要重启机器人服务，执行 `sudo systemctl restart Openxhh`。
+- 扫码登录失败：重新执行 `cd /opt/Openxhh && sudo ./Openxhh -mode login`，成功后确认 `/opt/Openxhh/cookie.json` 存在。
+- 机器人不回复：先看 `sudo journalctl -u Openxhh -f`，确认 Cookie、AI 地址、模型名和 Token 都正确。
+- 小黑盒接口频繁 403：不要把 `checkTime`、`replyTime` 调得太低，保持默认或更保守。
 
 </details>
 
@@ -133,7 +177,7 @@ sudo ./Openxhh -mode start
     "maxReplyThreads": 3,
     "maxPendingReplies": 50,
     "maxPendingRepliesPerUser": 5,
-    "minRequestInterval": 0.5,
+    "minRequestInterval": 2,
     "enableWhitelist": false,
     "owner": "你的小黑盒数字UID；多个 UID 用英文逗号分隔",
     "deviceID": "",
@@ -196,7 +240,7 @@ sudo ./Openxhh -mode start
 - `xhh.maxPendingReplies` 控制普通用户全局待回复队列上限，默认 `50`。
 - `xhh.maxPendingRepliesPerUser` 控制单个普通用户待回复队列上限，默认 `5`。
 - owner 不受 `maxPendingReplies` 和 `maxPendingRepliesPerUser` 限制。
-- `xhh.minRequestInterval` 控制小黑盒 API 全局最小请求间隔，默认 `0.5` 秒；并发请求自动排队，避免瞬间大量请求触发 403。
+- `xhh.minRequestInterval` 控制小黑盒 API 全局最小请求间隔，默认 `2` 秒；并发请求自动排队，避免瞬间大量请求触发 403。
 - `ai.baseUrl` 要填完整的 OpenAI 兼容地址，例如 `https://example.com/v1/chat/completions` 或 `https://example.com/v1/responses`。
 - `ai.webSearch=true` 表示普通文字回复默认启用模型联网搜索。
 - `ai.forceWebSearch=false` 表示不强制每次回复都必须调用搜索工具。
@@ -934,7 +978,7 @@ ls -lh /opt/Openxhh/sql.db
 | --- | --- | --- |
 | `xhh.checkTime` | `60` | 检查 @ 间隔，秒 |
 | `xhh.replyTime` | `30` | 回复间隔，秒 |
-| `xhh.minRequestInterval` | `0.5` | 小黑盒 API 全局最小请求间隔，秒；并发请求自动排队 |
+| `xhh.minRequestInterval` | `2` | 小黑盒 API 全局最小请求间隔，秒；并发请求自动排队 |
 | `xhh.maxReplyThreads` | `3` | 普通用户最高回复并发；owner 不占用普通用户线程槽位 |
 | `xhh.maxPendingReplies` | `50` | 普通用户全局待回复队列上限 |
 | `xhh.maxPendingRepliesPerUser` | `5` | 普通用户单用户待回复队列上限 |
