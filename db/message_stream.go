@@ -379,6 +379,42 @@ func UpdateOutboundMessageComment(uniqueKey string, commentID int64, rootComment
 	return false
 }
 
+func OutboundCommentExists(commentID int64) bool {
+	if !messageStreamDatabaseReady() || commentID <= 0 {
+		return false
+	}
+	var exists bool
+	if cfg.Type == "pg" {
+		err := pg.Conn.QueryRow(context.Background(), "SELECT EXISTS(SELECT 1 FROM outbound_messages WHERE comment_id=$1)", commentID).Scan(&exists)
+		return err == nil && exists
+	}
+	if cfg.Type == "sqlite" {
+		err := sqlite.Db.QueryRow("SELECT EXISTS(SELECT 1 FROM outbound_messages WHERE comment_id=?)", commentID).Scan(&exists)
+		return err == nil && exists
+	}
+	return false
+}
+
+func OutboundCommentRootID(commentID int64) int64 {
+	if !messageStreamDatabaseReady() || commentID <= 0 {
+		return 0
+	}
+	var rootCommentID int64
+	if cfg.Type == "pg" {
+		err := pg.Conn.QueryRow(context.Background(), "SELECT COALESCE(root_comment_id,0) FROM outbound_messages WHERE comment_id=$1 LIMIT 1", commentID).Scan(&rootCommentID)
+		if err == nil {
+			return rootCommentID
+		}
+	}
+	if cfg.Type == "sqlite" {
+		err := sqlite.Db.QueryRow("SELECT COALESCE(root_comment_id,0) FROM outbound_messages WHERE comment_id=? LIMIT 1", commentID).Scan(&rootCommentID)
+		if err == nil {
+			return rootCommentID
+		}
+	}
+	return 0
+}
+
 type rowsScanner interface {
 	Next() bool
 	Scan(dest ...any) error

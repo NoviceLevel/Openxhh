@@ -108,6 +108,15 @@ func TestRecentOutboundMessagesAndUpdateComment(t *testing.T) {
 	if records[0].CommentID != 55 || records[0].RootCommentID != 55 {
 		t.Fatalf("updated ids = (%d,%d), want (55,55)", records[0].CommentID, records[0].RootCommentID)
 	}
+	if !OutboundCommentExists(55) {
+		t.Fatal("OutboundCommentExists(55) = false, want true")
+	}
+	if got := OutboundCommentRootID(55); got != 55 {
+		t.Fatalf("OutboundCommentRootID(55) = %d, want 55", got)
+	}
+	if OutboundCommentExists(56) {
+		t.Fatal("OutboundCommentExists(56) = true, want false")
+	}
 }
 
 func TestOutboundMessagesForTrackingUsesCursor(t *testing.T) {

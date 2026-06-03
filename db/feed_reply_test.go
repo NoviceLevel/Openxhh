@@ -3,14 +3,19 @@ package db
 import (
 	"database/sql"
 	"openxhh/config"
+	"openxhh/loger"
 	"openxhh/sqlite"
 	"testing"
+
+	"go.uber.org/zap"
 )
 
 func setupSQLiteFeedReplyTest(t *testing.T) {
 	t.Helper()
 	oldType := config.ConfigStruct.DataBase.Type
 	oldDB := sqlite.Db
+	oldLogger := loger.Loger
+	loger.Loger = zap.NewNop()
 	database, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
@@ -21,6 +26,7 @@ func setupSQLiteFeedReplyTest(t *testing.T) {
 		database.Close()
 		sqlite.Db = oldDB
 		config.ConfigStruct.DataBase.Type = oldType
+		loger.Loger = oldLogger
 	})
 	migrateFeedReplyTable()
 }

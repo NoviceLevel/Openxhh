@@ -1,8 +1,15 @@
 package xhh
 
 import (
+	"database/sql"
 	"encoding/json"
+	"openxhh/config"
+	"openxhh/db"
+	"openxhh/loger"
+	"openxhh/sqlite"
 	"testing"
+
+	"go.uber.org/zap"
 )
 
 func TestMsgUnmarshalAtPost(t *testing.T) {
@@ -60,6 +67,133 @@ func TestMsgUnmarshalAtComment(t *testing.T) {
 	}
 	if msg.LinkID != 181099114 || msg.UserID != 89055874 {
 		t.Fatalf("LinkID/UserID = %d/%d", msg.LinkID, msg.UserID)
+	}
+}
+
+func TestMsgUnmarshalNotificationReplyFields(t *testing.T) {
+	data := []byte(`{
+		"message_id": 1003,
+		"userid_a": 89055874,
+		"user_a": {"username": "路人"},
+		"comment_id": 867937627,
+		"root_comment_id": 867937000,
+		"reply_id": "555",
+		"linkid": 181099114,
+		"text": "楼里继续问一下"
+	}`)
+
+	var msg Msg
+	if err := json.Unmarshal(data, &msg); err != nil {
+		t.Fatalf("Unmarshal returned error: %v", err)
+	}
+	if msg.CommentID != 867937627 || msg.ReplyCommentID != 555 {
+		t.Fatalf("comment ids = (%d,%d), want (867937627,555)", msg.CommentID, msg.ReplyCommentID)
+	}
+	if msg.CommentText != "楼里继续问一下" || msg.UserName != "路人" {
+		t.Fatalf("text/user = %q/%q", msg.CommentText, msg.UserName)
+	}
+}
+
+func TestReplyToBotNotificationQueuesReply(t *testing.T) {
+	setupXHHMessageQueueTest(t)
+	if !db.SaveOutboundMessage(db.OutboundMessage{Source: "ai_reply", LinkID: 181099114, RootCommentID: 867937000, ReplyCommentID: 867936999, CommentID: 555, Text: "机器人刚才的回复", CreatedAt: 100}) {
+		t.Fatal("SaveOutboundMessage returned false")
+	}
+	msg := Msg{
+		MsgID:          1004,
+		CommentID:      867937628,
+		RootCommentID:  0,
+		ReplyCommentID: 555,
+		LinkID:         181099114,
+		UserID:         89055874,
+		UserName:       "路人",
+		CommentText:    "不是 @，但回复了机器人",
+	}
+
+	if notificationSource(msg) != "reply_to_bot" {
+		t.Fatalf("notificationSource = %q, want reply_to_bot", notificationSource(msg))
+	}
+	queueReplyToBotNotification(msg)
+
+	var count int
+	var text string
+	var reply bool
+	var rootID int
+	if err := sqlite.Db.QueryRow("SELECT COUNT(*), COALESCE(MAX(comment_text), ''), COALESCE(MAX(reply), false), COALESCE(MAX(comment_root_id), 0) FROM at WHERE msg_id=?", 1004).Scan(&count, &text, &reply, &rootID); err != nil {
+		t.Fatalf("query at: %v", err)
+	}
+	if count != 1 || text != "不是 @，但回复了机器人" || reply || rootID != 867937000 {
+		t.Fatalf("queued row = (%d,%q,%v,%d), want (1,不是 @，但回复了机器人,false,867937000)", count, text, reply, rootID)
+	}
+}
+
+func setupXHHMessageQueueTest(t *testing.T) {
+	t.Helper()
+	oldType := config.ConfigStruct.DataBase.Type
+	oldDB := sqlite.Db
+	oldInfo := Info
+	oldOwner := config.ConfigStruct.Xhh.Owner
+	oldEnableWhitelist := config.ConfigStruct.Xhh.EnableWhitelist
+	oldOwners := append([]int(nil), Owners...)
+	oldOwnerIDsLoaded := ownerIDsLoaded
+	oldMaxPendingReplies := MaxPendingReplies
+	oldMaxPendingRepliesPerUser := MaxPendingRepliesPerUser
+	oldLogger := loger.Loger
+	loger.Loger = zap.NewNop()
+	database, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	sqlite.Db = database
+	config.ConfigStruct.DataBase.Type = "sqlite"
+	config.ConfigStruct.Xhh.EnableWhitelist = false
+	config.ConfigStruct.Xhh.Owner = ""
+	Owners = nil
+	ownerIDsLoaded = false
+	Info.HeyBoxId = "999"
+	MaxPendingReplies = defaultMaxPendingReplies
+	MaxPendingRepliesPerUser = defaultMaxPendingRepliesPerUser
+	t.Cleanup(func() {
+		database.Close()
+		sqlite.Db = oldDB
+		config.ConfigStruct.DataBase.Type = oldType
+		config.ConfigStruct.Xhh.Owner = oldOwner
+		config.ConfigStruct.Xhh.EnableWhitelist = oldEnableWhitelist
+		Owners = oldOwners
+		ownerIDsLoaded = oldOwnerIDsLoaded
+		Info = oldInfo
+		MaxPendingReplies = oldMaxPendingReplies
+		MaxPendingRepliesPerUser = oldMaxPendingRepliesPerUser
+		loger.Loger = oldLogger
+	})
+	_, err = sqlite.Db.Exec(`CREATE TABLE at (
+		msg_id BIGINT PRIMARY KEY,
+		comment_a_id BIGINT,
+		comment_root_id BIGINT,
+		link_id BIGINT,
+		user_a_id BIGINT,
+		user_a_name TEXT DEFAULT '',
+		comment_text TEXT,
+		reply boolean
+	)`)
+	if err != nil {
+		t.Fatalf("create at table: %v", err)
+	}
+	_, err = sqlite.Db.Exec(`CREATE TABLE outbound_messages (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		source TEXT DEFAULT '',
+		link_id BIGINT DEFAULT 0,
+		root_comment_id BIGINT DEFAULT 0,
+		reply_comment_id BIGINT DEFAULT 0,
+		comment_id BIGINT DEFAULT 0,
+		text TEXT DEFAULT '',
+		image_url TEXT DEFAULT '',
+		created_at BIGINT DEFAULT 0,
+		raw_response TEXT DEFAULT '',
+		unique_key TEXT UNIQUE
+	)`)
+	if err != nil {
+		t.Fatalf("create outbound_messages table: %v", err)
 	}
 }
 

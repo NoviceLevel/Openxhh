@@ -35,6 +35,7 @@ const defaultMaxPendingRepliesPerUser = 5
 const maxReplyRetries = 5
 
 var replyRetryCounts sync.Map
+
 const messagePageLimit = 20
 const maxMessagePages = 5
 const replySchedulerActivePoll = time.Second
@@ -94,34 +95,50 @@ func Init() {
 }
 
 type Msg struct {
-	CommentID     int
-	CommentText   string
-	MsgID         int
-	RootCommentID int
-	LinkID        int
-	UserID        int
-	MessageType   int
-	UserName      string
-	CreatedAt     int64
-	IsPost        bool
+	CommentID      int
+	CommentText    string
+	MsgID          int
+	RootCommentID  int
+	ReplyCommentID int
+	LinkID         int
+	UserID         int
+	MessageType    int
+	UserName       string
+	CreatedAt      int64
+	IsPost         bool
 }
 
 func (m *Msg) UnmarshalJSON(data []byte) error {
 	var aux struct {
-		CommentID     int             `json:"comment_a_id"`
-		CommentText   string          `json:"comment_a_text"`
-		MsgID         int             `json:"message_id"`
-		RootCommentID int             `json:"root_comment_id"`
-		LinkID        int             `json:"linkid"`
-		UserID        json.RawMessage `json:"userid_a"`
-		MessageType   int             `json:"message_type"`
-		CreatedAt     json.RawMessage `json:"created_at"`
-		CreateAt      json.RawMessage `json:"create_at"`
-		Time          json.RawMessage `json:"time"`
-		Timestamp     json.RawMessage `json:"timestamp"`
-		Dateline      json.RawMessage `json:"dateline"`
-		MessageTime   json.RawMessage `json:"message_time"`
-		User          struct {
+		CommentID            int             `json:"comment_a_id"`
+		CommentIDCompat      int             `json:"comment_id"`
+		CommentIDLegacy      int             `json:"commentid"`
+		CommentText          string          `json:"comment_a_text"`
+		CommentTextCompat    string          `json:"comment_text"`
+		Text                 string          `json:"text"`
+		MsgID                int             `json:"message_id"`
+		MsgIDCompat          int             `json:"msg_id"`
+		RootCommentID        int             `json:"root_comment_id"`
+		RootIDCompat         int             `json:"root_id"`
+		ReplyID              json.RawMessage `json:"reply_id"`
+		ReplyIDCompat        json.RawMessage `json:"replyid"`
+		ReplyCommentIDCompat json.RawMessage `json:"reply_commentid"`
+		CommentBID           json.RawMessage `json:"comment_b_id"`
+		CommentIDB           json.RawMessage `json:"comment_id_b"`
+		ParentID             json.RawMessage `json:"parent_comment_id"`
+		ReplyCommentID       json.RawMessage `json:"reply_comment_id"`
+		LinkID               int             `json:"linkid"`
+		LinkIDCompat         int             `json:"link_id"`
+		UserID               json.RawMessage `json:"userid_a"`
+		UserIDCompat         json.RawMessage `json:"userid"`
+		MessageType          int             `json:"message_type"`
+		CreatedAt            json.RawMessage `json:"created_at"`
+		CreateAt             json.RawMessage `json:"create_at"`
+		Time                 json.RawMessage `json:"time"`
+		Timestamp            json.RawMessage `json:"timestamp"`
+		Dateline             json.RawMessage `json:"dateline"`
+		MessageTime          json.RawMessage `json:"message_time"`
+		User                 struct {
 			UserID   json.RawMessage `json:"userid"`
 			UserName string          `json:"username"`
 		} `json:"user_a"`
@@ -135,11 +152,36 @@ func (m *Msg) UnmarshalJSON(data []byte) error {
 	}
 
 	m.CommentID = aux.CommentID
+	if m.CommentID == 0 {
+		m.CommentID = aux.CommentIDCompat
+	}
+	if m.CommentID == 0 {
+		m.CommentID = aux.CommentIDLegacy
+	}
 	m.CommentText = aux.CommentText
+	if m.CommentText == "" {
+		m.CommentText = aux.CommentTextCompat
+	}
+	if m.CommentText == "" {
+		m.CommentText = aux.Text
+	}
 	m.MsgID = aux.MsgID
+	if m.MsgID == 0 {
+		m.MsgID = aux.MsgIDCompat
+	}
 	m.RootCommentID = aux.RootCommentID
+	if m.RootCommentID == 0 {
+		m.RootCommentID = aux.RootIDCompat
+	}
+	m.ReplyCommentID = firstJSONInt(aux.ReplyID, aux.ReplyIDCompat, aux.ReplyCommentIDCompat, aux.CommentBID, aux.CommentIDB, aux.ParentID, aux.ReplyCommentID)
 	m.LinkID = aux.LinkID
+	if m.LinkID == 0 {
+		m.LinkID = aux.LinkIDCompat
+	}
 	m.UserID = jsonInt(aux.UserID)
+	if m.UserID == 0 {
+		m.UserID = jsonInt(aux.UserIDCompat)
+	}
 	if m.UserID == 0 {
 		m.UserID = jsonInt(aux.User.UserID)
 	}
@@ -162,6 +204,15 @@ func (m *Msg) UnmarshalJSON(data []byte) error {
 
 func jsonInt(raw json.RawMessage) int {
 	return int(jsonRawInt64(raw))
+}
+
+func firstJSONInt(values ...json.RawMessage) int {
+	for _, value := range values {
+		if number := jsonRawInt64(value); number > 0 {
+			return int(number)
+		}
+	}
+	return 0
 }
 
 func firstJSONInt64(values ...json.RawMessage) int64 {
@@ -342,18 +393,21 @@ func syncNotificationsOnce() {
 			return
 		}
 		for _, v := range msgResp.Result.Messages {
-			if db.SaveInboundMessage(db.InboundMessage{
-				Source:        "notification",
-				MessageID:     int64(v.MsgID),
-				LinkID:        int64(v.LinkID),
-				RootCommentID: int64(v.RootCommentID),
-				CommentID:     int64(v.CommentID),
-				UserID:        int64(v.UserID),
-				UserName:      CleanXHHRichText(v.UserName),
-				Text:          CleanXHHRichText(v.CommentText),
-				CreatedAt:     inboundMessageCreatedAt(v),
-			}) {
+			inbound := db.InboundMessage{
+				Source:         notificationSource(v),
+				MessageID:      int64(v.MsgID),
+				LinkID:         int64(v.LinkID),
+				RootCommentID:  int64(v.RootCommentID),
+				ReplyCommentID: int64(v.ReplyCommentID),
+				CommentID:      int64(v.CommentID),
+				UserID:         int64(v.UserID),
+				UserName:       CleanXHHRichText(v.UserName),
+				Text:           CleanXHHRichText(v.CommentText),
+				CreatedAt:      inboundMessageCreatedAt(v),
+			}
+			if db.SaveInboundMessage(inbound) {
 				saved++
+				queueReplyToBotNotification(v)
 			}
 		}
 		if len(msgResp.Result.Messages) < messagePageLimit {
@@ -363,6 +417,67 @@ func syncNotificationsOnce() {
 	if saved > 0 {
 		loger.Loger.Info("[通知同步]新增通知", zap.Int("saved", saved))
 	}
+}
+
+func notificationSource(v Msg) string {
+	if isReplyToBotComment(v) {
+		return "reply_to_bot"
+	}
+	return "notification"
+}
+
+func queueReplyToBotNotification(v Msg) {
+	targetCommentID := replyToBotTargetCommentID(v)
+	if targetCommentID <= 0 {
+		return
+	}
+	if v.CommentID <= 0 || v.LinkID <= 0 {
+		return
+	}
+	if Info.HeyBoxId != "" && strconv.Itoa(v.UserID) == Info.HeyBoxId {
+		return
+	}
+	if v.MsgID <= 0 {
+		v.MsgID = syntheticNotificationMsgID(v)
+	}
+	if v.RootCommentID <= 0 {
+		v.RootCommentID = replyToBotRootCommentID(targetCommentID)
+	}
+	if shouldQueueMessage(v) {
+		db.InsertWithUserName(v.MsgID, v.CommentID, v.RootCommentID, v.LinkID, v.UserID, v.UserName, v.CommentText, false)
+		if loger.Loger != nil {
+			loger.Loger.Info("[通知同步]已加入回复我的评论队列", zap.Int("msg_id", v.MsgID), zap.Int("comment_id", v.CommentID), zap.Int("reply_comment_id", v.ReplyCommentID), zap.Int("link_id", v.LinkID), zap.Int("user_id", v.UserID), zap.String("user_name", v.UserName))
+		}
+	}
+}
+
+func isReplyToBotComment(v Msg) bool {
+	return replyToBotTargetCommentID(v) > 0
+}
+
+func replyToBotTargetCommentID(v Msg) int {
+	if v.ReplyCommentID > 0 && db.OutboundCommentExists(int64(v.ReplyCommentID)) {
+		return v.ReplyCommentID
+	}
+	if v.RootCommentID > 0 && db.OutboundCommentExists(int64(v.RootCommentID)) {
+		return v.RootCommentID
+	}
+	return 0
+}
+
+func replyToBotRootCommentID(targetCommentID int) int {
+	rootCommentID := int(db.OutboundCommentRootID(int64(targetCommentID)))
+	if rootCommentID > 0 {
+		return rootCommentID
+	}
+	return targetCommentID
+}
+
+func syntheticNotificationMsgID(v Msg) int {
+	if v.CommentID > 0 {
+		return -v.CommentID
+	}
+	return -int(time.Now().Unix())
 }
 
 func saveInboundMessageFromApp(v Msg) {
@@ -542,7 +657,7 @@ func replyComment(v db.CommStruct) {
 
 	userText := NormalizeCommentText(v.Text)
 	mentionControl := ParseMentionControl(userText)
-	loger.Loger.Info("[XHH]正在处理@消息", zap.Int("msg_id", v.MsgID), zap.Int("comment_id", v.CommentID), zap.Int("link_id", v.LinkID), zap.Int("user_id", v.Uid), zap.String("user_name", v.UserName), zap.String("text", mentionQuestionText(mentionControl)), zap.String("cleaned_text", mentionControl.CleanedText), zap.String("raw_text", v.Text), zap.String("mention_target", mentionControl.TargetText), zap.Bool("wake_only", mentionControl.WakeOnly))
+	loger.Loger.Info("[XHH]正在处理待回复消息", zap.Int("msg_id", v.MsgID), zap.Int("comment_id", v.CommentID), zap.Int("link_id", v.LinkID), zap.Int("user_id", v.Uid), zap.String("user_name", v.UserName), zap.String("text", mentionQuestionText(mentionControl)), zap.String("cleaned_text", mentionControl.CleanedText), zap.String("raw_text", v.Text), zap.String("mention_target", mentionControl.TargetText), zap.Bool("wake_only", mentionControl.WakeOnly))
 
 	var isok bool
 	if mentionControl.WakeOnly {
