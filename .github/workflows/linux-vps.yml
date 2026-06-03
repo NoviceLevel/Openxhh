@@ -1,0 +1,53 @@
+name: Linux VPS
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Test and build VPS binaries
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y build-essential libsqlite3-dev
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          check-latest: true
+          cache: true
+
+      - name: Test
+        env:
+          CGO_ENABLED: "1"
+        run: go test ./...
+
+      - name: Build VPS binaries
+        env:
+          CGO_ENABLED: "1"
+        run: |
+          mkdir -p dist/linux
+          go build -trimpath -ldflags "-s -w" -o dist/linux/Openxhh .
+          go build -trimpath -ldflags "-s -w" -o dist/linux/Openxhh-webui ./cmd/webui-vps
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Openxhh-linux-amd64-vps
+          path: |
+            dist/linux/Openxhh
+            dist/linux/Openxhh-webui
