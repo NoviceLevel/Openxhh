@@ -7,6 +7,7 @@ import (
 	"openxhh/db"
 	"openxhh/loger"
 	"openxhh/sqlite"
+	"strings"
 	"testing"
 
 	"go.uber.org/zap"
@@ -245,6 +246,16 @@ func TestParseCommentCreateResponseCreatedAt(t *testing.T) {
 	status, msg, commentID, createdAt := parseCommentCreateResponse([]byte(`{"status":"ok","msg":"","result":{"commentid":123,"created_at":1716350000000}}`))
 	if status != "ok" || msg != "" || commentID != 123 || createdAt != 1716350000 {
 		t.Fatalf("parseCommentCreateResponse = (%q,%q,%d,%d)", status, msg, commentID, createdAt)
+	}
+}
+
+func TestReadableXHHResponseBodyDecodesUnicodeEscapes(t *testing.T) {
+	got := readableXHHResponseBody(`{"status":"failed","msg":"\u60a8\u6700\u8fd1\u7684\u8bc4\u8bba\u9891\u6b21\u5f02\u5e38\uff0c\u8bf7\u7a0d\u540e\u518d\u8bd5","version":"1.0","result":{}}`)
+	if want := "您最近的评论频次异常，请稍后再试"; !strings.Contains(got, want) {
+		t.Fatalf("readableXHHResponseBody = %q, want it to contain %q", got, want)
+	}
+	if strings.Contains(got, `\u60a8`) {
+		t.Fatalf("readableXHHResponseBody still contains unicode escape: %q", got)
 	}
 }
 

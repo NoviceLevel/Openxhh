@@ -63,23 +63,23 @@ func createComment(source, text, link_id, reply_id, root_id, iscy, imageURL stri
 	}
 	if !isHTTPSuccess(resp.StatusCode) {
 		body := string(data)
-		loger.Loger.Error("[XHH]评论发送 HTTP 失败", zap.Int("status", resp.StatusCode), zap.String("link_id", link_id), zap.String("reply_id", reply_id), zap.String("root_id", root_id), zap.Bool("has_image", imageURL != ""), zap.String("body", limitXHHResponseBody(body)))
+		loger.Loger.Error("[XHH]评论发送 HTTP 失败", zap.Int("status", resp.StatusCode), zap.String("link_id", link_id), zap.String("reply_id", reply_id), zap.String("root_id", root_id), zap.Bool("has_image", imageURL != ""), zap.String("body", readableXHHResponseBody(body)))
 		handleXHHHTTPFailure("comment_create", resp.StatusCode, body, zap.String("link_id", link_id), zap.String("reply_id", reply_id), zap.String("root_id", root_id), zap.Bool("has_image", imageURL != ""))
 		return false
 	}
 	status, msg, commentID, createdAt := parseCommentCreateResponse(data)
 	if status == "" {
-		loger.Loger.Error("[XHH]无法反序列化", zap.String("body", string(data)))
+		loger.Loger.Error("[XHH]无法反序列化", zap.String("body", readableXHHResponseBody(string(data))))
 		return false
 	}
 	if status != "ok" {
 		if status == "failed" {
 			CommentID, err := strconv.Atoi(reply_id)
 			if err != nil {
-				loger.Loger.Fatal("[XHH]不可能发生的事", zap.String("info", string(data)), zap.Any("errs", reply_id))
+				loger.Loger.Fatal("[XHH]不可能发生的事", zap.String("info", readableXHHResponseBody(string(data))), zap.Any("errs", reply_id))
 			}
 			db.Replyed(CommentID)
-			loger.Loger.Warn("[XHH]异常发送：AI回复已生成但评论发送失败，已标记完成避免重复发送", zap.String("Resp", string(data)), zap.String("link_id", link_id), zap.String("reply_id", reply_id), zap.String("root_id", root_id))
+			loger.Loger.Warn("[XHH]异常发送：AI回复已生成但评论发送失败，已标记完成避免重复发送", zap.String("Resp", readableXHHResponseBody(string(data))), zap.String("msg", msg), zap.String("link_id", link_id), zap.String("reply_id", reply_id), zap.String("root_id", root_id))
 			time.Sleep(5 * time.Second)
 			return true
 		}
@@ -126,6 +126,20 @@ func parseCommentCreateResponse(data []byte) (string, string, int64, int64) {
 		return "", "", 0, 0
 	}
 	return jsonString(payload["status"]), jsonString(payload["msg"]), findJSONInt(payload, "comment_id", "commentid", "commentId"), findJSONUnixTime(payload, "create_at", "created_at", "create_time", "created_time", "dateline", "publish_time")
+}
+
+func readableXHHResponseBody(body string) string {
+	decoder := json.NewDecoder(bytes.NewReader([]byte(body)))
+	decoder.UseNumber()
+	var payload any
+	if err := decoder.Decode(&payload); err != nil {
+		return limitXHHResponseBody(body)
+	}
+	decoded, err := json.Marshal(payload)
+	if err != nil {
+		return limitXHHResponseBody(body)
+	}
+	return limitXHHResponseBody(string(decoded))
 }
 
 func findJSONInt(value any, names ...string) int64 {
