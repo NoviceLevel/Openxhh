@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"html"
 	"html/template"
+	"io"
 	"log"
 	"math/big"
 	"net"
@@ -42,11 +43,13 @@ import (
 const defaultAddr = ":29173"
 const journalName = "__journal__"
 const tokenRecordFileName = "token_records.jsonl"
+const clearedFailedRecordsFileName = "webui_failed_records_cleared.json"
 const maxConfigBodySize = 1 << 20
 const defaultFeedReplyPrompt = "你正在作为小黑盒用户回复帖子。请结合帖子内容写一句自然、有信息量、不像机器人的短评论。"
 const maxRecordLinkLookupIDs = 300
 const webuiSessionCookieName = "xhh_vps_webui_session"
 const webuiSessionDuration = 7 * 24 * time.Hour
+const clearedFailedRecordTTL = 7 * 24 * time.Hour
 
 var indexTemplate = template.Must(template.New("index").Parse(indexHTML))
 var serviceNamePattern = regexp.MustCompile(`^[A-Za-z0-9_.@-]+$`)
@@ -76,6 +79,7 @@ type serverState struct {
 	loginFails           map[string]loginFail
 	mu                   sync.Mutex
 	cacheFillMu          sync.Mutex
+	failedClearMu        sync.Mutex
 	cacheFillUntil       map[int64]time.Time
 	messageStreamMetaMu  sync.RWMutex
 	messageStreamMeta    map[int64]messageStreamPostInfo
@@ -120,6 +124,7 @@ type recordLinkLookup struct {
 
 type failedRecord struct {
 	Time      string `json:"time"`
+	Key       string `json:"key,omitempty"`
 	User      string `json:"user"`
 	Question  string `json:"question"`
 	Reply     string `json:"reply"`
@@ -146,6 +151,14 @@ type regenerateMessageRequest struct {
 	UserID    int64  `json:"userId"`
 	UserName  string `json:"userName"`
 	Question  string `json:"question"`
+}
+
+type clearFailedRecordsRequest struct {
+	Keys []string `json:"keys"`
+}
+
+type clearedFailedRecordsStore struct {
+	Records map[string]int64 `json:"records"`
 }
 
 type feedReplyRecord struct {
@@ -470,6 +483,7 @@ func main() {
 	mux.HandleFunc("/api/logs/read", state.requireAuth(state.handleReadLog))
 	mux.HandleFunc("/api/records", state.requireAuth(state.handleRecords))
 	mux.HandleFunc("/api/failed-records", state.requireAuth(state.handleFailedRecords))
+	mux.HandleFunc("/api/failed-records/clear", state.requireAuth(state.handleClearFailedRecords))
 	mux.HandleFunc("/api/message-stream", state.requireAuth(state.handleMessageStream))
 	mux.HandleFunc("/api/feed-records", state.requireAuth(state.handleFeedRecords))
 
@@ -2519,11 +2533,185 @@ func (s *serverState) handleFailedRecords(w http.ResponseWriter, r *http.Request
 		return
 	}
 	records := parseFailedRecords(content, s.collectResentMsgIDs())
+	assignFailedRecordKeys(records)
+	records = s.filterClearedFailedRecords(records)
 	cfg, err := s.readConfigForRecordLookup()
 	if err == nil {
 		enrichFailedRecordTitles(s, cfg, records)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "records": records})
+}
+
+func (s *serverState) handleClearFailedRecords(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var payload clearFailedRecordsRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&payload); err != nil && err != io.EOF {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "invalid request"})
+		return
+	}
+	keys := cleanFailedRecordKeys(payload.Keys)
+	if len(keys) == 0 {
+		content, _, err := s.readRecordLogs(true)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
+			return
+		}
+		records := parseFailedRecords(content, s.collectResentMsgIDs())
+		assignFailedRecordKeys(records)
+		for _, record := range s.filterClearedFailedRecords(records) {
+			if record.Key != "" {
+				keys = append(keys, record.Key)
+			}
+		}
+		keys = cleanFailedRecordKeys(keys)
+	}
+	count, err := s.addClearedFailedRecordKeys(keys)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "cleared": count})
+}
+
+func cleanFailedRecordKeys(keys []string) []string {
+	seen := map[string]struct{}{}
+	result := make([]string, 0, len(keys))
+	for _, key := range keys {
+		key = strings.TrimSpace(key)
+		if key == "" || len(key) > 128 {
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, key)
+	}
+	return result
+}
+
+func assignFailedRecordKeys(records []failedRecord) {
+	for i := range records {
+		if records[i].Key == "" {
+			records[i].Key = failedRecordClearKey(records[i])
+		}
+	}
+}
+
+func failedRecordClearKey(record failedRecord) string {
+	raw := failedRecordKey(record)
+	if strings.TrimSpace(raw) == "" {
+		raw = fmt.Sprintf("%s|%s|%s|%s", record.Time, record.User, record.Question, record.Reply)
+	}
+	digest := sha256.Sum256([]byte(raw))
+	return hex.EncodeToString(digest[:])
+}
+
+func (s *serverState) filterClearedFailedRecords(records []failedRecord) []failedRecord {
+	cleared, err := s.readClearedFailedRecordKeys()
+	if err != nil || len(cleared) == 0 {
+		return records
+	}
+	result := records[:0]
+	for _, record := range records {
+		if record.Key == "" {
+			record.Key = failedRecordClearKey(record)
+		}
+		if _, ok := cleared[record.Key]; ok {
+			continue
+		}
+		result = append(result, record)
+	}
+	return result
+}
+
+func (s *serverState) clearedFailedRecordsPath() string {
+	return filepath.Join(s.rootDir, clearedFailedRecordsFileName)
+}
+
+func (s *serverState) readClearedFailedRecordKeys() (map[string]struct{}, error) {
+	s.failedClearMu.Lock()
+	defer s.failedClearMu.Unlock()
+	store, changed, err := s.readClearedFailedRecordsStoreLocked(time.Now())
+	if err != nil {
+		return nil, err
+	}
+	if changed {
+		_ = s.writeClearedFailedRecordsStoreLocked(store)
+	}
+	result := make(map[string]struct{}, len(store.Records))
+	for key := range store.Records {
+		result[key] = struct{}{}
+	}
+	return result, nil
+}
+
+func (s *serverState) addClearedFailedRecordKeys(keys []string) (int, error) {
+	keys = cleanFailedRecordKeys(keys)
+	if len(keys) == 0 {
+		return 0, nil
+	}
+	s.failedClearMu.Lock()
+	defer s.failedClearMu.Unlock()
+	now := time.Now()
+	store, _, err := s.readClearedFailedRecordsStoreLocked(now)
+	if err != nil {
+		return 0, err
+	}
+	if store.Records == nil {
+		store.Records = map[string]int64{}
+	}
+	added := 0
+	for _, key := range keys {
+		if _, exists := store.Records[key]; !exists {
+			added++
+		}
+		store.Records[key] = now.Unix()
+	}
+	return added, s.writeClearedFailedRecordsStoreLocked(store)
+}
+
+func (s *serverState) readClearedFailedRecordsStoreLocked(now time.Time) (clearedFailedRecordsStore, bool, error) {
+	store := clearedFailedRecordsStore{Records: map[string]int64{}}
+	data, err := os.ReadFile(s.clearedFailedRecordsPath())
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return store, false, nil
+		}
+		return store, false, err
+	}
+	if len(bytes.TrimSpace(data)) == 0 {
+		return store, false, nil
+	}
+	if err := json.Unmarshal(data, &store); err != nil {
+		return store, false, err
+	}
+	if store.Records == nil {
+		store.Records = map[string]int64{}
+	}
+	cutoff := now.Add(-clearedFailedRecordTTL).Unix()
+	changed := false
+	for key, ts := range store.Records {
+		if strings.TrimSpace(key) == "" || ts < cutoff {
+			delete(store.Records, key)
+			changed = true
+		}
+	}
+	return store, changed, nil
+}
+
+func (s *serverState) writeClearedFailedRecordsStoreLocked(store clearedFailedRecordsStore) error {
+	if err := os.MkdirAll(s.rootDir, 0755); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(store, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(s.clearedFailedRecordsPath(), append(data, '\n'), 0600)
 }
 
 func parseFailedRecords(content string, resentIDs map[int64]struct{}) []failedRecord {
@@ -4705,7 +4893,7 @@ const indexHTML = `<!doctype html>
           </section>
 
           <section class="view" id="view-failed-records">
-            <div class="hero-card"><div class="hero-head"><div class="hero-title"><h1>失败发送</h1><p id="failedRecordsMeta">正在读取失败发送...</p></div><div class="panel-actions"><button id="failedRecordsRefreshBtn" class="secondary" type="button">刷新</button><button class="secondary" data-view-button="home" type="button">返回主控台</button></div></div><div id="failedRecordsToast" class="toast"></div></div>
+            <div class="hero-card"><div class="hero-head"><div class="hero-title"><h1>失败发送</h1><p id="failedRecordsMeta">正在读取失败发送...</p></div><div class="panel-actions"><button id="failedRecordsRefreshBtn" class="secondary" type="button">刷新</button><button id="failedRecordsClearBtn" class="danger" type="button">清除记录</button><button class="secondary" data-view-button="home" type="button">返回主控台</button></div></div><div id="failedRecordsToast" class="toast"></div></div>
             <section class="stream-page"><div class="card records stream-panel"><div class="panel-head"><div><h2>失败发送记录</h2><p>汇总日志中可识别的失败和异常发送，点击“重新发送”会把对应消息重新加入待回复队列。</p></div></div><div class="table-wrap"><table><thead><tr><th>时间</th><th>用户</th><th>用户说</th><th>失败内容</th><th>状态</th><th>帖子</th><th>操作</th></tr></thead><tbody id="failedRecordsBody"><tr><td colspan="7">等待记录...</td></tr></tbody></table></div></div></section>
           </section>
 
@@ -4755,6 +4943,7 @@ const recordsToast=document.querySelector('#recordsToast');
 const recordsMeta=document.querySelector('#recordsMeta');
 const failedRecordsToast=document.querySelector('#failedRecordsToast');
 const failedRecordsMeta=document.querySelector('#failedRecordsMeta');
+const failedRecordsClearBtn=document.querySelector('#failedRecordsClearBtn');
 const inboundRecordsToast=document.querySelector('#inboundRecordsToast');
 const inboundRecordsMeta=document.querySelector('#inboundRecordsMeta');
 const feedRecordsToast=document.querySelector('#feedRecordsToast');
@@ -4792,6 +4981,7 @@ let logPaused=false;
 let lastSelectedLogLine=-1;
 let recordsSignature='';
 let failedRecordsSignature='';
+let currentFailedRecords=[];
 let postTitlesMap={};
 let messageStreamSignature='';
 let feedRecordsSignature='';
@@ -4821,6 +5011,7 @@ bindAction(['serviceRestartBtn','homeRestartBtn','configRestartBtn'],'/api/resta
 for(const id of ['homeRefreshBtn','serviceRefreshBtn']){const el=document.querySelector('#'+id);if(el)el.addEventListener('click',()=>{refreshStatus();loadLogs();if(id==='homeRefreshBtn')loadAllRecords(true)})}
 document.querySelector('#recordsRefreshBtn')?.addEventListener('click',()=>loadAllRecords(true));
 document.querySelector('#failedRecordsRefreshBtn')?.addEventListener('click',()=>loadFailedRecords(true));
+failedRecordsClearBtn?.addEventListener('click',()=>clearFailedRecords());
 document.querySelector('#inboundRecordsRefreshBtn')?.addEventListener('click',()=>loadAllRecords(true));
 document.querySelector('#logoutBtn').addEventListener('click',async()=>{await api('/logout',{method:'POST'});location.reload()});
 commentOverlayClose?.addEventListener('click',event=>{event.stopPropagation();hideCommentThread()});
@@ -4835,6 +5026,7 @@ document.querySelector('#copyLogBtn')?.addEventListener('click',()=>copyText(log
 document.querySelector('#toggleLogRefreshBtn')?.addEventListener('click',event=>{logPaused=!logPaused;if(!logPaused){clearLogLineSelection();window.getSelection()?.removeAllRanges()}event.currentTarget.textContent=logPaused?'继续刷新':'暂停刷新';if(!logPaused)loadCurrentLog()});
 
 async function action(path,text){if(appToast)appToast.textContent='';try{await api(path,{method:'POST'});if(appToast)appToast.textContent=text;setTimeout(refreshStatus,900);setTimeout(loadCurrentLog,1200);setTimeout(loadAllRecords,1500)}catch(err){if(appToast)appToast.textContent=err.message}}
+async function clearFailedRecords(){const keys=currentFailedRecords.map(item=>item.key).filter(Boolean);if(failedRecordsToast)failedRecordsToast.textContent='正在清除失败发送记录...';if(failedRecordsClearBtn)failedRecordsClearBtn.disabled=true;try{const data=await api('/api/failed-records/clear',{method:'POST',body:JSON.stringify({keys})});failedRecordsSignature='';currentFailedRecords=[];renderFailedRecords([]);if(failedRecordsMeta)failedRecordsMeta.textContent='最近24小时 0 条失败发送';if(failedRecordsToast)failedRecordsToast.textContent='已清除 '+formatCount(data.cleared||keys.length)+' 条失败发送记录';setTimeout(()=>loadFailedRecords(true),500)}catch(err){if(failedRecordsToast)failedRecordsToast.textContent=err.message}finally{if(failedRecordsClearBtn)failedRecordsClearBtn.disabled=false}}
 async function regenerateMessage(item,button,feedback,options={}){const original=button.textContent;const toast=options.toast||recordsToast;button.disabled=true;button.textContent=options.workingText||'处理中';setFeedback(feedback,options.pendingText||'正在加入待回复队列...','pending');if(toast)toast.textContent='';try{await api('/api/messages/regenerate',{method:'POST',body:JSON.stringify(regeneratePayload(item))});button.textContent=options.doneText||'已加入';setFeedback(feedback,options.successText||'已加入待回复队列','ok');if(toast)toast.textContent=options.toastSuccess||'已加入待回复队列，机器人下一轮会重新生成';setTimeout(()=>loadAllRecords(true),900)}catch(err){button.disabled=false;button.textContent=original;setFeedback(feedback,'失败：'+err.message,'error');if(toast)toast.textContent=err.message}}
 function resendFailedMessage(item,button,feedback){return regenerateMessage(item,button,feedback,{toast:failedRecordsToast,workingText:'发送中',pendingText:'正在加入重新发送队列...',successText:'已加入重新发送队列',toastSuccess:'已加入重新发送队列，机器人下一轮会重新发送'})}
 function setFeedback(el,text,state){if(!el)return;el.textContent=text;el.className='action-feedback '+(state||'')}
@@ -4953,7 +5145,7 @@ function formatUnixTime(value){const num=Number(value||0);if(!num)return'—';co
 function formatUnixTimeMinute(value){const num=Number(value||0);if(!num)return'—';const date=new Date(num*1000);return Number.isNaN(date.getTime())?'—':date.getFullYear()+'-'+String(date.getMonth()+1).padStart(2,'0')+'-'+String(date.getDate()).padStart(2,'0')+' '+String(date.getHours()).padStart(2,'0')+':'+String(date.getMinutes()).padStart(2,'0')}
 function formatCommentTime(value){const text=cleanText(value);if(!text)return'—';const normalized=text.replace('T',' ');const match=normalized.match(/^(20\d{2}-\d{2}-\d{2}\s+\d{2}:\d{2})(?::\d{2})?(.*)$/);return match?match[1]+match[2]:text}
 function renderRecords(items){if(!recordsBody)return;const signature=JSON.stringify([emojiLibraryVersion,items.map(item=>recordKey(item)+'|'+(item.reply||'')+'|'+(item.status||'')+'|'+(item.tokens||0)+'|'+(item.linkId||0)+'|'+recordImageUrls(item).join(','))]);if(signature===recordsSignature)return;rememberRecordScrolls();recordsSignature=signature;recordsBody.innerHTML='';if(!items.length){const row=document.createElement('tr');const cell=document.createElement('td');cell.colSpan=7;cell.textContent='暂无最近24小时可识别的用户提问/机器人回复记录';row.appendChild(cell);recordsBody.appendChild(row);return}items.forEach((item,index)=>{const key=recordKey(item,index);const row=document.createElement('tr');appendCell(row,item.time);appendCell(row,item.user||'未知用户');appendCell(row,item.question,'content-cell',key+':question');appendReplyCell(row,item,key+':reply');const statusCell=document.createElement('td');const badge=document.createElement('span');badge.className='badge '+(item.status==='已回复'?'ok':isErrorStatus(item.status)?'error':'warn');badge.textContent=item.status;statusCell.appendChild(badge);const copyBtn=document.createElement('button');copyBtn.type='button';copyBtn.className='copy-btn';copyBtn.textContent='复制';copyBtn.addEventListener('click',async()=>{await copyText(recordText(item));copyBtn.textContent='已复制';setTimeout(()=>copyBtn.textContent='复制',900)});statusCell.appendChild(copyBtn);row.appendChild(statusCell);appendPostCell(row,item);const actionCell=document.createElement('td');const stack=document.createElement('div');stack.className='action-stack';const viewThreadBtn=document.createElement('button');viewThreadBtn.type='button';viewThreadBtn.className='copy-btn';viewThreadBtn.textContent='查看楼层';const regenerateBtn=document.createElement('button');regenerateBtn.type='button';regenerateBtn.className='copy-btn';regenerateBtn.textContent='重新生成';const feedback=document.createElement('span');feedback.className='action-feedback';viewThreadBtn.addEventListener('click',()=>showCommentThread(item,viewThreadBtn,feedback));regenerateBtn.addEventListener('click',()=>regenerateMessage(item,regenerateBtn,feedback));stack.appendChild(viewThreadBtn);stack.appendChild(regenerateBtn);stack.appendChild(feedback);actionCell.appendChild(stack);row.appendChild(actionCell);recordsBody.appendChild(row)})}
-function renderFailedRecords(items){if(!failedRecordsBody)return;const sorted=items.slice().sort((a,b)=>recordTimeValue(b)-recordTimeValue(a));const signature=JSON.stringify([emojiLibraryVersion,sorted.map(item=>recordKey(item)+'|'+(item.reply||'')+'|'+(item.lastError||'')+'|'+(item.status||'')+'|'+(item.linkId||0)+'|'+recordImageUrls(item).join(','))]);if(signature===failedRecordsSignature)return;failedRecordsSignature=signature;failedRecordsBody.innerHTML='';if(!sorted.length){appendEmptyRow(failedRecordsBody,7,'暂无失败发送记录');return}sorted.forEach((item,index)=>{const key='failed:'+recordKey(item,index);const row=document.createElement('tr');appendCell(row,formatCommentTime(item.time));appendCell(row,item.user||'未知用户');appendCell(row,item.question,'content-cell',key+':question');appendReplyCell(row,{...item,reply:failedRecordErrorText(item)},key+':error');const statusCell=document.createElement('td');const badge=document.createElement('span');badge.className='badge error';badge.textContent=item.status||'失败';statusCell.appendChild(badge);row.appendChild(statusCell);appendPostCell(row,item);appendFailedActionCell(row,item);failedRecordsBody.appendChild(row)})}
+function renderFailedRecords(items){if(!failedRecordsBody)return;const sorted=items.slice().sort((a,b)=>recordTimeValue(b)-recordTimeValue(a));currentFailedRecords=sorted;const signature=JSON.stringify([emojiLibraryVersion,sorted.map(item=>(item.key||recordKey(item))+'|'+(item.reply||'')+'|'+(item.lastError||'')+'|'+(item.status||'')+'|'+(item.linkId||0)+'|'+recordImageUrls(item).join(','))]);if(signature===failedRecordsSignature)return;failedRecordsSignature=signature;failedRecordsBody.innerHTML='';if(!sorted.length){appendEmptyRow(failedRecordsBody,7,'暂无失败发送记录');return}sorted.forEach((item,index)=>{const key='failed:'+(item.key||recordKey(item,index));const row=document.createElement('tr');appendCell(row,formatCommentTime(item.time));appendCell(row,item.user||'未知用户');appendCell(row,item.question,'content-cell',key+':question');appendReplyCell(row,{...item,reply:failedRecordErrorText(item)},key+':error');const statusCell=document.createElement('td');const badge=document.createElement('span');badge.className='badge error';badge.textContent=item.status||'失败';statusCell.appendChild(badge);row.appendChild(statusCell);appendPostCell(row,item);appendFailedActionCell(row,item);failedRecordsBody.appendChild(row)})}
 function recordTimeValue(item){const time=parseItemTime(item?.time);return time?time.getTime():0}
 function failedRecordErrorText(item){if(item.lastError)return item.lastError;if(item.status==='异常发送'&&item.reply)return 'AI 已生成但发送失败：'+item.reply;return item.reply||'发送失败'}
 function appendFailedActionCell(row,item){const cell=document.createElement('td');const stack=document.createElement('div');stack.className='action-stack';const resendBtn=document.createElement('button');resendBtn.type='button';resendBtn.className='copy-btn';resendBtn.textContent='重新发送';const viewThreadBtn=document.createElement('button');viewThreadBtn.type='button';viewThreadBtn.className='copy-btn';viewThreadBtn.textContent='查看楼层';const copyBtn=document.createElement('button');copyBtn.type='button';copyBtn.className='copy-btn';copyBtn.textContent='复制';const feedback=document.createElement('span');feedback.className='action-feedback';resendBtn.addEventListener('click',()=>resendFailedMessage(item,resendBtn,feedback));viewThreadBtn.addEventListener('click',()=>showCommentThread(item,viewThreadBtn,feedback));copyBtn.addEventListener('click',async()=>{await copyText(recordText(item));copyBtn.textContent='已复制';setTimeout(()=>copyBtn.textContent='复制',900)});stack.appendChild(resendBtn);stack.appendChild(viewThreadBtn);stack.appendChild(copyBtn);stack.appendChild(feedback);cell.appendChild(stack);row.appendChild(cell)}
