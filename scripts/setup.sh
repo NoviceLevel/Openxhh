@@ -2,6 +2,9 @@
 
 set -euo pipefail
 
+export LANG="${LANG:-C.UTF-8}"
+export LC_CTYPE="${LC_CTYPE:-C.UTF-8}"
+
 # Openxhh 一键安装脚本
 # 用法：curl -fsSL https://raw.githubusercontent.com/NoviceLevel/Openxhh/main/scripts/setup.sh | sudo bash
 

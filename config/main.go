@@ -81,7 +81,7 @@ func InitConfig() {
 			if err != nil {
 				panic(err)
 			}
-			os.WriteFile("./config.json", append(Data, '\n'), 0644)
+			os.WriteFile("./config.json", append(Data, '\n'), 0600)
 			loger.Loger.Fatal("请修改配置文件后重新启动")
 		}
 		panic(err)
@@ -92,7 +92,7 @@ func InitConfig() {
 	}
 	if applyDefaults() {
 		if Data, err := json.MarshalIndent(ConfigStruct, "", "  "); err == nil {
-			_ = os.WriteFile("./config.json", append(Data, '\n'), 0644)
+			_ = os.WriteFile("./config.json", append(Data, '\n'), 0600)
 		}
 	}
 	loger.Loger.Info("[CFG]Init OK")

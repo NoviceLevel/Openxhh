@@ -2,6 +2,9 @@
 
 set -euo pipefail
 
+export LANG="${LANG:-C.UTF-8}"
+export LC_CTYPE="${LC_CTYPE:-C.UTF-8}"
+
 ENV_FILE="${OPENXHH_MANAGER_ENV:-/etc/openxhh-manager.env}"
 if [ -f "$ENV_FILE" ]; then
   # shellcheck disable=SC1090

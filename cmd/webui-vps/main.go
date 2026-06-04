@@ -678,6 +678,7 @@ func (s *serverState) handleLogin(w http.ResponseWriter, r *http.Request) {
 		Value:    token,
 		Path:     "/",
 		HttpOnly: true,
+		Secure:   isSecureRequest(r),
 		SameSite: http.SameSiteLaxMode,
 		Expires:  expiresAt,
 		MaxAge:   int(time.Until(expiresAt).Seconds()),
@@ -737,8 +738,15 @@ func (s *serverState) handleLogout(w http.ResponseWriter, r *http.Request) {
 		delete(s.sessions, cookie.Value)
 		s.mu.Unlock()
 	}
-	http.SetCookie(w, &http.Cookie{Name: webuiSessionCookieName, Path: "/", MaxAge: -1, Expires: time.Unix(0, 0), SameSite: http.SameSiteLaxMode})
+	http.SetCookie(w, &http.Cookie{Name: webuiSessionCookieName, Path: "/", MaxAge: -1, Expires: time.Unix(0, 0), Secure: isSecureRequest(r), SameSite: http.SameSiteLaxMode})
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func isSecureRequest(r *http.Request) bool {
+	if r.TLS != nil {
+		return true
+	}
+	return strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")), "https")
 }
 
 func (s *serverState) requireAuth(next http.HandlerFunc) http.HandlerFunc {
@@ -2522,7 +2530,13 @@ func (s *serverState) handleRecords(w http.ResponseWriter, r *http.Request) {
 	failedRecords := parseFailedRecords(content, s.collectResentMsgIDs())
 	assignFailedRecordKeys(failedRecords)
 	failedRecords = s.filterClearedFailedRecords(failedRecords)
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "content": content, "sources": sources, "tokens": tokens, "links": links, "failedCount": len(failedRecords)})
+	summary := recordSummary{FailedCount: len(failedRecords)}
+	if cfg, err := s.readConfigForRecordLookup(); err == nil {
+		if databaseSummary, err := s.readDatabaseRecordSummary(cfg, recentOnly, len(failedRecords)); err == nil {
+			summary = databaseSummary
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "content": content, "sources": sources, "tokens": tokens, "links": links, "failedCount": len(failedRecords), "summary": summary})
 }
 
 func (s *serverState) handleFailedRecords(w http.ResponseWriter, r *http.Request) {
@@ -4567,6 +4581,7 @@ func (s *serverState) readTokenRecords(logContent string) []tokenRecord {
 	path := filepath.Join(s.rootDir, tokenRecordFileName)
 	records, err := readTokenRecordFile(path)
 	if err == nil && len(records) > 0 {
+		_ = os.Chmod(path, 0600)
 		return records
 	}
 	backfill := tokenRecordsFromLogs(logContent)
@@ -4618,7 +4633,7 @@ func writeTokenRecordFileIfEmpty(path string, records []tokenRecord) {
 	if builder.Len() == 0 {
 		return
 	}
-	_ = os.WriteFile(path, []byte(builder.String()), 0644)
+	_ = os.WriteFile(path, []byte(builder.String()), 0600)
 }
 
 func tokenRecordsFromLogs(content string) []tokenRecord {
@@ -5094,7 +5109,8 @@ async function loadAllRecords(manual=false){
 		if(recordsMeta)recordsMeta.textContent='记录读取失败：'+err.message
 		if(recordsToast)recordsToast.textContent=err.message
 	}}
-function recordSummaryFromData(data){const lines=(data.content||'').split('\n').filter(Boolean);const interactions=dedupeInteractions(parseInteractions(lines));applyRecordLinks(interactions,data.links);const completed=interactions.filter(item=>item.status==='已回复'&&item.question&&item.reply);const failedRecords=interactions.filter(item=>isErrorStatus(item.status)&&item.question&&item.reply);const pending=interactions.filter(item=>item.status==='待回复'||item.status==='待重试').length;const records=interactions.filter(item=>(item.status==='已回复'||isErrorStatus(item.status))&&item.question&&item.reply);const tokenItems=Array.isArray(data.tokens)&&data.tokens.length?data.tokens:interactions.filter(item=>item.tokens);const postTitles=data.links&&data.links.postTitles?data.links.postTitles:{};const failedCount=Number.isFinite(Number(data.failedCount))?Number(data.failedCount):failedRecords.length;return{cachedAt:Date.now(),sources:Number(data.sources||0),interactionsCount:interactions.length,completedCount:completed.length,failedCount,failedRecords,pending,recordsCount:records.length,trendItems:completed.map(item=>({time:item.time})),tokenStats:tokenStats(tokenItems),postTitles}}
+function recordSummaryFromData(data){const lines=(data.content||'').split('\n').filter(Boolean);const interactions=dedupeInteractions(parseInteractions(lines));applyRecordLinks(interactions,data.links);const completed=interactions.filter(item=>item.status==='已回复'&&item.question&&item.reply);const failedRecords=interactions.filter(item=>isErrorStatus(item.status)&&item.question&&item.reply);const pending=interactions.filter(item=>item.status==='待回复'||item.status==='待重试').length;const records=interactions.filter(item=>(item.status==='已回复'||isErrorStatus(item.status))&&item.question&&item.reply);const tokenItems=Array.isArray(data.tokens)&&data.tokens.length?data.tokens:interactions.filter(item=>item.tokens);const postTitles=data.links&&data.links.postTitles?data.links.postTitles:{};const serverSummary=data.summary&&typeof data.summary==='object'?data.summary:null;const failedCount=Number.isFinite(Number(data.failedCount))?Number(data.failedCount):failedRecords.length;return{cachedAt:Date.now(),sources:Number(data.sources||0),interactionsCount:summaryNumber(serverSummary,'interactionsCount',interactions.length),completedCount:summaryNumber(serverSummary,'completedCount',completed.length),failedCount:summaryNumber(serverSummary,'failedCount',failedCount),failedRecords,pending:summaryNumber(serverSummary,'pending',pending),recordsCount:summaryNumber(serverSummary,'recordsCount',records.length),trendItems:completed.map(item=>({time:item.time})),tokenStats:tokenStats(tokenItems),postTitles,summarySource:serverSummary?.hasDatabase?'database':'logs'}}
+function summaryNumber(summary,key,fallback){const value=Number(summary?.[key]);return Number.isFinite(value)?value:fallback}
 function renderCachedRecordSummary(){try{const raw=sessionStorage.getItem(recordSummaryCacheStorageKey);if(!raw)return;const summary=JSON.parse(raw);if(!summary||typeof summary!=='object')return;if(Date.now()-Number(summary.cachedAt||0)>recordSummaryCacheTTL)return;renderRecordSummary(summary,false,true)}catch(err){sessionStorage.removeItem(recordSummaryCacheStorageKey)}}
 function saveRecordSummaryCache(summary){try{sessionStorage.setItem(recordSummaryCacheStorageKey,JSON.stringify(summary))}catch(err){try{sessionStorage.setItem(recordSummaryCacheStorageKey,JSON.stringify({...summary,failedRecords:(summary.failedRecords||[]).slice(0,200)}))}catch(innerErr){}}}
 function renderRecordSummary(summary,manual,fromCache){postTitlesMap=summary.postTitles||{};document.querySelector('#metricStatus').textContent=formatCount(summary.interactionsCount||0);document.querySelector('#metricLines').textContent=formatCount(summary.completedCount||0);document.querySelector('#metricErrors').textContent=formatCount(summary.failedCount||0);document.querySelector('#metricFiles').textContent=formatCount(summary.pending||0);renderTrend(Array.isArray(summary.trendItems)?summary.trendItems:[]);renderTokenStats(summary.tokenStats||{});if(recordsMeta)recordsMeta.textContent=(fromCache?'已显示缓存 ':'已读取 ')+formatCount(summary.recordsCount||0)+' 条日志记录，来源 '+formatCount(summary.sources||0)+' 个日志源';if(manual&&!fromCache&&recordsToast)recordsToast.textContent='已刷新所有记录'}
