@@ -171,10 +171,11 @@ func GetComm(limit int) (CommArr []CommStruct) {
 		}
 		defer row.Close()
 		for row.Next() {
-			var Comm CommStruct
-			row.Scan(&Comm.MsgID, &Comm.LinkID, &Comm.CommentID, &Comm.RootID, &Comm.Text, &Comm.Uid, &Comm.UserName)
-			CommArr = append(CommArr, Comm)
+			if Comm, ok := scanComm(row, "pg"); ok {
+				CommArr = append(CommArr, Comm)
+			}
 		}
+		logRowsErr(row, "pg")
 		return
 	}
 	if cfg.Type == "sqlite" {
@@ -185,10 +186,11 @@ func GetComm(limit int) (CommArr []CommStruct) {
 		}
 		defer row.Close()
 		for row.Next() {
-			var Comm CommStruct
-			row.Scan(&Comm.MsgID, &Comm.LinkID, &Comm.CommentID, &Comm.RootID, &Comm.Text, &Comm.Uid, &Comm.UserName)
-			CommArr = append(CommArr, Comm)
+			if Comm, ok := scanComm(row, "sqlite"); ok {
+				CommArr = append(CommArr, Comm)
+			}
 		}
+		logRowsErr(row, "sqlite")
 	}
 
 	return
@@ -230,10 +232,11 @@ func getCommByUserFilter(userIDs []int, limit int, exclude bool) (CommArr []Comm
 		}
 		defer row.Close()
 		for row.Next() {
-			var Comm CommStruct
-			row.Scan(&Comm.MsgID, &Comm.LinkID, &Comm.CommentID, &Comm.RootID, &Comm.Text, &Comm.Uid, &Comm.UserName)
-			CommArr = append(CommArr, Comm)
+			if Comm, ok := scanComm(row, "pg"); ok {
+				CommArr = append(CommArr, Comm)
+			}
 		}
+		logRowsErr(row, "pg")
 		return
 	}
 	if cfg.Type == "sqlite" {
@@ -258,10 +261,11 @@ func getCommByUserFilter(userIDs []int, limit int, exclude bool) (CommArr []Comm
 		}
 		defer row.Close()
 		for row.Next() {
-			var Comm CommStruct
-			row.Scan(&Comm.MsgID, &Comm.LinkID, &Comm.CommentID, &Comm.RootID, &Comm.Text, &Comm.Uid, &Comm.UserName)
-			CommArr = append(CommArr, Comm)
+			if Comm, ok := scanComm(row, "sqlite"); ok {
+				CommArr = append(CommArr, Comm)
+			}
 		}
+		logRowsErr(row, "sqlite")
 	}
 	return
 }
@@ -279,15 +283,42 @@ func IsNew() bool {
 	var num int
 	if cfg.Type == "pg" {
 		row := pg.Conn.QueryRow(ctx, "SELECT COUNT(*) FROM at")
-		row.Scan(&num)
+		if err := row.Scan(&num); err != nil {
+			loger.Loger.Warn("[DB]无法判断是否首次运行", zap.Error(err))
+		}
 	}
 	if cfg.Type == "sqlite" {
 		row := sqlite.Db.QueryRow("SELECT COUNT(*) FROM at")
-		row.Scan(&num)
+		if err := row.Scan(&num); err != nil {
+			loger.Loger.Warn("[DB]无法判断是否首次运行", zap.Error(err))
+		}
 	}
 	if num > 0 {
 		return false
 	} else {
 		return true
+	}
+}
+
+type commRowScanner interface {
+	Scan(dest ...any) error
+}
+
+type rowsWithErr interface {
+	Err() error
+}
+
+func scanComm(row commRowScanner, source string) (CommStruct, bool) {
+	var Comm CommStruct
+	if err := row.Scan(&Comm.MsgID, &Comm.LinkID, &Comm.CommentID, &Comm.RootID, &Comm.Text, &Comm.Uid, &Comm.UserName); err != nil {
+		loger.Loger.Warn("[DB]无法解析评论信息", zap.Error(err), zap.String("source", source))
+		return CommStruct{}, false
+	}
+	return Comm, true
+}
+
+func logRowsErr(rows rowsWithErr, source string) {
+	if err := rows.Err(); err != nil {
+		loger.Loger.Warn("[DB]读取评论信息中断", zap.Error(err), zap.String("source", source))
 	}
 }

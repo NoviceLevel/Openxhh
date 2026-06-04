@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"openxhh/loger"
 	"os"
+
+	"go.uber.org/zap"
 )
 
 const defaultFeedReplyPrompt = "你正在作为小黑盒用户回复帖子。请结合帖子内容写一句自然、有信息量、不像机器人的短评论。"
@@ -76,12 +78,9 @@ func InitConfig() {
 	file, err := os.ReadFile(wd + "/config.json")
 	if err != nil {
 		if os.IsNotExist(err) {
-			applyDefaults()
-			Data, err := json.MarshalIndent(ConfigStruct, "", "  ")
-			if err != nil {
-				panic(err)
+			if err := createDefaultConfig("./config.json"); err != nil {
+				loger.Loger.Fatal("无法创建配置文件", zap.Error(err), zap.String("path", wd+"/config.json"))
 			}
-			os.WriteFile("./config.json", append(Data, '\n'), 0600)
 			loger.Loger.Fatal("请修改配置文件后重新启动")
 		}
 		panic(err)
@@ -91,11 +90,28 @@ func InitConfig() {
 		panic(err)
 	}
 	if applyDefaults() {
-		if Data, err := json.MarshalIndent(ConfigStruct, "", "  "); err == nil {
-			_ = os.WriteFile("./config.json", append(Data, '\n'), 0600)
+		if err := persistConfig("./config.json"); err != nil {
+			loger.Loger.Warn("无法保存补全后的默认配置", zap.Error(err), zap.String("path", wd+"/config.json"))
 		}
 	}
 	loger.Loger.Info("[CFG]Init OK")
+}
+
+func createDefaultConfig(path string) error {
+	applyDefaults()
+	return persistConfig(path)
+}
+
+func persistConfig(path string) error {
+	Data, err := json.MarshalIndent(ConfigStruct, "", "  ")
+	if err != nil {
+		return err
+	}
+	return writeConfigFile(path, Data)
+}
+
+func writeConfigFile(path string, data []byte) error {
+	return os.WriteFile(path, append(data, '\n'), 0600)
 }
 
 func applyDefaults() bool {

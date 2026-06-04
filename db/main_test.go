@@ -2,15 +2,21 @@ package db
 
 import (
 	"database/sql"
+	"errors"
 	"openxhh/config"
+	"openxhh/loger"
 	"openxhh/sqlite"
 	"testing"
+
+	"go.uber.org/zap"
 )
 
 func setupSQLiteCommTest(t *testing.T) {
 	t.Helper()
 	oldType := config.ConfigStruct.DataBase.Type
 	oldDB := sqlite.Db
+	oldLogger := loger.Loger
+	loger.Loger = zap.NewNop()
 	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
@@ -21,6 +27,7 @@ func setupSQLiteCommTest(t *testing.T) {
 		database.Close()
 		sqlite.Db = oldDB
 		config.ConfigStruct.DataBase.Type = oldType
+		loger.Loger = oldLogger
 	})
 	_, err = sqlite.Db.Exec(`CREATE TABLE at (
 		msg_id BIGINT PRIMARY KEY,
@@ -34,6 +41,22 @@ func setupSQLiteCommTest(t *testing.T) {
 	)`)
 	if err != nil {
 		t.Fatalf("create at table: %v", err)
+	}
+}
+
+type failingCommScanner struct{}
+
+func (failingCommScanner) Scan(dest ...any) error {
+	return errors.New("scan failed")
+}
+
+func TestScanCommSkipsInvalidRow(t *testing.T) {
+	oldLogger := loger.Loger
+	loger.Loger = zap.NewNop()
+	t.Cleanup(func() { loger.Loger = oldLogger })
+
+	if got, ok := scanComm(failingCommScanner{}, "test"); ok || got != (CommStruct{}) {
+		t.Fatalf("scanComm returned (%+v, %v), want zero value and false", got, ok)
 	}
 }
 
