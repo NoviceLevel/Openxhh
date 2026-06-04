@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -150,5 +151,20 @@ func TestCachedXHHEmojiLibraryStoresSuccessfulFetch(t *testing.T) {
 	}
 	if state.emojiCache["cube_笑"] != "https://example.com/smile.png" {
 		t.Fatalf("stored emoji = %q", state.emojiCache["cube_笑"])
+	}
+}
+
+func TestParseFailedRecordsRemovesAutomaticRetrySuccess(t *testing.T) {
+	content := strings.Join([]string{
+		`2026-06-04 01:05:00 INFO [XHH]正在处理@消息 {"msg_id":3881692903,"comment_id":880649280,"link_id":182683946,"user_id":44777403,"user_name":"小金鱼鸭子","text":"可以转人工嘛","raw_text":"可以转人工嘛"}`,
+		`2026-06-04 01:05:01 INFO [Ai]正在询问Ai {"msg_id":3881692903,"comment_id":880649280,"link_id":182683946,"user_id":44777403,"user_name":"小金鱼鸭子","question":"可以转人工嘛","raw_question":"可以转人工嘛"}`,
+		`2026-06-04 01:05:02 ERROR [XHH]无法回复评论，将重试 {"msg_id":3881692903,"comment_id":880649280,"link_id":182683946,"user_id":44777403,"user_name":"小金鱼鸭子","question":"可以转人工嘛"}`,
+		`2026-06-04 01:19:07 INFO [XHH]正在处理@消息 {"msg_id":3881692903,"comment_id":880649280,"link_id":182683946,"user_id":44777403,"user_name":"小金鱼鸭子","text":"可以转人工嘛","raw_text":"可以转人工嘛"}`,
+		`2026-06-04 01:19:07 INFO [Ai]Ai说： {"text":"何事？本大人可不是客服。","本次消耗token":1943,"msg_id":3881692903,"comment_id":880649280,"link_id":182683946,"user_id":44777403,"user_name":"小金鱼鸭子","question":"可以转人工嘛","raw_question":"可以转人工嘛"}`,
+	}, "\n")
+
+	records := parseFailedRecords(content, nil)
+	if len(records) != 0 {
+		t.Fatalf("parseFailedRecords returned %d records, want 0: %+v", len(records), records)
 	}
 }

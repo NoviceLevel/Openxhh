@@ -68,21 +68,21 @@ type xhhSession struct {
 }
 
 type serverState struct {
-	rootDir             string
-	authPath            string
-	listenAddr          string
-	service             string
-	sessions            map[string]time.Time
-	loginFails          map[string]loginFail
-	mu                  sync.Mutex
-	cacheFillMu         sync.Mutex
-	cacheFillUntil      map[int64]time.Time
-	messageStreamMetaMu sync.RWMutex
-	messageStreamMeta   map[int64]messageStreamPostInfo
-	emojiCacheMu        sync.RWMutex
-	emojiCache          map[string]string
-	emojiCacheVersion   string
-	emojiCacheUntil     time.Time
+	rootDir              string
+	authPath             string
+	listenAddr           string
+	service              string
+	sessions             map[string]time.Time
+	loginFails           map[string]loginFail
+	mu                   sync.Mutex
+	cacheFillMu          sync.Mutex
+	cacheFillUntil       map[int64]time.Time
+	messageStreamMetaMu  sync.RWMutex
+	messageStreamMeta    map[int64]messageStreamPostInfo
+	emojiCacheMu         sync.RWMutex
+	emojiCache           map[string]string
+	emojiCacheVersion    string
+	emojiCacheUntil      time.Time
 	recentlyResentMsgIDs sync.Map
 	dbMu                 sync.Mutex
 	db                   *sql.DB
@@ -1040,7 +1040,6 @@ func (s *serverState) refreshCommentThreadCache(cfg appConfig, session xhhSessio
 		fmt.Printf("[楼层缓存]后台刷新完成 link_id=%d count=%d\n", record.LinkID, len(thread))
 	}
 }
-
 
 func saveCommentThreadToCache(linkID int64, rootCommentID int64, thread []commentThreadItem) {
 	items := make([]db.CommentCacheItem, 0, len(thread))
@@ -2557,6 +2556,8 @@ func parseFailedRecords(content string, resentIDs map[int64]struct{}) []failedRe
 			} else if len(pending) > 0 {
 				item = pending[0]
 				pending = pending[1:]
+			} else {
+				item = *r
 			}
 			if item.Question == "" {
 				continue
@@ -2631,13 +2632,14 @@ func parseFailedRecords(content string, resentIDs map[int64]struct{}) []failedRe
 			items = append(items, item)
 		}
 	}
-	result := make([]failedRecord, 0, len(items))
-	for _, item := range items {
+	deduped := dedupeFailedRecords(items, resentIDs)
+	result := make([]failedRecord, 0, len(deduped))
+	for _, item := range deduped {
 		if isErrorGoStatus(item.Status) && item.Question != "" {
 			result = append(result, item)
 		}
 	}
-	return dedupeFailedRecords(result, resentIDs)
+	return result
 }
 
 func isErrorGoStatus(status string) bool {
@@ -2782,10 +2784,10 @@ func dedupeFailedRecords(items []failedRecord, resentIDs map[int64]struct{}) []f
 
 func rankGoStatus(status string) int {
 	switch status {
+	case "已回复":
+		return 5
 	case "异常发送":
 		return 4
-	case "已回复":
-		return 3
 	case "失败":
 		return 2
 	case "待重试":
