@@ -445,6 +445,9 @@ func main() {
 		log.Fatal(err)
 	}
 	if created {
+		if err := writeWebUIPasswordFile(rootDir, password); err != nil {
+			log.Printf("保存 Web UI 明文密码失败: %v", err)
+		}
 		fmt.Println("Openxhh VPS Web UI 已生成随机强密码")
 		fmt.Println("登录密码:", password)
 		fmt.Println("请立即保存；如需重置，停止 Web UI 后删除 webui_auth.json 再启动。")
@@ -515,6 +518,14 @@ func ensureAuth(path string) (string, bool, error) {
 		return "", false, err
 	}
 	return password, true, nil
+}
+
+func writeWebUIPasswordFile(rootDir, password string) error {
+	if password == "" {
+		return nil
+	}
+	path := filepath.Join(rootDir, "webui_password.txt")
+	return os.WriteFile(path, []byte(password+"\n"), 0600)
 }
 
 func randomPassword(length int) (string, error) {

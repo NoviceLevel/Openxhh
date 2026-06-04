@@ -75,21 +75,25 @@ restart_webui() {
 }
 
 latest_webui_password() {
+  local password_file="$INSTALL_DIR/webui_password.txt"
+  if [ -s "$password_file" ]; then
+    sed -n '1{s/[[:space:]]*$//;p;q;}' "$password_file"
+    return 0
+  fi
   journalctl -u "$WEBUI_SERVICE_NAME" --since "30 days ago" --no-pager 2>/dev/null |
     sed -n 's/.*登录密码:[[:space:]]*//p' |
     tail -n 1
 }
 
-print_webui_password_hint() {
+print_webui_password() {
   local password
   password="$(latest_webui_password || true)"
-  printf 'Web UI 地址：http://%s:%s\n' "$(public_ip)" "$WEBUI_PORT"
   if [ -n "$password" ]; then
-    printf '最近生成的登录密码：%s\n' "$password"
+    printf '%s\n' "$password"
     return 0
   fi
-  red "最近日志中没有找到明文密码。"
-  muted "webui_auth.json 只保存哈希，无法反推出原密码；如果忘记了，只能重置。"
+  red "没有找到明文密码文件：$INSTALL_DIR/webui_password.txt"
+  muted "旧版本只保存 webui_auth.json 哈希，无法反推出原密码；请重置后再查看。"
   return 1
 }
 
@@ -107,17 +111,11 @@ reset_webui_password() {
   green "重启 Web UI 生成新密码..."
   systemctl restart "$WEBUI_SERVICE_NAME"
   sleep 2
-  print_webui_password_hint || {
-    red "仍未读取到新密码，请查看完整 Web UI 日志："
-    journalctl -u "$WEBUI_SERVICE_NAME" -n 80 --no-pager || true
-  }
+  print_webui_password
 }
 
 webui_password_and_logs() {
-  green "Web UI 密码/日志：$WEBUI_SERVICE_NAME"
-  if print_webui_password_hint; then
-    printf '\n最近日志：\n'
-    journalctl -u "$WEBUI_SERVICE_NAME" -n 40 --no-pager || true
+  if print_webui_password; then
     return
   fi
 
@@ -126,8 +124,7 @@ webui_password_and_logs() {
   if [ "$answer" = "RESET" ]; then
     reset_webui_password
   else
-    printf '\n最近日志：\n'
-    journalctl -u "$WEBUI_SERVICE_NAME" -n 80 --no-pager || true
+    muted "已取消。"
   fi
 }
 
@@ -210,7 +207,7 @@ show_menu() {
   printf '  6) 停止机器人\n'
   printf '  7) 扫码登录小黑盒\n'
   printf '  8) 重启 Web UI\n'
-  printf '  9) 查看/重置 Web UI 密码\n'
+  printf '  9) 直接输出 Web UI 密码\n'
   printf ' 10) 基础配置体检\n'
   printf '  0) 退出\n\n'
 }
