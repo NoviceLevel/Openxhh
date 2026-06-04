@@ -38,6 +38,21 @@ func CheckNew() {
 	in := strings.TrimRight(str, "\r\n")
 
 	switch in {
+	case "y":
+		xhh.DontReply = false
+		return
+	case "yes":
+		xhh.DontReply = false
+		return
+	case "Y":
+		xhh.DontReply = false
+		return
+	case "Yes":
+		xhh.DontReply = false
+		return
+	case "YES":
+		xhh.DontReply = false
+		return
 	case "n":
 		xhh.DontReply = true
 		return

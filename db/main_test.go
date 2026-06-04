@@ -11,7 +11,7 @@ func setupSQLiteCommTest(t *testing.T) {
 	t.Helper()
 	oldType := config.ConfigStruct.DataBase.Type
 	oldDB := sqlite.Db
-	database, err := sql.Open("sqlite3", ":memory:")
+	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}

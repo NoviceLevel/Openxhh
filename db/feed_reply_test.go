@@ -16,7 +16,7 @@ func setupSQLiteFeedReplyTest(t *testing.T) {
 	oldDB := sqlite.Db
 	oldLogger := loger.Loger
 	loger.Loger = zap.NewNop()
-	database, err := sql.Open("sqlite3", ":memory:")
+	database, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}

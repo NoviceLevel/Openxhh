@@ -277,7 +277,7 @@ func RecentActiveLinkIDs(since int64, limit int) []int64 {
 	}
 	ctx := context.Background()
 	if cfg.Type == "pg" {
-		rows, err := pg.Conn.Query(ctx, "SELECT DISTINCT link_id FROM inbound_messages WHERE link_id > 0 AND created_at >= $1 ORDER BY MAX(created_at) DESC LIMIT $2", since, limit)
+		rows, err := pg.Conn.Query(ctx, "SELECT link_id FROM inbound_messages WHERE link_id > 0 AND created_at >= $1 GROUP BY link_id ORDER BY MAX(created_at) DESC LIMIT $2", since, limit)
 		if err != nil {
 			return nil
 		}
@@ -292,7 +292,7 @@ func RecentActiveLinkIDs(since int64, limit int) []int64 {
 		return ids
 	}
 	if cfg.Type == "sqlite" {
-		rows, err := sqlite.Db.Query("SELECT DISTINCT link_id FROM inbound_messages WHERE link_id > 0 AND created_at >= ? ORDER BY MAX(created_at) DESC LIMIT ?", since, limit)
+		rows, err := sqlite.Db.Query("SELECT link_id FROM inbound_messages WHERE link_id > 0 AND created_at >= ? GROUP BY link_id ORDER BY MAX(created_at) DESC LIMIT ?", since, limit)
 		if err != nil {
 			return nil
 		}
@@ -311,6 +311,50 @@ func RecentActiveLinkIDs(since int64, limit int) []int64 {
 
 func RecentOutboundMessages(since int64, limit int) []OutboundMessage {
 	return OutboundMessagesForTracking(since, 0, "", limit)
+}
+
+func OutboundMessagesForCommentThread(linkID int64, rootCommentID int64, limit int) []OutboundMessage {
+	if !messageStreamDatabaseReady() || linkID <= 0 {
+		return nil
+	}
+	if limit <= 0 {
+		limit = 1
+	}
+	if cfg.Type == "pg" {
+		query := "SELECT source,link_id,root_comment_id,reply_comment_id,comment_id,text,image_url,created_at,raw_response,unique_key FROM outbound_messages WHERE link_id=$1"
+		args := []any{linkID}
+		if rootCommentID > 0 {
+			query += " AND root_comment_id=$2"
+			args = append(args, rootCommentID)
+		}
+		args = append(args, limit)
+		query += fmt.Sprintf(" ORDER BY created_at DESC, unique_key DESC LIMIT $%d", len(args))
+		rows, err := pg.Conn.Query(context.Background(), query, args...)
+		if err != nil {
+			loger.Loger.Warn("[DB]unable to read outbound thread messages", zap.Error(err), zap.Int64("link_id", linkID), zap.Int64("root_comment_id", rootCommentID))
+			return nil
+		}
+		defer rows.Close()
+		return scanOutboundRows(rows)
+	}
+	if cfg.Type == "sqlite" {
+		query := "SELECT source,link_id,root_comment_id,reply_comment_id,comment_id,text,image_url,created_at,raw_response,unique_key FROM outbound_messages WHERE link_id=?"
+		args := []any{linkID}
+		if rootCommentID > 0 {
+			query += " AND root_comment_id=?"
+			args = append(args, rootCommentID)
+		}
+		query += " ORDER BY created_at DESC, unique_key DESC LIMIT ?"
+		args = append(args, limit)
+		rows, err := sqlite.Db.Query(query, args...)
+		if err != nil {
+			loger.Loger.Warn("[DB]unable to read outbound thread messages", zap.Error(err), zap.Int64("link_id", linkID), zap.Int64("root_comment_id", rootCommentID))
+			return nil
+		}
+		defer rows.Close()
+		return scanOutboundRows(rows)
+	}
+	return nil
 }
 
 func OutboundMessagesForTracking(since int64, beforeCreatedAt int64, beforeUniqueKey string, limit int) []OutboundMessage {

@@ -257,13 +257,13 @@ var errInfo struct {
 }
 
 func IsErr() {
+	now := int(time.Now().Unix())
+	if now-errInfo.LastErr >= 60*10 {
+		errInfo.LastErr = now
+		errInfo.Count = 0
+	}
+	errInfo.Count++
 	if errInfo.Count < 5 {
-		if (int(time.Now().Unix()) - errInfo.LastErr) < 60*10 {
-			errInfo.Count = 1
-			return
-		}
-		errInfo.LastErr = int(time.Now().Unix())
-		errInfo.Count++
 		return
 	}
 	loger.Loger.Fatal("[XHH]程序十分钟内错误五次，已退出防止频繁")
@@ -675,6 +675,8 @@ func replyComment(v db.CommStruct) {
 		switch route.Action {
 		case ai.CommentRouteActionImage:
 			isok = processRoutedImageComment(v, mentionControl, &route)
+		case ai.CommentRouteActionRegenerate:
+			isok = regeneratePreviousBotReply(v, mentionControl)
 		default:
 			isok = replyWithAiComment(v, mentionControl)
 		}
@@ -799,6 +801,33 @@ func processRoutedImageComment(v db.CommStruct, mentionControl MentionControl, r
 		return result.OK
 	}
 	return replyWithAiComment(v, mentionControl)
+}
+
+func regeneratePreviousBotReply(v db.CommStruct, mentionControl MentionControl) bool {
+	previous := db.OutboundMessagesForCommentThread(int64(v.LinkID), int64(v.RootID), 1)
+	if len(previous) == 0 && v.LinkID > 0 {
+		previous = db.OutboundMessagesForCommentThread(int64(v.LinkID), 0, 1)
+	}
+	if len(previous) == 0 {
+		loger.Loger.Warn("[XHH]regenerate requested but no previous outbound reply was found", zap.Int("msg_id", v.MsgID), zap.Int("comment_id", v.CommentID), zap.Int("link_id", v.LinkID), zap.Int("root_id", v.RootID))
+		return replyWithAiComment(v, mentionControl)
+	}
+	info, top, tags, mention := GetLinkInfo(v.LinkID, v.RootID, v.CommentID, v.Uid)
+	regenerateContext := []ai.Content{{Type: "text", Text: "Previous bot reply to regenerate:\n" + previous[0].Text}}
+	info = append(regenerateContext, info...)
+	info = appendOwnerContext(info, v.Uid)
+	questionText := mentionQuestionText(mentionControl)
+	if questionText == "" {
+		questionText = "Regenerate the previous bot reply. Keep the answer natural, avoid repeating the previous wording, and answer the current user request."
+	}
+	replyText := ai.GetAiReply(info, questionText, top, tags, zap.Int("msg_id", v.MsgID), zap.Int("comment_id", v.CommentID), zap.Int("link_id", v.LinkID), zap.Int("user_id", v.Uid), zap.String("user_name", v.UserName), zap.String("question", questionText), zap.String("previous_reply", previous[0].Text))
+	if replyText == "" {
+		return false
+	}
+	if mention != "" && ShouldMentionTarget(v.Text) {
+		replyText = mention + " " + replyText
+	}
+	return Reply(replyText, strconv.Itoa(v.LinkID), strconv.Itoa(v.CommentID), strconv.Itoa(v.RootID), "")
 }
 
 func replyWithAiComment(v db.CommStruct, mentionControl MentionControl) bool {

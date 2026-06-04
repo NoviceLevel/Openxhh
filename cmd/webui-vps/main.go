@@ -35,7 +35,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 	"openxhh/db"
 )
 
@@ -2230,7 +2230,7 @@ func (s *serverState) openSQLiteDatabase() (*sql.DB, error) {
 		s.db.Close()
 		s.db = nil
 	}
-	database, err := sql.Open("sqlite3", filepath.Join(s.rootDir, "sql.db"))
+	database, err := sql.Open("sqlite", filepath.Join(s.rootDir, "sql.db"))
 	if err != nil {
 		return nil, err
 	}
