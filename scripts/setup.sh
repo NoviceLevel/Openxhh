@@ -87,6 +87,28 @@ install_binaries() {
   log "二进制已安装到 $INSTALL_DIR"
 }
 
+install_manager_menu() {
+  local menu_path="/usr/local/bin/xhh"
+  local env_path="/etc/openxhh-manager.env"
+
+  log "安装管理菜单：$menu_path"
+  if [ -f "$INSTALL_DIR/scripts/openxhh.sh" ]; then
+    cp "$INSTALL_DIR/scripts/openxhh.sh" "$menu_path"
+  else
+    curl -fsSL "https://raw.githubusercontent.com/NoviceLevel/Openxhh/main/scripts/openxhh.sh" -o "$menu_path"
+  fi
+  chmod +x "$menu_path"
+
+  cat > "$env_path" <<EOF
+REPO_RAW_URL="https://raw.githubusercontent.com/NoviceLevel/Openxhh/main"
+INSTALL_DIR="$INSTALL_DIR"
+SERVICE_NAME="$SERVICE_NAME"
+WEBUI_SERVICE_NAME="$WEBUI_SERVICE_NAME"
+WEBUI_PORT="$WEBUI_PORT"
+WEBUI_BIN_NAME="$WEBUI_BIN_NAME"
+EOF
+}
+
 generate_config() {
   cd "$INSTALL_DIR"
   if [ ! -f "$INSTALL_DIR/config.json" ]; then
@@ -199,6 +221,9 @@ main() {
 
   build_openxhh "$tmp_dir"
   install_binaries "$tmp_dir"
+  mkdir -p "$INSTALL_DIR/scripts"
+  cp "$tmp_dir/src/scripts/openxhh.sh" "$INSTALL_DIR/scripts/openxhh.sh"
+  install_manager_menu
   generate_config
   create_systemd_services
   start_services

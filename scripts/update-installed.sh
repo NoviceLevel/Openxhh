@@ -226,6 +226,29 @@ main() {
 
   fi
 
+  if [ -f "$tmp_dir/src/scripts/openxhh.sh" ]; then
+
+    log "更新管理菜单：/usr/local/bin/xhh"
+
+    mkdir -p "$INSTALL_DIR/scripts"
+
+    cp "$tmp_dir/src/scripts/openxhh.sh" "$INSTALL_DIR/scripts/openxhh.sh"
+
+    cp "$tmp_dir/src/scripts/openxhh.sh" /usr/local/bin/xhh
+
+    chmod +x /usr/local/bin/xhh
+
+    cat > /etc/openxhh-manager.env <<EOF
+REPO_RAW_URL="https://raw.githubusercontent.com/NoviceLevel/Openxhh/main"
+INSTALL_DIR="$INSTALL_DIR"
+SERVICE_NAME="$SERVICE_NAME"
+WEBUI_SERVICE_NAME="$WEBUI_SERVICE_NAME"
+WEBUI_PORT="${WEBUI_PORT:-29173}"
+WEBUI_BIN_NAME="$WEBUI_BIN_NAME"
+EOF
+
+  fi
+
 
 
   if [ "$service_exists" -eq 1 ]; then
