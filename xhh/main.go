@@ -299,7 +299,7 @@ func CheckAt() {
 			}
 			if !isHTTPSuccess(resp.StatusCode) {
 				body := string(Dbyte)
-				loger.Loger.Warn("[XHH]检查@ HTTP 失败", zap.Int("message_type", messageType), zap.Int("offset", offset), zap.Int("status", resp.StatusCode), zap.String("body", limitXHHResponseBody(body)))
+				loger.Loger.Warn("[XHH]检查@ HTTP 失败", zap.Int("message_type", messageType), zap.Int("offset", offset), zap.Int("status", resp.StatusCode), zap.String("body", readableXHHResponseBody(body)))
 				handleXHHHTTPFailure("user_message", resp.StatusCode, body, zap.Int("message_type", messageType), zap.Int("offset", offset))
 				if resp.StatusCode != 403 {
 					IsErr()
@@ -389,7 +389,7 @@ func syncNotificationsOnce() {
 			if isXHHCaptchaStatus(stat) {
 				enterXHHCaptchaCooldown("notification_sync")
 			}
-			loger.Loger.Warn("[通知同步]API 返回非 ok", zap.String("stat", stat), zap.String("body", string(data[:min(len(data), 300)])))
+			loger.Loger.Warn("[通知同步]API 返回非 ok", zap.String("stat", stat), zap.String("body", readableXHHResponseBody(string(data))))
 			return
 		}
 		for _, v := range msgResp.Result.Messages {

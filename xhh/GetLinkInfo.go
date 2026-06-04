@@ -217,7 +217,7 @@ func handleXHHHTTPFailure(endpoint string, statusCode int, body string, fields .
 	if statusCode != 403 {
 		return
 	}
-	fields = append(fields, zap.Int("status", statusCode), zap.String("body", limitXHHResponseBody(body)))
+	fields = append(fields, zap.Int("status", statusCode), zap.String("body", readableXHHResponseBody(body)))
 	enterXHHForbiddenCooldown(endpoint, fields...)
 }
 
@@ -331,7 +331,7 @@ func fetchLinkInfoPage(linkID int, page int) (LinkInfoS, bool) {
 	}
 	if !isHTTPSuccess(resp.StatusCode) {
 		body := string(Dbyte)
-		loger.Loger.Warn("[XHH]获取帖子详情 HTTP 失败", zap.Int("link_id", linkID), zap.Int("page", page), zap.Int("status", resp.StatusCode), zap.String("body", limitXHHResponseBody(body)))
+		loger.Loger.Warn("[XHH]获取帖子详情 HTTP 失败", zap.Int("link_id", linkID), zap.Int("page", page), zap.Int("status", resp.StatusCode), zap.String("body", readableXHHResponseBody(body)))
 		handleXHHHTTPFailure("link_tree", resp.StatusCode, body, zap.Int("link_id", linkID), zap.Int("page", page))
 		return data, false
 	}
@@ -343,7 +343,7 @@ func fetchLinkInfoPage(linkID int, page int) (LinkInfoS, bool) {
 	}
 	if data.Stat != "ok" {
 		if isXHHCaptchaStatus(data.Stat) {
-			enterXHHCaptchaCooldown("link_tree", zap.Int("link_id", linkID), zap.Int("page", page), zap.String("body", limitXHHResponseBody(string(Dbyte))))
+			enterXHHCaptchaCooldown("link_tree", zap.Int("link_id", linkID), zap.Int("page", page), zap.String("body", readableXHHResponseBody(string(Dbyte))))
 			return data, false
 		}
 		if data.Stat == "failed" {
@@ -611,7 +611,7 @@ func fetchMoreSubComments(rootCommentID int, targetCommentID int, comments []Com
 		}
 		if !isHTTPSuccess(resp.StatusCode) {
 			body := string(Dbyte)
-			loger.Loger.Warn("[XHH]获取子评论 HTTP 失败", zap.Int("root_comment_id", rootCommentID), zap.Int("target_comment_id", targetCommentID), zap.Int("status", resp.StatusCode), zap.String("body", limitXHHResponseBody(body)))
+			loger.Loger.Warn("[XHH]获取子评论 HTTP 失败", zap.Int("root_comment_id", rootCommentID), zap.Int("target_comment_id", targetCommentID), zap.Int("status", resp.StatusCode), zap.String("body", readableXHHResponseBody(body)))
 			handleXHHHTTPFailure("sub_comments", resp.StatusCode, body, zap.Int("root_comment_id", rootCommentID), zap.Int("target_comment_id", targetCommentID))
 			return comments
 		}
@@ -623,7 +623,7 @@ func fetchMoreSubComments(rootCommentID int, targetCommentID int, comments []Com
 			return comments
 		}
 		if isXHHCaptchaStatus(data.Stat) {
-			enterXHHCaptchaCooldown("sub_comments", zap.Int("root_comment_id", rootCommentID), zap.String("body", limitXHHResponseBody(string(Dbyte))))
+			enterXHHCaptchaCooldown("sub_comments", zap.Int("root_comment_id", rootCommentID), zap.String("body", readableXHHResponseBody(string(Dbyte))))
 			return comments
 		}
 		if data.Stat != "ok" || len(data.Result.Comments) == 0 {
@@ -992,7 +992,7 @@ func fetchAllSubComments(rootCommentID int, comments []CommentInfo, subCommentPa
 		}
 		if !isHTTPSuccess(resp.StatusCode) {
 			body := string(Dbyte)
-			loger.Loger.Warn("[XHH]获取子评论 HTTP 失败", zap.Int("root_comment_id", rootCommentID), zap.Int("status", resp.StatusCode), zap.String("body", limitXHHResponseBody(body)))
+			loger.Loger.Warn("[XHH]获取子评论 HTTP 失败", zap.Int("root_comment_id", rootCommentID), zap.Int("status", resp.StatusCode), zap.String("body", readableXHHResponseBody(body)))
 			handleXHHHTTPFailure("sub_comments", resp.StatusCode, body, zap.Int("root_comment_id", rootCommentID))
 			return comments
 		}
@@ -1004,7 +1004,7 @@ func fetchAllSubComments(rootCommentID int, comments []CommentInfo, subCommentPa
 			return comments
 		}
 		if isXHHCaptchaStatus(data.Stat) {
-			enterXHHCaptchaCooldown("sub_comments", zap.Int("root_comment_id", rootCommentID), zap.String("body", limitXHHResponseBody(string(Dbyte))))
+			enterXHHCaptchaCooldown("sub_comments", zap.Int("root_comment_id", rootCommentID), zap.String("body", readableXHHResponseBody(string(Dbyte))))
 			return comments
 		}
 		if data.Stat != "ok" || len(data.Result.Comments) == 0 {

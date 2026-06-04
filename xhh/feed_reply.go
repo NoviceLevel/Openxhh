@@ -105,13 +105,13 @@ func fetchFeedLinks() []feedLink {
 	}
 	if !isHTTPSuccess(resp.StatusCode) {
 		body := string(data)
-		loger.Loger.Warn("[FeedReply]feeds HTTP 失败", zap.Int("status", resp.StatusCode), zap.String("body", limitXHHResponseBody(body)))
+		loger.Loger.Warn("[FeedReply]feeds HTTP 失败", zap.Int("status", resp.StatusCode), zap.String("body", readableXHHResponseBody(body)))
 		handleXHHHTTPFailure("feeds", resp.StatusCode, body)
 		return nil
 	}
 	var parsed feedResponse
 	if err := json.Unmarshal(data, &parsed); err != nil {
-		loger.Loger.Error("[FeedReply]feeds 反序列化失败", zap.Error(err), zap.String("body", limitXHHResponseBody(string(data))))
+		loger.Loger.Error("[FeedReply]feeds 反序列化失败", zap.Error(err), zap.String("body", readableXHHResponseBody(string(data))))
 		return nil
 	}
 	if parsed.Status != "ok" {
