@@ -15,22 +15,25 @@ func TestBuildReplySystemPromptUsesCustomPromptVerbatim(t *testing.T) {
 	}
 }
 
-func TestBuildReplySystemPromptUsesDefaultCharacter(t *testing.T) {
+func TestBuildReplySystemPromptDoesNotInjectDefaultCharacter(t *testing.T) {
 	got := buildReplySystemPrompt("")
-	if !strings.Contains(got, "小猫娘喵喵") || !strings.Contains(got, "回复协议") {
-		t.Fatalf("buildReplySystemPrompt default = %q", got)
+	if got != "" {
+		t.Fatalf("buildReplySystemPrompt should not inject default character; got %q", got)
 	}
 }
 
 func TestBuildReplyScenePromptFramesCommentReply(t *testing.T) {
 	got := buildReplyScenePrompt("@小猫娘 这个配置怎么改")
-	for _, want := range []string{"小黑盒帖子和评论楼层", "对方刚刚完整说的是", "按系统提示中的角色、语气和规则"} {
+	for _, want := range []string{"小黑盒帖子和评论楼层", "对方刚刚完整说的是", "机器人 @ 只是叫你出来"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("buildReplyScenePrompt should contain %q; got %q", want, got)
 		}
 	}
 	if strings.Contains(got, "像评论区里的这个角色") {
 		t.Fatalf("buildReplyScenePrompt should not force a role framing: %q", got)
+	}
+	if strings.Contains(got, "角色、语气和规则") {
+		t.Fatalf("buildReplyScenePrompt should not add style instructions: %q", got)
 	}
 	if strings.Contains(got, "请结合整条评论理解用户意图") {
 		t.Fatalf("buildReplyScenePrompt still uses task-style wording: %q", got)
@@ -39,12 +42,15 @@ func TestBuildReplyScenePromptFramesCommentReply(t *testing.T) {
 
 func TestBuildFeedReplyScenePromptFramesPostComment(t *testing.T) {
 	got := buildFeedReplyScenePrompt("标题：测试帖子")
-	for _, want := range []string{"小黑盒首页帖子内容", "标题：测试帖子", "发在帖子下面的评论"} {
+	for _, want := range []string{"小黑盒首页帖子内容", "标题：测试帖子"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("buildFeedReplyScenePrompt should contain %q; got %q", want, got)
 		}
 	}
 	if strings.Contains(got, "对方刚刚完整说的是") || strings.Contains(got, "机器人 @") {
 		t.Fatalf("buildFeedReplyScenePrompt should not use mention-reply framing: %q", got)
+	}
+	if strings.Contains(got, "角色、语气和规则") {
+		t.Fatalf("buildFeedReplyScenePrompt should not add style instructions: %q", got)
 	}
 }
