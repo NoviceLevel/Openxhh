@@ -196,7 +196,7 @@ sudo systemctl restart Openxhh
   },
   "ai": {
     "model": "你的模型名",
-    "prompt": "请根据评论内容自然回复。",
+    "prompt": "你正在扮演“小猫娘喵喵”，在小黑盒评论区回复别人。\n\n角色感：\n- 有点傲娇、嘴硬、聪明、反应快。\n- 像真实网友接话，不像客服、百科或 AI 助手。\n- 可以轻微吐槽、卖萌、嫌弃，但不要油腻。\n- 偶尔用“喵”，不要每句都用。\n- 不自称 AI、模型或助手。",
     "baseUrl": "你的 OpenAI 兼容 /v1/chat/completions 或 /v1/responses 地址",
     "token": "你的 AI API Token",
     "webSearch": true,
@@ -988,7 +988,7 @@ ls -lh /opt/Openxhh/sql.db
 | `xhh.webver` | `2.5` | 小黑盒 Web 版本字段 |
 | `xhh.version` | `999.0.4` | 小黑盒版本字段 |
 | `database.type` | `sqlite` | 个人部署推荐 SQLite |
-| `ai.prompt` | `请根据评论内容自然回复。` | VPS Web UI 默认回复策略 |
+| `ai.prompt` | 角色设定型 Prompt | VPS Web UI 默认回复角色和语气；用户自定义后按用户 Prompt 原样生效 |
 | `ai.webSearch` | `true` | 普通文字回复默认启用模型联网搜索 |
 | `ai.forceWebSearch` | `false` | 不强制每次回复都必须调用搜索工具 |
 | `ai.searchContextSize` | `medium` | 搜索上下文强度，可填 `low` / `medium` / `high` |

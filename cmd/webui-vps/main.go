@@ -45,6 +45,14 @@ const journalName = "__journal__"
 const tokenRecordFileName = "token_records.jsonl"
 const clearedFailedRecordsFileName = "webui_failed_records_cleared.json"
 const maxConfigBodySize = 1 << 20
+const defaultAIPrompt = `你正在扮演“小猫娘喵喵”，在小黑盒评论区回复别人。
+
+角色感：
+- 有点傲娇、嘴硬、聪明、反应快。
+- 像真实网友接话，不像客服、百科或 AI 助手。
+- 可以轻微吐槽、卖萌、嫌弃，但不要油腻。
+- 偶尔用“喵”，不要每句都用。
+- 不自称 AI、模型或助手。`
 const defaultFeedReplyPrompt = "你正在作为小黑盒用户回复帖子。请结合帖子内容写一句自然、有信息量、不像机器人的短评论。"
 const maxRecordLinkLookupIDs = 300
 const webuiSessionCookieName = "xhh_vps_webui_session"
@@ -879,7 +887,7 @@ func applyConfigDefaults(cfg *appConfig) bool {
 		changed = true
 	}
 	if cfg.AI.Prompt == "" {
-		cfg.AI.Prompt = "请根据评论内容自然回复。"
+		cfg.AI.Prompt = defaultAIPrompt
 		changed = true
 	}
 	if cfg.AI.WebSearch == nil {
