@@ -100,6 +100,77 @@ func readPostgresPendingReplyCount(cfg appConfig) (int, error) {
 	return count, nil
 }
 
+func (s *serverState) readPendingReplies(cfg appConfig, limit int) ([]pendingReplyRecord, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	switch strings.ToLower(strings.TrimSpace(cfg.DataBase.Type)) {
+	case "", "sqlite":
+		return s.readSQLitePendingReplies(limit)
+	case "pg", "postgres", "postgresql":
+		return readPostgresPendingReplies(cfg, limit)
+	default:
+		return nil, nil
+	}
+}
+
+func (s *serverState) readSQLitePendingReplies(limit int) ([]pendingReplyRecord, error) {
+	if _, err := os.Stat(filepath.Join(s.rootDir, "sql.db")); err != nil {
+		return nil, nil
+	}
+	database, err := s.openSQLiteDatabase()
+	if err != nil {
+		return nil, err
+	}
+	defer database.Close()
+	rows, err := database.Query(`SELECT msg_id,comment_a_id,comment_root_id,link_id,user_a_id,COALESCE(user_a_name,''),COALESCE(comment_text,'')
+		FROM at WHERE reply=false ORDER BY msg_id ASC LIMIT ?`, limit)
+	if err != nil {
+		if isMissingTableError(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	defer rows.Close()
+	var records []pendingReplyRecord
+	for rows.Next() {
+		var record pendingReplyRecord
+		if err := rows.Scan(&record.MsgID, &record.CommentID, &record.RootCommentID, &record.LinkID, &record.UserID, &record.UserName, &record.Text); err != nil {
+			return nil, err
+		}
+		records = append(records, record)
+	}
+	return records, rows.Err()
+}
+
+func readPostgresPendingReplies(cfg appConfig, limit int) ([]pendingReplyRecord, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, postgresDSN(cfg))
+	if err != nil {
+		return nil, err
+	}
+	defer pool.Close()
+	rows, err := pool.Query(ctx, `SELECT msg_id,comment_a_id,comment_root_id,link_id,user_a_id,COALESCE(user_a_name,''),COALESCE(comment_text,'')
+		FROM at WHERE reply=false ORDER BY msg_id ASC LIMIT $1`, limit)
+	if err != nil {
+		if isMissingTableError(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	defer rows.Close()
+	var records []pendingReplyRecord
+	for rows.Next() {
+		var record pendingReplyRecord
+		if err := rows.Scan(&record.MsgID, &record.CommentID, &record.RootCommentID, &record.LinkID, &record.UserID, &record.UserName, &record.Text); err != nil {
+			return nil, err
+		}
+		records = append(records, record)
+	}
+	return records, rows.Err()
+}
+
 func isMissingTableError(err error) bool {
 	if err == nil || errors.Is(err, sql.ErrNoRows) {
 		return false

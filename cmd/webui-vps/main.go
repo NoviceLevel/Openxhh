@@ -140,6 +140,17 @@ type failedRecord struct {
 	PostTitle string `json:"postTitle,omitempty"`
 }
 
+type pendingReplyRecord struct {
+	MsgID         int64  `json:"msgId"`
+	CommentID     int64  `json:"commentId"`
+	RootCommentID int64  `json:"rootCommentId"`
+	LinkID        int64  `json:"linkId"`
+	UserID        int64  `json:"userId"`
+	UserName      string `json:"userName"`
+	Text          string `json:"text"`
+	PostTitle     string `json:"postTitle,omitempty"`
+}
+
 type regenerateCandidate struct {
 	MsgID     int64
 	CommentID int64
@@ -505,6 +516,7 @@ func main() {
 	mux.HandleFunc("/api/records", state.requireAuth(state.handleRecords))
 	mux.HandleFunc("/api/failed-records", state.requireAuth(state.handleFailedRecords))
 	mux.HandleFunc("/api/failed-records/clear", state.requireAuth(state.handleClearFailedRecords))
+	mux.HandleFunc("/api/pending-replies", state.requireAuth(state.handlePendingReplies))
 	mux.HandleFunc("/api/message-stream", state.requireAuth(state.handleMessageStream))
 	mux.HandleFunc("/api/feed-records", state.requireAuth(state.handleFeedRecords))
 
@@ -2937,6 +2949,25 @@ func (s *serverState) handleFailedRecords(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "records": records})
 }
 
+func (s *serverState) handlePendingReplies(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	cfg, err := s.readConfigForRecordLookup()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	records, err := s.readPendingReplies(cfg, 100)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	s.enrichPendingReplyTitles(cfg, records)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "records": records})
+}
+
 func (s *serverState) handleClearFailedRecords(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -3438,6 +3469,45 @@ func enrichFailedRecordTitles(s *serverState, cfg appConfig, records []failedRec
 			records[i].PostTitle = t
 		}
 	}
+}
+
+func (s *serverState) enrichPendingReplyTitles(cfg appConfig, records []pendingReplyRecord) {
+	seen := map[int64]struct{}{}
+	var linkIDs []int64
+	for i := range records {
+		id := records[i].LinkID
+		if id > 0 {
+			if _, ok := seen[id]; !ok {
+				seen[id] = struct{}{}
+				linkIDs = append(linkIDs, id)
+			}
+		}
+	}
+	if len(linkIDs) == 0 {
+		return
+	}
+	titles := map[int64]string{}
+	switch strings.ToLower(strings.TrimSpace(cfg.DataBase.Type)) {
+	case "", "sqlite":
+		_ = s.fillSQLiteRecordPostTitles(linkIDs, titles)
+	case "pg", "postgres", "postgresql":
+		_ = fillPostgresRecordPostTitles(cfg, linkIDs, titles)
+	}
+	s.messageStreamMetaMu.RLock()
+	for _, id := range linkIDs {
+		if titles[id] == "" {
+			if info, ok := s.messageStreamMeta[id]; ok && info.Title != "" {
+				titles[id] = info.Title
+			}
+		}
+	}
+	s.messageStreamMetaMu.RUnlock()
+	for i := range records {
+		if t := titles[records[i].LinkID]; t != "" {
+			records[i].PostTitle = t
+		}
+	}
+	s.scheduleRecordPostTitlesFill(cfg, linkIDs, titles)
 }
 
 func extractGoTime(line string) string {
@@ -5287,7 +5357,7 @@ const indexHTML = `<!doctype html>
         <div class="content">
           <section class="view active" id="view-home">
             <div class="hero-card"><div class="hero-head"><div class="hero-title"><h1>主控台</h1><p>汇总所有可读取日志中的提问、回复、失败和 token 消耗。</p></div><div class="panel-actions"><button id="homeRefreshBtn" class="secondary" type="button">刷新</button><button class="secondary" data-view-button="records" type="button">查看我评论的</button><button class="secondary" data-view-button="inbound-records" type="button">查看评论我的</button><button id="homeRestartBtn" class="warn" type="button">重启服务</button></div></div></div>
-            <section class="cards"><div class="card stat"><span>提问次数</span><strong id="metricStatus" class="violet">0</strong></div><div class="card stat"><span>回复成功</span><strong id="metricLines" class="green">0</strong></div><div class="card stat" data-view-button="failed-records" title="点击查看失败发送" style="cursor:pointer"><span>失败次数 · 点击查看</span><strong id="metricErrors" class="red">0</strong></div><div class="card stat"><span>待处理</span><strong id="metricFiles" class="blue">0</strong></div><div class="card stat"><span>Web 端口</span><strong id="metricPort" class="amber">29173</strong></div></section>
+            <section class="cards"><div class="card stat"><span>提问次数</span><strong id="metricStatus" class="violet">0</strong></div><div class="card stat"><span>回复成功</span><strong id="metricLines" class="green">0</strong></div><div class="card stat" data-view-button="failed-records" title="点击查看失败发送" style="cursor:pointer"><span>失败次数 · 点击查看</span><strong id="metricErrors" class="red">0</strong></div><div id="pendingRepliesCard" class="card stat" title="点击查看待处理内容" style="cursor:pointer"><span>待处理 · 点击查看</span><strong id="metricFiles" class="blue">0</strong></div><div class="card stat"><span>Web 端口</span><strong id="metricPort" class="amber">29173</strong></div></section>
             <section class="grid-2"><div class="card panel"><div class="panel-head"><div><h2>Token 记录</h2><p>按全部记录、最近 1 小时和最近 24 小时汇总 AI token 消耗。</p></div></div><div class="token-summary"><div><span>总 token</span><strong id="tokenTotal" class="green">0</strong></div><div><span>最近 1 小时</span><strong id="tokenHour" class="blue">0</strong></div><div><span>最近 24 小时</span><strong id="tokenDay" class="violet">0</strong></div></div><div id="appToast" class="toast"></div></div><div class="card panel"><div class="panel-head"><div><h2>最近 7 次日志趋势</h2><p>按全部消息流聚合；无日期时归入今日。</p></div></div><div id="chart" class="chart"></div></div></section>
           </section>
 
@@ -5343,6 +5413,7 @@ const recordsMeta=document.querySelector('#recordsMeta');
 const failedRecordsToast=document.querySelector('#failedRecordsToast');
 const failedRecordsMeta=document.querySelector('#failedRecordsMeta');
 const failedRecordsClearBtn=document.querySelector('#failedRecordsClearBtn');
+const pendingRepliesCard=document.querySelector('#pendingRepliesCard');
 const inboundRecordsToast=document.querySelector('#inboundRecordsToast');
 const inboundRecordsMeta=document.querySelector('#inboundRecordsMeta');
 const feedRecordsToast=document.querySelector('#feedRecordsToast');
@@ -5419,6 +5490,7 @@ for(const id of ['homeRefreshBtn','serviceRefreshBtn']){const el=document.queryS
 document.querySelector('#recordsRefreshBtn')?.addEventListener('click',()=>loadAllRecords(true));
 document.querySelector('#failedRecordsRefreshBtn')?.addEventListener('click',()=>loadFailedRecords(true));
 failedRecordsClearBtn?.addEventListener('click',()=>clearFailedRecords());
+pendingRepliesCard?.addEventListener('click',()=>showPendingReplies());
 document.querySelector('#inboundRecordsRefreshBtn')?.addEventListener('click',()=>loadAllRecords(true));
 document.querySelector('#logoutBtn').addEventListener('click',async()=>{await api('/logout',{method:'POST'});location.reload()});
 commentOverlayClose?.addEventListener('click',event=>{event.stopPropagation();hideCommentThread()});
@@ -5442,6 +5514,14 @@ async function regenerateMessage(item,button,feedback,options={}){const original
 function resendFailedMessage(item,button,feedback){return regenerateMessage(item,button,feedback,{toast:failedRecordsToast,workingText:'发送中',pendingText:'正在加入重新发送队列...',successText:'已加入重新发送队列',toastSuccess:'已加入重新发送队列，机器人下一轮会重新发送'})}
 function setFeedback(el,text,state){if(!el)return;el.textContent=text;el.className='action-feedback '+(state||'')}
 function regeneratePayload(item){return{msgId:item.msgId||0,commentId:item.commentId||0,linkId:item.linkId||0,userId:item.userId||0,userName:item.user||'',question:item.question||''}}
+async function showPendingReplies(){if(appToast)appToast.textContent='正在读取待处理内容...';try{const data=await api('/api/pending-replies');const items=Array.isArray(data.records)?data.records:[];renderPendingReplies(items);if(appToast)appToast.textContent='已读取 '+formatCount(items.length)+' 条待处理'}catch(err){if(appToast)appToast.textContent='待处理读取失败：'+err.message}}
+function renderPendingReplies(items){if(!commentOverlay||!commentThread)return;commentOverlay.classList.remove('hidden');document.documentElement.classList.add('modal-open');document.body.classList.add('modal-open');if(commentOverlayTitle)commentOverlayTitle.textContent='待处理回复';if(commentOverlaySubtitle)commentOverlaySubtitle.textContent='当前待回复队列 '+formatCount(items.length)+' 条，按处理顺序排列。';if(commentChips){commentChips.innerHTML='';addCommentChip('待处理 '+formatCount(items.length)+' 条')}if(commentActions){commentActions.innerHTML='';const refresh=document.createElement('button');refresh.type='button';refresh.className='comment-action secondary';refresh.textContent='刷新';refresh.addEventListener('click',()=>showPendingReplies());commentActions.appendChild(refresh);const copy=document.createElement('button');copy.type='button';copy.className='comment-action secondary';copy.textContent='复制全部';copy.addEventListener('click',async()=>{await copyText(pendingRepliesText(items));copy.textContent='已复制';setTimeout(()=>copy.textContent='复制全部',900)});commentActions.appendChild(copy)}commentThread.innerHTML='';if(!items.length){const empty=document.createElement('div');empty.className='comment-empty';empty.textContent='当前没有待处理回复。';commentThread.appendChild(empty);return}items.forEach(item=>commentThread.appendChild(pendingReplyCard(item)))}
+function pendingReplyCard(item){const card=document.createElement('article');card.className='comment-card current-comment';const head=document.createElement('div');head.className='comment-card-head';head.appendChild(commentAvatar({userName:pendingReplyUser(item)}));const title=document.createElement('div');const author=document.createElement('div');author.className='comment-author';author.textContent=pendingReplyUser(item);const meta=document.createElement('div');meta.className='comment-meta';meta.textContent=pendingReplyMeta(item);title.appendChild(author);title.appendChild(meta);head.appendChild(title);card.appendChild(head);const text=document.createElement('div');text.className='comment-text';appendEmojiText(text,item.text||'—');card.appendChild(text);const actions=document.createElement('div');actions.className='comment-actions';actions.style.marginTop='14px';const view=document.createElement('button');view.type='button';view.className='comment-action secondary';view.textContent='查看楼层';const feedback=document.createElement('span');feedback.className='action-feedback';view.addEventListener('click',()=>showCommentThread(pendingReplyThreadItem(item),view,feedback));actions.appendChild(view);const href=postHref(item.linkId);if(href){const open=document.createElement('a');open.className='comment-action secondary';open.href=href;open.target='_blank';open.rel='noopener noreferrer';open.textContent='打开原帖';actions.appendChild(open)}const copy=document.createElement('button');copy.type='button';copy.className='comment-action secondary';copy.textContent='复制';copy.addEventListener('click',async()=>{await copyText(pendingReplyText(item));copy.textContent='已复制';setTimeout(()=>copy.textContent='复制',900)});actions.appendChild(copy);actions.appendChild(feedback);card.appendChild(actions);return card}
+function pendingReplyThreadItem(item){return{msgId:item.msgId||0,commentId:item.commentId||0,rootCommentId:item.rootCommentId||0,linkId:item.linkId||0,replyText:item.text||'',title:item.postTitle||''}}
+function pendingReplyUser(item){return cleanText(item.userName)||String(item.userId||'未知用户')}
+function pendingReplyMeta(item){const parts=[];if(item.msgId)parts.push('消息ID '+item.msgId);if(item.commentId)parts.push('评论ID '+item.commentId);if(item.rootCommentId)parts.push('根评论 '+item.rootCommentId);if(item.linkId)parts.push('帖子 '+item.linkId);if(item.postTitle)parts.push(cleanText(item.postTitle));return parts.join(' · ')||'待处理回复'}
+function pendingReplyText(item){const lines=['用户：'+pendingReplyUser(item),'内容：'+(item.text||'—')];if(item.msgId)lines.push('消息ID：'+item.msgId);if(item.commentId)lines.push('评论ID：'+item.commentId);if(item.rootCommentId)lines.push('根评论ID：'+item.rootCommentId);if(item.linkId)lines.push('帖子ID：'+item.linkId);if(item.postTitle)lines.push('帖子标题：'+cleanText(item.postTitle));return lines.join('\n')}
+function pendingRepliesText(items){return(items||[]).map((item,index)=>'#'+(index+1)+'\n'+pendingReplyText(item)).join('\n\n')}
 async function showCommentThread(item,button,feedback){if(!item.commentId&&!item.rootCommentId&&!item.msgId&&!item.linkId){setFeedback(feedback,'这条记录缺少帖子 ID','error');return}const original=button.textContent;button.disabled=true;button.textContent='读取中';const postMode=!item.commentId&&!item.rootCommentId&&!item.msgId;setFeedback(feedback,postMode?'正在定位并读取整层楼...':'正在读取当前整层楼...','pending');try{const data=await api('/api/comment-thread',{method:'POST',body:JSON.stringify({msgId:item.msgId||0,commentId:item.commentId||0,rootCommentId:item.rootCommentId||0,linkId:item.linkId||0,replyText:item.replyText||item.reply||'',title:item.title||''})});renderCommentThread(data);setFeedback(feedback,commentFeedbackText(data),'ok')}catch(err){setFeedback(feedback,'失败：'+err.message,'error')}finally{button.disabled=false;button.textContent=original}}
 function commentFeedbackText(data){if(data.mode==='post')return data.thread?.length?(data.source==='cache'?'已读取缓存整层楼':'已读取整层楼'):'没定位到对应楼层';if(data.source==='xhh')return'已读取当前整层楼';if(data.source==='cache')return'已读取缓存整层楼';return'已显示本地记录'}
 function hideCommentThread(){commentOverlay?.classList.add('hidden');document.documentElement.classList.remove('modal-open');document.body.classList.remove('modal-open')}
