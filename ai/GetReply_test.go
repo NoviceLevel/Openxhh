@@ -36,3 +36,15 @@ func TestBuildReplyScenePromptFramesCommentReply(t *testing.T) {
 		t.Fatalf("buildReplyScenePrompt still uses task-style wording: %q", got)
 	}
 }
+
+func TestBuildFeedReplyScenePromptFramesPostComment(t *testing.T) {
+	got := buildFeedReplyScenePrompt("标题：测试帖子")
+	for _, want := range []string{"小黑盒首页帖子内容", "标题：测试帖子", "发在帖子下面的评论"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("buildFeedReplyScenePrompt should contain %q; got %q", want, got)
+		}
+	}
+	if strings.Contains(got, "对方刚刚完整说的是") || strings.Contains(got, "机器人 @") {
+		t.Fatalf("buildFeedReplyScenePrompt should not use mention-reply framing: %q", got)
+	}
+}

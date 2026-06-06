@@ -144,8 +144,8 @@ func processFeedLink(link feedLink) db.FeedReplyRecord {
 		topics = link.Topics
 		tags = link.Tags
 	}
-	question := "请为这篇帖子写一条自然短评论。如果不适合回复，请只输出 SKIP。标题：" + link.Title + "\n正文摘要：" + link.Description
-	reply := ai.GetAiReplyWithPrompt(config.ConfigStruct.FeedReply.Prompt, contents, question, topics, tags, zap.Bool("feed_reply", true), zap.Int("link_id", link.LinkID), zap.Int64("author_id", authorID), zap.String("author_name", link.User.UserName), zap.String("feed_title", link.Title), zap.String("question", question))
+	instruction := "请根据这篇帖子写一条符合上下文的短评论。如果不适合回复，请只输出 SKIP。标题：" + link.Title + "\n正文摘要：" + link.Description
+	reply := ai.GetAiFeedReplyWithPrompt(config.ConfigStruct.FeedReply.Prompt, contents, instruction, topics, tags, zap.Bool("feed_reply", true), zap.Int("link_id", link.LinkID), zap.Int64("author_id", authorID), zap.String("author_name", link.User.UserName), zap.String("feed_title", link.Title), zap.String("question", instruction))
 	reply = sanitizeFeedReply(reply)
 	if reply == "" {
 		record.Status = "failed"

@@ -20,7 +20,15 @@ func GetAiReply(Contents []Content, UserSay string, Topics []Topics, Tags []Tags
 }
 
 func GetAiReplyWithPrompt(prompt string, Contents []Content, UserSay string, Topics []Topics, Tags []Tags, logFields ...zap.Field) string {
-	askFields := append([]zap.Field{zap.Int("content_count", len(Contents)), zap.Int("text_len", len(UserSay))}, logFields...)
+	return getAiReplyWithScenePrompt(prompt, Contents, buildReplyScenePrompt(UserSay), len([]rune(UserSay)), Topics, Tags, logFields...)
+}
+
+func GetAiFeedReplyWithPrompt(prompt string, Contents []Content, instruction string, Topics []Topics, Tags []Tags, logFields ...zap.Field) string {
+	return getAiReplyWithScenePrompt(prompt, Contents, buildFeedReplyScenePrompt(instruction), len([]rune(instruction)), Topics, Tags, logFields...)
+}
+
+func getAiReplyWithScenePrompt(prompt string, Contents []Content, scenePrompt string, textLen int, Topics []Topics, Tags []Tags, logFields ...zap.Field) string {
+	askFields := append([]zap.Field{zap.Int("content_count", len(Contents)), zap.Int("text_len", textLen)}, logFields...)
 	loger.Loger.Info("[Ai]正在询问Ai", askFields...)
 	var SMsg Messages[string]
 	var UMsg Messages[[]Content]
@@ -30,7 +38,7 @@ func GetAiReplyWithPrompt(prompt string, Contents []Content, UserSay string, Top
 	SMsg.Content = buildReplySystemPrompt(prompt)
 	UMsg.Role = "user"
 	var UserContent Content
-	UserContent.Text = buildReplyScenePrompt(UserSay)
+	UserContent.Text = scenePrompt
 	UserContent.Type = "text"
 	Contents = append(Contents, UserContent)
 	UMsg.Content = Contents
@@ -69,6 +77,16 @@ func buildReplyScenePrompt(userSay string) string {
 	return "上面是你正在参与的小黑盒帖子和评论楼层。\n" +
 		"对方刚刚完整说的是：" + userSay + "\n" +
 		"机器人 @ 只是叫你出来，不是问题内容。请按系统提示中的角色、语气和规则，直接给出你会发出的评论。"
+}
+
+func buildFeedReplyScenePrompt(instruction string) string {
+	instruction = strings.TrimSpace(instruction)
+	if instruction == "" {
+		instruction = "请根据这篇帖子写一条自然短评论。如果不适合回复，请只输出 SKIP。"
+	}
+	return "上面是你正在浏览的小黑盒首页帖子内容。\n" +
+		instruction + "\n" +
+		"请按系统提示中的角色、语气和规则，输出一条会发在帖子下面的评论。"
 }
 
 const defaultCharacterPrompt = `你正在扮演“小猫娘喵喵”，在小黑盒评论区回复别人。
