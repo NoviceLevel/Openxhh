@@ -211,10 +211,6 @@ func applyDefaults() bool {
 		ConfigStruct.Image.Size = "1024x1024"
 		changed = true
 	}
-	if ConfigStruct.Image.ResponseFormat == "" {
-		ConfigStruct.Image.ResponseFormat = "b64_json"
-		changed = true
-	}
 	if ConfigStruct.Image.OutputDir == "" {
 		ConfigStruct.Image.OutputDir = "images"
 		changed = true

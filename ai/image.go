@@ -64,7 +64,7 @@ func GenerateImage(ctx context.Context, prompt string) (ImageResult, error) {
 		Prompt:         prompt,
 		Size:           cfg.Size,
 		N:              1,
-		ResponseFormat: cfg.ResponseFormat,
+		ResponseFormat: imageResponseFormatForRequest(cfg.ResponseFormat),
 	}
 	payload, err := json.Marshal(reqBody)
 	if err != nil {
@@ -176,6 +176,15 @@ func imageExtension(imageBytes []byte) string {
 		return ".webp"
 	default:
 		return ".png"
+	}
+}
+
+func imageResponseFormatForRequest(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "omit", "none", "default", "auto", "b64_json":
+		return ""
+	default:
+		return strings.TrimSpace(value)
 	}
 }
 

@@ -35,6 +35,15 @@ func TestApplyConfigDefaultsDoesNotOverwriteDescriptionWithCharacterCard(t *test
 	}
 }
 
+func TestApplyConfigDefaultsDoesNotSetImageResponseFormat(t *testing.T) {
+	var cfg appConfig
+
+	applyConfigDefaults(&cfg)
+	if cfg.Image.ResponseFormat != "" {
+		t.Fatalf("Image.ResponseFormat = %q, want empty", cfg.Image.ResponseFormat)
+	}
+}
+
 func TestBuildConfigTestAIBodyResponsesIncludesSearchTool(t *testing.T) {
 	var cfg appConfig
 	cfg.AI.Model = "test-model"

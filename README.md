@@ -229,7 +229,7 @@ sudo systemctl restart Openxhh
     "baseUrl": "你的 OpenAI 兼容 /v1/images/generations 地址",
     "token": "你的图片 API Token",
     "size": "1024x1024",
-    "responseFormat": "b64_json",
+    "responseFormat": "",
     "outputDir": "images",
     "uploadMode": "cos",
     "externalDir": "",
@@ -261,7 +261,7 @@ sudo systemctl restart Openxhh
 - `ai.searchContextSize` 可填 `low` / `medium` / `high`，默认 `medium`。
 - `feedReply.enabled=false` 表示自动刷帖默认关闭；`feedReply.dryRun=true` 表示默认只记录不真实发评论。
 - `image.baseUrl` 要填完整的 Images Generations 地址，例如 `https://example.com/v1/images/generations`。
-- `image.responseFormat` 默认 `b64_json`，程序会把 base64 解码成图片 bytes 后上传。
+- `image.responseFormat` 推荐留空，让图片接口使用默认返回格式；程序同时支持接口返回 `b64_json` 或 `url`。
 - `image.uploadMode` 推荐填 `cos`，使用小黑盒官方图床；当前版本即使填 `external` / `static` 也会优先走官方图床。
 - `image.externalDir` 和 `image.externalBaseUrl` 仅保留给旧的 VPS 静态图床备用方案，推荐留空。
 - `promptRefine=true` 后，可以用文本模型先把用户口语化生图请求整理成更适合图片模型的提示词。
@@ -1026,7 +1026,7 @@ ls -lh /opt/Openxhh/sql.db
 | `feedReply.postHistoryInstructions` | 空 | 自动刷帖专用后置指令；为空时回退到 `ai.postHistoryInstructions` |
 | `image.model` | `gpt-image-2` | 图片模型默认值 |
 | `image.size` | `1024x1024` | 图片尺寸默认值 |
-| `image.responseFormat` | `b64_json` | 图片接口输出格式 |
+| `image.responseFormat` | 空 | 图片接口输出格式；留空或 `b64_json` 时不发送该参数，兼容更多中转 |
 | `image.outputDir` | `images` | 本地生成图片临时目录 |
 | `image.uploadMode` | `cos` | 推荐使用小黑盒官方图床 |
 | `image.externalDir` | 空 | 旧 VPS 静态图床备用字段，推荐留空 |

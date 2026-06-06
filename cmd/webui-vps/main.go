@@ -1260,10 +1260,6 @@ func applyConfigDefaults(cfg *appConfig) bool {
 		cfg.Image.Size = "1024x1024"
 		changed = true
 	}
-	if cfg.Image.ResponseFormat == "" {
-		cfg.Image.ResponseFormat = "b64_json"
-		changed = true
-	}
 	if cfg.Image.OutputDir == "" {
 		cfg.Image.OutputDir = "images"
 		changed = true

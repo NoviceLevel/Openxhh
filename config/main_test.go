@@ -33,6 +33,19 @@ func TestApplyDefaultsDoesNotSetPrompt(t *testing.T) {
 	}
 }
 
+func TestApplyDefaultsDoesNotSetImageResponseFormat(t *testing.T) {
+	oldConfig := ConfigStruct
+	t.Cleanup(func() {
+		ConfigStruct = oldConfig
+	})
+	resetConfigStructForTest()
+
+	applyDefaults()
+	if ConfigStruct.Image.ResponseFormat != "" {
+		t.Fatalf("Image.ResponseFormat = %q, want empty", ConfigStruct.Image.ResponseFormat)
+	}
+}
+
 func TestApplyDefaultsMigratesCharacterCard(t *testing.T) {
 	oldConfig := ConfigStruct
 	t.Cleanup(func() {
