@@ -222,9 +222,20 @@ func shouldSkipFeedReply(reply string) bool {
 }
 
 func feedReplyQualityIssue(reply string, title string) string {
+	return replyQualityIssue(reply, title, feedReplyPersonaAnchors(), true, true)
+}
+
+func aiReplyQualityIssue(reply string) string {
+	return replyQualityIssue(reply, "", aiReplyPersonaAnchors(), false, false)
+}
+
+func replyQualityIssue(reply string, title string, anchors []string, checkTitle bool, allowSkip bool) string {
 	reply = strings.TrimSpace(reply)
-	if reply == "" || shouldSkipFeedReply(reply) {
+	if reply == "" || (allowSkip && shouldSkipFeedReply(reply)) {
 		return ""
+	}
+	if shouldSkipFeedReply(reply) {
+		return "回复为跳过指令"
 	}
 	if len([]rune(reply)) > 120 {
 		return "回复过长"
@@ -232,10 +243,9 @@ func feedReplyQualityIssue(reply string, title string) string {
 	if containsAny(reply, []string{"我理解你的意思", "总结一下", "建议你", "您好", "作为AI", "作为 AI", "我是AI", "我是 AI", "机器人"}) {
 		return "客服腔或暴露 AI 身份"
 	}
-	if repeatsFeedTitle(reply, title) {
+	if checkTitle && repeatsFeedTitle(reply, title) {
 		return "复述标题"
 	}
-	anchors := feedReplyPersonaAnchors()
 	if len(anchors) > 0 && !containsAnyFold(reply, anchors) {
 		return "缺少当前人设锚点"
 	}
@@ -280,16 +290,32 @@ func feedReplyRetryInstruction(instruction, issue string) string {
 }
 
 func feedReplyPersonaAnchors() []string {
-	parts := []string{
+	return personaAnchorsFromParts([]string{
 		config.ConfigStruct.Ai.ChatName,
-		firstNonEmptyFeedPersona(config.ConfigStruct.FeedReply.Description, config.ConfigStruct.Ai.Description),
 		firstNonEmptyFeedPersona(config.ConfigStruct.FeedReply.Personality, config.ConfigStruct.Ai.Personality),
 		firstNonEmptyFeedPersona(config.ConfigStruct.FeedReply.Scenario, config.ConfigStruct.Ai.Scenario),
-		firstNonEmptyFeedPersona(config.ConfigStruct.FeedReply.FirstMessage, config.ConfigStruct.Ai.FirstMessage),
 		firstNonEmptyFeedPersona(config.ConfigStruct.FeedReply.ExampleDialogs, config.ConfigStruct.Ai.ExampleDialogs),
 		firstNonEmptyFeedPersona(config.ConfigStruct.FeedReply.PostHistoryInstructions, config.ConfigStruct.Ai.PostHistoryInstructions),
 		firstNonEmptyFeedPersona(config.ConfigStruct.FeedReply.Prompt, config.ConfigStruct.Ai.Prompt),
-	}
+		firstNonEmptyFeedPersona(config.ConfigStruct.FeedReply.FirstMessage, config.ConfigStruct.Ai.FirstMessage),
+		firstNonEmptyFeedPersona(config.ConfigStruct.FeedReply.Description, config.ConfigStruct.Ai.Description),
+	})
+}
+
+func aiReplyPersonaAnchors() []string {
+	return personaAnchorsFromParts([]string{
+		config.ConfigStruct.Ai.ChatName,
+		config.ConfigStruct.Ai.Personality,
+		config.ConfigStruct.Ai.Scenario,
+		config.ConfigStruct.Ai.ExampleDialogs,
+		config.ConfigStruct.Ai.PostHistoryInstructions,
+		config.ConfigStruct.Ai.Prompt,
+		config.ConfigStruct.Ai.FirstMessage,
+		config.ConfigStruct.Ai.Description,
+	})
+}
+
+func personaAnchorsFromParts(parts []string) []string {
 	seen := make(map[string]bool)
 	anchors := make([]string, 0, 16)
 	for _, part := range parts {
@@ -341,7 +367,7 @@ func personaAnchorTokens(text string) []string {
 
 func validPersonaAnchor(token string) bool {
 	runes := []rune(token)
-	if len(runes) < 2 || len(runes) > 8 {
+	if len(runes) < 2 || len(runes) > personaAnchorMaxLen(runes) {
 		return false
 	}
 	lower := strings.ToLower(token)
@@ -359,6 +385,15 @@ func validPersonaAnchor(token string) bool {
 		}
 	}
 	return hasLetter && !hasDigit
+}
+
+func personaAnchorMaxLen(runes []rune) int {
+	for _, r := range runes {
+		if r > unicode.MaxASCII {
+			return 8
+		}
+	}
+	return 16
 }
 
 func limitStringSlice(values []string, max int) []string {

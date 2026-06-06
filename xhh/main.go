@@ -823,8 +823,12 @@ func regeneratePreviousBotReply(v db.CommStruct, mentionControl MentionControl) 
 	if questionText == "" {
 		questionText = "Regenerate the previous bot reply. Keep the answer natural, avoid repeating the previous wording, and answer the current user request."
 	}
-	replyText := ai.GetAiReply(info, questionText, top, tags, zap.Int("msg_id", v.MsgID), zap.Int("comment_id", v.CommentID), zap.Int("link_id", v.LinkID), zap.Int("user_id", v.Uid), zap.String("user_name", v.UserName), zap.String("question", questionText), zap.String("previous_reply", previous[0].Text))
+	logFields := []zap.Field{zap.Int("msg_id", v.MsgID), zap.Int("comment_id", v.CommentID), zap.Int("link_id", v.LinkID), zap.Int("user_id", v.Uid), zap.String("user_name", v.UserName), zap.String("question", questionText), zap.String("previous_reply", previous[0].Text)}
+	replyText, skipped := generateAIReplyWithQualityRetry(info, questionText, top, tags, logFields...)
 	if replyText == "" {
+		if skipped {
+			return true
+		}
 		return false
 	}
 	if mention != "" && ShouldMentionTarget(v.Text) {
@@ -843,8 +847,12 @@ func replyWithAiComment(v db.CommStruct, mentionControl MentionControl) bool {
 	mentionTarget := mention != "" && mentionTrigger
 	loger.Loger.Info("[XHH]Mention decision", zap.Bool("trigger", mentionTrigger), zap.Bool("hasMention", mention != ""))
 	questionText := mentionQuestionText(mentionControl)
-	ReplyText := ai.GetAiReply(Info, questionText, top, tags, zap.Int("msg_id", v.MsgID), zap.Int("comment_id", v.CommentID), zap.Int("link_id", v.LinkID), zap.Int("user_id", v.Uid), zap.String("user_name", v.UserName), zap.String("question", questionText), zap.String("raw_question", v.Text))
+	logFields := []zap.Field{zap.Int("msg_id", v.MsgID), zap.Int("comment_id", v.CommentID), zap.Int("link_id", v.LinkID), zap.Int("user_id", v.Uid), zap.String("user_name", v.UserName), zap.String("question", questionText), zap.String("raw_question", v.Text)}
+	ReplyText, skipped := generateAIReplyWithQualityRetry(Info, questionText, top, tags, logFields...)
 	if ReplyText == "" {
+		if skipped {
+			return true
+		}
 		loger.Loger.Info("[XHH]Ai返回错误")
 		return false
 	}
