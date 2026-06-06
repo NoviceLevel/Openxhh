@@ -83,3 +83,19 @@ func TestConfigTestOutputDirUsesRootForRelativePath(t *testing.T) {
 		t.Fatalf("configTestOutputDir = %q, want %q", got, want)
 	}
 }
+
+func TestParseConfigTestAIResponseAcceptsSSE(t *testing.T) {
+	body := []byte("data: {\"choices\":[{\"delta\":{\"content\":\"model\"}}],\"usage\":{\"total_tokens\":1}}\n\n" +
+		"data: {\"choices\":[{\"delta\":{\"content\":\" ok\"}}],\"usage\":{\"total_tokens\":2}}\n\n" +
+		"data: [DONE]\n\n")
+	text, tokens, err := parseConfigTestAIResponse(body, false)
+	if err != nil {
+		t.Fatalf("parseConfigTestAIResponse returned error: %v", err)
+	}
+	if text != "model ok" {
+		t.Fatalf("text = %q, want model ok", text)
+	}
+	if tokens != 2 {
+		t.Fatalf("tokens = %d, want 2", tokens)
+	}
+}

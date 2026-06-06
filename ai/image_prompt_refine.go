@@ -161,24 +161,24 @@ func refineImagePromptOnce(ctx context.Context, payload []byte, useResponses boo
 	}
 
 	if useResponses {
-		parsed, err := parseResponsesResp(data)
+		text, _, err := ParseAITextResponse(data, true)
 		if err != nil {
 			return ImagePromptRefineResult{}, err
 		}
-		if len(parsed.Choices) == 0 || strings.TrimSpace(parsed.Choices[0].Msg.Content) == "" {
+		if strings.TrimSpace(text) == "" {
 			return ImagePromptRefineResult{}, errors.New("prompt refine response has no content")
 		}
-		return ParseImagePromptRefineContent(parsed.Choices[0].Msg.Content)
+		return ParseImagePromptRefineContent(text)
 	}
 
-	var parsed promptRefineResponse
-	if err := json.Unmarshal(data, &parsed); err != nil {
+	text, _, err := ParseAITextResponse(data, false)
+	if err != nil {
 		return ImagePromptRefineResult{}, err
 	}
-	if len(parsed.Choices) == 0 || strings.TrimSpace(parsed.Choices[0].Message.Content) == "" {
+	if strings.TrimSpace(text) == "" {
 		return ImagePromptRefineResult{}, errors.New("prompt refine response has no content")
 	}
-	return ParseImagePromptRefineContent(parsed.Choices[0].Message.Content)
+	return ParseImagePromptRefineContent(text)
 }
 
 func ParseImagePromptRefineContent(content string) (ImagePromptRefineResult, error) {

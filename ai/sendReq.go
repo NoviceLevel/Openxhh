@@ -161,11 +161,7 @@ func SendReq(Model string, Msg []any) (Jresp respStruct) {
 			loger.Loger.Error("[Ai]Ai返回HTTP错误", zap.String("variant", payload.Name), zap.Int("status", resp.StatusCode), zap.String("body", limitRefineString(bodyStr, 500)))
 			return
 		}
-		if useResponsesAPI(cfg.BaseUrl) {
-			Jresp, err = parseResponsesResp(Dresp)
-		} else {
-			err = json.Unmarshal(Dresp, &Jresp)
-		}
+		Jresp, err = parseAIResp(Dresp, useResponsesAPI(cfg.BaseUrl))
 		if err != nil {
 			loger.Loger.Error("[Ai]无法反序列化JSON", zap.Error(err), zap.String("variant", payload.Name), zap.String("body", string(Dresp)))
 			return
@@ -266,6 +262,216 @@ func shouldTryNextResponsesPayload(status int) bool {
 
 func useResponsesAPI(baseURL string) bool {
 	return strings.Contains(strings.ToLower(baseURL), "/responses")
+}
+
+func ParseAITextResponse(data []byte, useResponses bool) (string, int, error) {
+	resp, err := parseAIResp(data, useResponses)
+	if err != nil {
+		return "", 0, err
+	}
+	if len(resp.Choices) == 0 {
+		return "", resp.Usage.TotalToken, nil
+	}
+	return resp.Choices[0].Msg.Content, resp.Usage.TotalToken, nil
+}
+
+func parseAIResp(data []byte, useResponses bool) (respStruct, error) {
+	if useResponses {
+		return parseResponsesRespAny(data)
+	}
+	return parseChatCompletionsResp(data)
+}
+
+func parseChatCompletionsResp(data []byte) (respStruct, error) {
+	if isSSEData(data) {
+		return parseChatCompletionsSSE(data)
+	}
+	var resp respStruct
+	if err := json.Unmarshal(data, &resp); err != nil {
+		return respStruct{}, err
+	}
+	return resp, nil
+}
+
+func parseResponsesRespAny(data []byte) (respStruct, error) {
+	if isSSEData(data) {
+		return parseResponsesSSE(data)
+	}
+	return parseResponsesResp(data)
+}
+
+func isSSEData(data []byte) bool {
+	return strings.HasPrefix(strings.TrimSpace(string(data)), "data:")
+}
+
+func sseDataPayloads(data []byte) []string {
+	text := strings.ReplaceAll(string(data), "\r\n", "\n")
+	var payloads []string
+	var eventLines []string
+	flush := func() {
+		if len(eventLines) == 0 {
+			return
+		}
+		payload := strings.TrimSpace(strings.Join(eventLines, "\n"))
+		eventLines = eventLines[:0]
+		if payload == "" || payload == "[DONE]" {
+			return
+		}
+		payloads = append(payloads, payload)
+	}
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimRight(line, "\r")
+		if strings.TrimSpace(line) == "" {
+			flush()
+			continue
+		}
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "data:") {
+			eventLines = append(eventLines, strings.TrimSpace(strings.TrimPrefix(trimmed, "data:")))
+		}
+	}
+	flush()
+	return payloads
+}
+
+func parseChatCompletionsSSE(data []byte) (respStruct, error) {
+	var resp respStruct
+	var builder strings.Builder
+	for _, payload := range sseDataPayloads(data) {
+		text, tokens, err := parseChatCompletionChunkPayload(payload)
+		if err != nil {
+			return respStruct{}, err
+		}
+		if tokens > 0 {
+			resp.Usage.TotalToken = tokens
+		}
+		builder.WriteString(text)
+	}
+	if builder.Len() == 0 {
+		return resp, nil
+	}
+	resp.Choices = []choice{{Index: 0}}
+	resp.Choices[0].Msg.Role = "assistant"
+	resp.Choices[0].Msg.Content = builder.String()
+	return resp, nil
+}
+
+func parseChatCompletionChunkPayload(payload string) (string, int, error) {
+	var chunk struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+			Delta struct {
+				Content string `json:"content"`
+			} `json:"delta"`
+		} `json:"choices"`
+		Usage struct {
+			TotalToken int `json:"total_tokens"`
+		} `json:"usage"`
+	}
+	if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
+		return "", 0, err
+	}
+	var builder strings.Builder
+	for _, choice := range chunk.Choices {
+		if choice.Delta.Content != "" {
+			builder.WriteString(choice.Delta.Content)
+			continue
+		}
+		if choice.Message.Content != "" {
+			builder.WriteString(choice.Message.Content)
+		}
+	}
+	return builder.String(), chunk.Usage.TotalToken, nil
+}
+
+func parseResponsesSSE(data []byte) (respStruct, error) {
+	var resp respStruct
+	var builder strings.Builder
+	var fullText string
+	for _, payload := range sseDataPayloads(data) {
+		text, tokens, err := parseChatCompletionChunkPayload(payload)
+		if err != nil {
+			return respStruct{}, err
+		}
+		if tokens > 0 {
+			resp.Usage.TotalToken = tokens
+		}
+		if text != "" {
+			builder.WriteString(text)
+			continue
+		}
+
+		eventText, eventTokens, err := parseResponsesSSEPayload(payload)
+		if err != nil {
+			return respStruct{}, err
+		}
+		if eventTokens > 0 {
+			resp.Usage.TotalToken = eventTokens
+		}
+		if eventText != "" {
+			if strings.Contains(payload, `"delta"`) {
+				builder.WriteString(eventText)
+			} else if builder.Len() == 0 {
+				fullText = eventText
+			}
+		}
+	}
+	text := builder.String()
+	if text == "" {
+		text = fullText
+	}
+	if text == "" {
+		return resp, nil
+	}
+	resp.Choices = []choice{{Index: 0}}
+	resp.Choices[0].Msg.Role = "assistant"
+	resp.Choices[0].Msg.Content = text
+	return resp, nil
+}
+
+func parseResponsesSSEPayload(payload string) (string, int, error) {
+	if parsed, err := parseResponsesResp([]byte(payload)); err == nil && len(parsed.Choices) > 0 {
+		return parsed.Choices[0].Msg.Content, parsed.Usage.TotalToken, nil
+	}
+
+	var event struct {
+		Type     string              `json:"type"`
+		Delta    string              `json:"delta"`
+		Text     string              `json:"text"`
+		Response responsesRespStruct `json:"response"`
+		Usage    struct {
+			TotalToken int `json:"total_tokens"`
+		} `json:"usage"`
+	}
+	if err := json.Unmarshal([]byte(payload), &event); err != nil {
+		return "", 0, err
+	}
+	tokens := event.Usage.TotalToken
+	if event.Response.Usage.TotalToken > 0 {
+		tokens = event.Response.Usage.TotalToken
+	}
+	if event.Delta != "" {
+		return event.Delta, tokens, nil
+	}
+	if event.Text != "" {
+		return event.Text, tokens, nil
+	}
+	if event.Response.OutputText != "" || len(event.Response.Output) > 0 {
+		data, err := json.Marshal(event.Response)
+		if err != nil {
+			return "", 0, err
+		}
+		parsed, err := parseResponsesResp(data)
+		if err != nil {
+			return "", 0, err
+		}
+		if len(parsed.Choices) > 0 {
+			return parsed.Choices[0].Msg.Content, parsed.Usage.TotalToken, nil
+		}
+	}
+	return "", tokens, nil
 }
 
 func aiWebSearchEnabled() bool {

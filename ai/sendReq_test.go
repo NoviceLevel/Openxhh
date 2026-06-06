@@ -281,6 +281,54 @@ func TestParseResponsesResp(t *testing.T) {
 	}
 }
 
+func TestParseAITextResponseChatCompletionsSSE(t *testing.T) {
+	body := []byte("data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}],\"usage\":{\"total_tokens\":1}}\n\n" +
+		"data: {\"choices\":[{\"delta\":{\"content\":\" world\"}}],\"usage\":{\"total_tokens\":2}}\n\n" +
+		"data: [DONE]\n\n")
+	text, tokens, err := ParseAITextResponse(body, false)
+	if err != nil {
+		t.Fatalf("ParseAITextResponse returned error: %v", err)
+	}
+	if text != "hello world" {
+		t.Fatalf("text = %q, want hello world", text)
+	}
+	if tokens != 2 {
+		t.Fatalf("tokens = %d, want 2", tokens)
+	}
+}
+
+func TestParseAITextResponseChatCompletionsSSEUsageOnly(t *testing.T) {
+	body := []byte("data: {\"id\":\"\",\"object\":\"chat.completion.chunk\",\"choices\":[],\"usage\":{\"total_tokens\":4528}}\n\n" +
+		"data: [DONE]\n\n")
+	text, tokens, err := ParseAITextResponse(body, false)
+	if err != nil {
+		t.Fatalf("ParseAITextResponse returned error: %v", err)
+	}
+	if text != "" {
+		t.Fatalf("text = %q, want empty", text)
+	}
+	if tokens != 4528 {
+		t.Fatalf("tokens = %d, want 4528", tokens)
+	}
+}
+
+func TestParseAITextResponseResponsesSSE(t *testing.T) {
+	body := []byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}\n\n" +
+		"data: {\"type\":\"response.output_text.delta\",\"delta\":\" world\"}\n\n" +
+		"data: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"total_tokens\":9}}}\n\n" +
+		"data: [DONE]\n\n")
+	text, tokens, err := ParseAITextResponse(body, true)
+	if err != nil {
+		t.Fatalf("ParseAITextResponse returned error: %v", err)
+	}
+	if text != "hello world" {
+		t.Fatalf("text = %q, want hello world", text)
+	}
+	if tokens != 9 {
+		t.Fatalf("tokens = %d, want 9", tokens)
+	}
+}
+
 func TestSendChatCompletionUsesResponsesInput(t *testing.T) {
 	restoreAIConfig(t)
 

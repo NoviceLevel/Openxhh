@@ -1043,6 +1043,17 @@ func buildConfigTestSystemPrompt(cfg appConfig) string {
 }
 
 func parseConfigTestAIResponse(data []byte, useResponses bool) (string, int, error) {
+	text, tokens, err := ai.ParseAITextResponse(data, useResponses)
+	if err != nil {
+		return "", 0, err
+	}
+	if strings.TrimSpace(text) == "" {
+		return "", 0, errors.New("AI test response has no content")
+	}
+	return text, tokens, nil
+}
+
+func parseConfigTestAIResponseLegacy(data []byte, useResponses bool) (string, int, error) {
 	if useResponses {
 		var parsed responsesTestResponse
 		if err := json.Unmarshal(data, &parsed); err != nil {

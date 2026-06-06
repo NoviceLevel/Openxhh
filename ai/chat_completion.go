@@ -120,24 +120,24 @@ func sendChatCompletionOnce(ctx context.Context, payload []byte, useResponses bo
 	}
 
 	if useResponses {
-		parsed, err := parseResponsesResp(data)
+		text, _, err := ParseAITextResponse(data, true)
 		if err != nil {
 			return "", err
 		}
-		if len(parsed.Choices) == 0 || strings.TrimSpace(parsed.Choices[0].Msg.Content) == "" {
+		if strings.TrimSpace(text) == "" {
 			return "", errors.New("chat completion response has no content")
 		}
-		return parsed.Choices[0].Msg.Content, nil
+		return text, nil
 	}
 
-	var parsed promptRefineResponse
-	if err := json.Unmarshal(data, &parsed); err != nil {
+	text, _, err := ParseAITextResponse(data, false)
+	if err != nil {
 		return "", err
 	}
-	if len(parsed.Choices) == 0 || strings.TrimSpace(parsed.Choices[0].Message.Content) == "" {
+	if strings.TrimSpace(text) == "" {
 		return "", errors.New("chat completion response has no content")
 	}
-	return parsed.Choices[0].Message.Content, nil
+	return text, nil
 }
 
 type chatCompletionStatusError struct {
