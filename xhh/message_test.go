@@ -110,6 +110,7 @@ func TestReplyToBotNotificationQueuesReply(t *testing.T) {
 		UserID:         89055874,
 		UserName:       "路人",
 		CommentText:    "不是 @，但回复了机器人",
+		CreatedAt:      1000,
 	}
 
 	if notificationSource(msg) != "reply_to_bot" {
@@ -141,6 +142,7 @@ func TestReplyToCurrentAccountNotificationQueuesReplyWithoutOutboundRecord(t *te
 		UserID:         89055874,
 		UserName:       "路人",
 		CommentText:    "别人帖子里回复了当前账号",
+		CreatedAt:      1000,
 	}
 
 	if notificationSource(msg) != "reply_to_bot" {
@@ -160,6 +162,35 @@ func TestReplyToCurrentAccountNotificationQueuesReplyWithoutOutboundRecord(t *te
 	}
 }
 
+func TestOldReplyToCurrentAccountNotificationDoesNotQueue(t *testing.T) {
+	setupXHHMessageQueueTest(t)
+	msg := Msg{
+		MsgID:          1006,
+		CommentID:      867937630,
+		RootCommentID:  867937000,
+		ReplyCommentID: 555,
+		ReplyUserID:    999,
+		LinkID:         181099114,
+		UserID:         89055874,
+		UserName:       "路人",
+		CommentText:    "很久之前回复了当前账号",
+		CreatedAt:      999,
+	}
+
+	if notificationSource(msg) != "reply_to_bot" {
+		t.Fatalf("notificationSource = %q, want reply_to_bot", notificationSource(msg))
+	}
+	queueReplyToBotNotification(msg)
+
+	var count int
+	if err := sqlite.Db.QueryRow("SELECT COUNT(*) FROM at WHERE msg_id=?", 1006).Scan(&count); err != nil {
+		t.Fatalf("query at: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("queued old notification count = %d, want 0", count)
+	}
+}
+
 func setupXHHMessageQueueTest(t *testing.T) {
 	t.Helper()
 	oldType := config.ConfigStruct.DataBase.Type
@@ -171,6 +202,7 @@ func setupXHHMessageQueueTest(t *testing.T) {
 	oldOwnerIDsLoaded := ownerIDsLoaded
 	oldMaxPendingReplies := MaxPendingReplies
 	oldMaxPendingRepliesPerUser := MaxPendingRepliesPerUser
+	oldNotificationReplyQueueStartUnix := notificationReplyQueueStartUnix
 	oldLogger := loger.Loger
 	loger.Loger = zap.NewNop()
 	database, err := sql.Open("sqlite", ":memory:")
@@ -186,6 +218,7 @@ func setupXHHMessageQueueTest(t *testing.T) {
 	Info.HeyBoxId = "999"
 	MaxPendingReplies = defaultMaxPendingReplies
 	MaxPendingRepliesPerUser = defaultMaxPendingRepliesPerUser
+	notificationReplyQueueStartUnix = 1000
 	t.Cleanup(func() {
 		database.Close()
 		sqlite.Db = oldDB
@@ -197,6 +230,7 @@ func setupXHHMessageQueueTest(t *testing.T) {
 		Info = oldInfo
 		MaxPendingReplies = oldMaxPendingReplies
 		MaxPendingRepliesPerUser = oldMaxPendingRepliesPerUser
+		notificationReplyQueueStartUnix = oldNotificationReplyQueueStartUnix
 		loger.Loger = oldLogger
 	})
 	_, err = sqlite.Db.Exec(`CREATE TABLE at (

@@ -35,6 +35,7 @@ const defaultMaxPendingRepliesPerUser = 5
 const maxReplyRetries = 5
 
 var replyRetryCounts sync.Map
+var notificationReplyQueueStartUnix = time.Now().Unix()
 
 const messagePageLimit = 20
 const maxMessagePages = 5
@@ -466,6 +467,12 @@ func queueReplyToBotNotification(v Msg) {
 	if targetCommentID <= 0 {
 		return
 	}
+	if !isRecentReplyToBotNotification(v) {
+		if loger.Loger != nil {
+			loger.Loger.Info("[通知同步]跳过启动前的回复通知", zap.Int("msg_id", v.MsgID), zap.Int("comment_id", v.CommentID), zap.Int("reply_comment_id", v.ReplyCommentID), zap.Int("reply_user_id", v.ReplyUserID), zap.Int64("created_at", v.CreatedAt), zap.Int64("queue_start", notificationReplyQueueStartUnix))
+		}
+		return
+	}
 	if v.CommentID <= 0 || v.LinkID <= 0 {
 		return
 	}
@@ -510,6 +517,13 @@ func replyToBotTargetCommentID(v Msg) int {
 
 func isReplyToCurrentAccount(v Msg) bool {
 	return Info.HeyBoxId != "" && v.ReplyUserID > 0 && strconv.Itoa(v.ReplyUserID) == Info.HeyBoxId
+}
+
+func isRecentReplyToBotNotification(v Msg) bool {
+	if notificationReplyQueueStartUnix <= 0 {
+		return true
+	}
+	return v.CreatedAt > 0 && v.CreatedAt >= notificationReplyQueueStartUnix
 }
 
 func replyToBotRootCommentID(targetCommentID int) int {
