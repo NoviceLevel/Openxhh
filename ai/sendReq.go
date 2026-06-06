@@ -117,7 +117,8 @@ func SendReq(Model string, Msg []any) (Jresp respStruct) {
 		loger.Loger.Error("[AI]无法序列化JSON", zap.Error(err))
 		return
 	}
-	for i, payload := range payloads {
+	for i := 0; i < len(payloads); i++ {
+		payload := payloads[i]
 		req, err := http.NewRequest("POST", cfg.BaseUrl, bytes.NewReader(payload.Body))
 		if err != nil {
 			loger.Loger.Error("[AI]无法创建请求", zap.Error(err), zap.String("variant", payload.Name))

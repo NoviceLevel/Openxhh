@@ -826,8 +826,12 @@ func (s *serverState) loadConfig() (appConfig, bool, error) {
 		return cfg, true, err
 	}
 	if applyConfigDefaults(&cfg) {
-		if data, err := json.MarshalIndent(cfg, "", "  "); err == nil {
-			_ = os.WriteFile(s.configPath(), append(data, '\n'), 0600)
+		data, err := json.MarshalIndent(cfg, "", "  ")
+		if err != nil {
+			return cfg, true, err
+		}
+		if err := os.WriteFile(s.configPath(), append(data, '\n'), 0600); err != nil {
+			return cfg, true, err
 		}
 	}
 	return cfg, true, nil

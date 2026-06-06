@@ -23,6 +23,10 @@ func GetAiReplyWithPrompt(prompt string, Contents []Content, UserSay string, Top
 	return getAiReplyWithScenePrompt(prompt, Contents, buildReplyScenePrompt(UserSay), len([]rune(UserSay)), Topics, Tags, logFields...)
 }
 
+func GetAiReplyWithoutCharacterCard(Contents []Content, UserSay string, Topics []Topics, Tags []Tags, logFields ...zap.Field) string {
+	return getAiReplyWithScenePrompt(config.ConfigStruct.Ai.Prompt, Contents, buildReplyScenePrompt(UserSay), len([]rune(UserSay)), Topics, Tags, logFields...)
+}
+
 func GetAiFeedReplyWithPrompt(prompt string, Contents []Content, instruction string, Topics []Topics, Tags []Tags, logFields ...zap.Field) string {
 	return getAiReplyWithScenePrompt(prompt, Contents, buildFeedReplyScenePrompt(instruction), len([]rune(instruction)), Topics, Tags, logFields...)
 }

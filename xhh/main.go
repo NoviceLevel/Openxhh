@@ -91,7 +91,10 @@ func Init() {
 		loger.Loger.Warn("[XHH]您的设置中未设置单用户最大待回复队列，已默认为5")
 		MaxPendingRepliesPerUser = defaultMaxPendingRepliesPerUser
 	}
-	json.Unmarshal(file, &Info)
+	if err := json.Unmarshal(file, &Info); err != nil {
+		loger.Loger.Error("[XHH]Cookie文件格式错误", zap.Error(err))
+		return
+	}
 }
 
 type Msg struct {
