@@ -32,15 +32,22 @@ func GetAiFeedReplyWithPrompt(prompt string, Contents []Content, instruction str
 }
 
 func FeedReplyPromptFromConfig(scenePrompt string) string {
+	chatName := config.ConfigStruct.Ai.ChatName
+	description := firstNonEmpty(config.ConfigStruct.FeedReply.Description, config.ConfigStruct.Ai.Description)
+	personality := firstNonEmpty(config.ConfigStruct.FeedReply.Personality, config.ConfigStruct.Ai.Personality)
+	scenario := firstNonEmpty(config.ConfigStruct.FeedReply.Scenario, config.ConfigStruct.Ai.Scenario)
+	firstMessage := firstNonEmpty(config.ConfigStruct.FeedReply.FirstMessage, config.ConfigStruct.Ai.FirstMessage)
+	exampleDialogs := firstNonEmpty(config.ConfigStruct.FeedReply.ExampleDialogs, config.ConfigStruct.Ai.ExampleDialogs)
+	postHistoryInstructions := firstNonEmpty(config.ConfigStruct.FeedReply.PostHistoryInstructions, config.ConfigStruct.Ai.PostHistoryInstructions)
 	return buildTavernPrompt(
-		config.ConfigStruct.Ai.ChatName,
-		config.ConfigStruct.Ai.Description,
-		config.ConfigStruct.Ai.Personality,
-		config.ConfigStruct.Ai.Scenario,
-		config.ConfigStruct.Ai.FirstMessage,
-		config.ConfigStruct.Ai.ExampleDialogs,
+		chatName,
+		description,
+		personality,
+		scenario,
+		firstMessage,
+		exampleDialogs,
 		scenePrompt,
-		config.ConfigStruct.Ai.PostHistoryInstructions,
+		postHistoryInstructions,
 	)
 }
 
@@ -95,6 +102,14 @@ func buildTavernPrompt(chatName, description, personality, scenario, firstMessag
 		builder.WriteString(text)
 	}
 	return builder.String()
+}
+
+func firstNonEmpty(primary, fallback string) string {
+	primary = strings.TrimSpace(primary)
+	if primary != "" {
+		return primary
+	}
+	return strings.TrimSpace(fallback)
 }
 
 func getAiReplyWithScenePrompt(prompt string, Contents []Content, scenePrompt string, textLen int, Topics []Topics, Tags []Tags, logFields ...zap.Field) string {

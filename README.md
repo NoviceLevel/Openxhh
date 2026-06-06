@@ -216,7 +216,13 @@ sudo systemctl restart Openxhh
     "maxPerRun": 1,
     "maxPerDay": 10,
     "dryRun": true,
-    "prompt": ""
+    "description": "",
+    "personality": "",
+    "scenario": "",
+    "firstMessage": "",
+    "exampleDialogs": "",
+    "prompt": "",
+    "postHistoryInstructions": ""
   },
   "image": {
     "model": "gpt-image-2",
@@ -1011,7 +1017,13 @@ ls -lh /opt/Openxhh/sql.db
 | `feedReply.maxPerRun` | `1` | 每轮最多处理帖子数 |
 | `feedReply.maxPerDay` | `10` | 每天最多处理帖子数 |
 | `feedReply.dryRun` | `true` | 默认只记录，不真实发评论 |
-| `feedReply.prompt` | 空 | 自动刷帖专用场景 Prompt，和公共酒馆式人设字段一起生效 |
+| `feedReply.description` | 空 | 自动刷帖专用描述；为空时回退到 `ai.description` |
+| `feedReply.personality` | 空 | 自动刷帖专用个性；为空时回退到 `ai.personality` |
+| `feedReply.scenario` | 空 | 自动刷帖专用场景；为空时回退到 `ai.scenario` |
+| `feedReply.firstMessage` | 空 | 自动刷帖专用第一条消息；为空时回退到 `ai.firstMessage` |
+| `feedReply.exampleDialogs` | 空 | 自动刷帖专用示例对话；为空时回退到 `ai.exampleDialogs` |
+| `feedReply.prompt` | 空 | 自动刷帖专用场景 Prompt |
+| `feedReply.postHistoryInstructions` | 空 | 自动刷帖专用后置指令；为空时回退到 `ai.postHistoryInstructions` |
 | `image.model` | `gpt-image-2` | 图片模型默认值 |
 | `image.size` | `1024x1024` | 图片尺寸默认值 |
 | `image.responseFormat` | `b64_json` | 图片接口输出格式 |

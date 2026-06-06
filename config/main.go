@@ -50,12 +50,18 @@ var ConfigStruct struct {
 		SearchContextSize       string `json:"searchContextSize"`
 	} `json:"ai"`
 	FeedReply struct {
-		Enabled   bool   `json:"enabled"`
-		Interval  int    `json:"interval"`
-		MaxPerRun int    `json:"maxPerRun"`
-		MaxPerDay int    `json:"maxPerDay"`
-		DryRun    *bool  `json:"dryRun,omitempty"`
-		Prompt    string `json:"prompt"`
+		Enabled                 bool   `json:"enabled"`
+		Interval                int    `json:"interval"`
+		MaxPerRun               int    `json:"maxPerRun"`
+		MaxPerDay               int    `json:"maxPerDay"`
+		DryRun                  *bool  `json:"dryRun,omitempty"`
+		Description             string `json:"description"`
+		Personality             string `json:"personality"`
+		Scenario                string `json:"scenario"`
+		FirstMessage            string `json:"firstMessage"`
+		ExampleDialogs          string `json:"exampleDialogs"`
+		Prompt                  string `json:"prompt"`
+		PostHistoryInstructions string `json:"postHistoryInstructions"`
 	} `json:"feedReply"`
 	Image struct {
 		Model           string `json:"model"`

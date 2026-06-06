@@ -1,6 +1,7 @@
 package ai
 
 import (
+	"openxhh/config"
 	"strings"
 	"testing"
 )
@@ -40,6 +41,27 @@ func TestBuildTavernPromptReturnsSceneOnlyForExistingPrompt(t *testing.T) {
 	got := buildTavernPrompt("", "", "", "", "", "", "只用用户 Prompt", "")
 	if got != "只用用户 Prompt" {
 		t.Fatalf("buildTavernPrompt = %q, want scene prompt only", got)
+	}
+}
+
+func TestFeedReplyPromptFromConfigUsesFeedSpecificFields(t *testing.T) {
+	oldConfig := config.ConfigStruct
+	t.Cleanup(func() { config.ConfigStruct = oldConfig })
+
+	config.ConfigStruct.Ai.ChatName = "惠惠"
+	config.ConfigStruct.Ai.Description = "公共描述"
+	config.ConfigStruct.Ai.Personality = "公共个性"
+	config.ConfigStruct.FeedReply.Description = "刷帖描述"
+	config.ConfigStruct.FeedReply.Personality = "刷帖个性"
+
+	got := FeedReplyPromptFromConfig("刷帖规则")
+	for _, want := range []string{"【聊天名称】\n惠惠", "【描述】\n刷帖描述", "【个性】\n刷帖个性", "【场景规则】\n刷帖规则"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("FeedReplyPromptFromConfig should contain %q; got %q", want, got)
+		}
+	}
+	if strings.Contains(got, "公共描述") || strings.Contains(got, "公共个性") {
+		t.Fatalf("FeedReplyPromptFromConfig should prefer feed-specific fields; got %q", got)
 	}
 }
 
