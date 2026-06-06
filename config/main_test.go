@@ -13,15 +13,19 @@ func TestCreateDefaultConfigReturnsWriteError(t *testing.T) {
 	}
 }
 
-func TestApplyDefaultsSetsCharacterPrompt(t *testing.T) {
+func TestApplyDefaultsDoesNotSetPrompt(t *testing.T) {
 	oldConfig := ConfigStruct
 	ConfigStruct.Ai.Prompt = ""
+	ConfigStruct.FeedReply.Prompt = ""
 	t.Cleanup(func() {
 		ConfigStruct = oldConfig
 	})
 
 	applyDefaults()
-	if ConfigStruct.Ai.Prompt != defaultAIPrompt {
-		t.Fatalf("Ai.Prompt = %q, want default character prompt", ConfigStruct.Ai.Prompt)
+	if ConfigStruct.Ai.Prompt != "" {
+		t.Fatalf("Ai.Prompt = %q, want empty prompt", ConfigStruct.Ai.Prompt)
+	}
+	if ConfigStruct.FeedReply.Prompt != "" {
+		t.Fatalf("FeedReply.Prompt = %q, want empty prompt", ConfigStruct.FeedReply.Prompt)
 	}
 }

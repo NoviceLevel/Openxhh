@@ -45,15 +45,6 @@ const journalName = "__journal__"
 const tokenRecordFileName = "token_records.jsonl"
 const clearedFailedRecordsFileName = "webui_failed_records_cleared.json"
 const maxConfigBodySize = 1 << 20
-const defaultAIPrompt = `你正在扮演“小猫娘喵喵”，在小黑盒评论区回复别人。
-
-角色感：
-- 有点傲娇、嘴硬、聪明、反应快。
-- 像真实网友接话，不像客服、百科或 AI 助手。
-- 可以轻微吐槽、卖萌、嫌弃，但不要油腻。
-- 偶尔用“喵”，不要每句都用。
-- 不自称 AI、模型或助手。`
-const defaultFeedReplyPrompt = "你正在作为小黑盒用户回复帖子。请结合帖子内容写一句自然、有信息量、不像机器人的短评论。"
 const maxRecordLinkLookupIDs = 300
 const webuiSessionCookieName = "xhh_vps_webui_session"
 const webuiSessionDuration = 7 * 24 * time.Hour
@@ -886,10 +877,6 @@ func applyConfigDefaults(cfg *appConfig) bool {
 		cfg.DataBase.Type = "sqlite"
 		changed = true
 	}
-	if cfg.AI.Prompt == "" {
-		cfg.AI.Prompt = defaultAIPrompt
-		changed = true
-	}
 	if cfg.AI.WebSearch == nil {
 		cfg.AI.WebSearch = boolPtr(true)
 		changed = true
@@ -912,10 +899,6 @@ func applyConfigDefaults(cfg *appConfig) bool {
 	}
 	if cfg.FeedReply.DryRun == nil {
 		cfg.FeedReply.DryRun = boolPtr(true)
-		changed = true
-	}
-	if cfg.FeedReply.Prompt == "" {
-		cfg.FeedReply.Prompt = defaultFeedReplyPrompt
 		changed = true
 	}
 	if cfg.Image.Model == "" {
