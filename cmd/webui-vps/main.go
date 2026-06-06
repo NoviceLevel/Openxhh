@@ -445,6 +445,7 @@ type appConfig struct {
 		PromptBaseURL   string `json:"promptBaseUrl"`
 		PromptToken     string `json:"promptToken"`
 		PromptMaxChars  int    `json:"promptMaxChars"`
+		ReplyWithImage  bool   `json:"replyWithImage"`
 	} `json:"image"`
 }
 
@@ -1140,6 +1141,7 @@ func applyAppConfigToGlobalConfig(cfg appConfig, rootDir string) {
 	config.ConfigStruct.Image.PromptBaseUrl = cfg.Image.PromptBaseURL
 	config.ConfigStruct.Image.PromptToken = cfg.Image.PromptToken
 	config.ConfigStruct.Image.PromptMaxChars = cfg.Image.PromptMaxChars
+	config.ConfigStruct.Image.ReplyWithImage = cfg.Image.ReplyWithImage
 }
 
 func configTestOutputDir(outputDir, rootDir string) string {
@@ -5434,10 +5436,11 @@ function rerenderEmojiText(){if(!recordsSignature&&!failedRecordsSignature&&!mes
 
 async function refreshStatus(){try{const data=await api('/api/status');const running=data.running;const serviceState=document.querySelector('#serviceState');if(serviceState)serviceState.textContent=(data.active||'unknown')+(data.detail?' · '+data.detail:'');document.querySelector('#listenAddr').textContent=data.listenAddr||'—';document.querySelector('#rootDir').textContent=data.rootDir||'—';document.querySelector('#statusText').textContent=data.statusText||'—';document.querySelector('#metricPort').textContent=extractPort(data.listenAddr)||'29173';for(const id of ['serviceStartBtn'])document.querySelector('#'+id).disabled=running;for(const id of ['serviceStopBtn'])document.querySelector('#'+id).disabled=!running;topStatus.innerHTML='<span class="dot '+(running?'on':'')+'"></span><span>'+(running?'运行中':'待机')+'</span>'}catch(err){topStatus.innerHTML='<span class="dot"></span><span>认证失效</span>'}}
 
-async function loadConfig(){if(!configForm)return;try{const data=await api('/api/config');document.querySelector('#configPath').textContent=data.path||'config.json';populateConfig(data.config||{})}catch(err){if(configToast)configToast.textContent='配置读取失败：'+err.message}}
+async function loadConfig(){if(!configForm)return;try{ensureReplyImageConfigField();const data=await api('/api/config');document.querySelector('#configPath').textContent=data.path||'config.json';populateConfig(data.config||{})}catch(err){if(configToast)configToast.textContent='配置读取失败：'+err.message}}
 function populateConfig(config){for(const field of configFields()){const value=getPath(config,field.dataset.path);if(field.type==='checkbox'){field.checked=!!value}else{field.value=value??''}}updateFeedFallbackHint()}
-function collectConfig(){const config={};for(const field of configFields()){let value;if(field.type==='checkbox'){value=field.checked}else if(field.dataset.type==='number'){value=Number(field.value||0)}else{value=field.value}setPath(config,field.dataset.path,value)}return config}
+function collectConfig(){ensureReplyImageConfigField();const config={};for(const field of configFields()){let value;if(field.type==='checkbox'){value=field.checked}else if(field.dataset.type==='number'){value=Number(field.value||0)}else{value=field.value}setPath(config,field.dataset.path,value)}return config}
 function configFields(){return Array.from(configForm.querySelectorAll('[data-path]'))}
+function ensureReplyImageConfigField(){if(!configForm||configField('image.replyWithImage'))return;const imageModel=configField('image.model');const group=imageModel?.closest('.config-group');if(!group)return;const label=document.createElement('label');label.className='switch field wide';const span=document.createElement('span');span.textContent='普通 AI 回复尝试配图（失败自动回退纯文字）';const input=document.createElement('input');input.dataset.path='image.replyWithImage';input.dataset.type='bool';input.type='checkbox';label.appendChild(span);label.appendChild(input);group.insertBefore(label,group.children[1]||null)}
 function configField(path){return configForm?.querySelector('[data-path="'+path+'"]')}
 function configValue(path){const field=configField(path);return field?(field.type==='checkbox'?(field.checked?'true':''):field.value||''):''}
 function setConfigValue(path,value){const field=configField(path);if(field)field.value=value||''}

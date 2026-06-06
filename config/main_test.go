@@ -44,6 +44,9 @@ func TestApplyDefaultsDoesNotSetImageResponseFormat(t *testing.T) {
 	if ConfigStruct.Image.ResponseFormat != "" {
 		t.Fatalf("Image.ResponseFormat = %q, want empty", ConfigStruct.Image.ResponseFormat)
 	}
+	if ConfigStruct.Image.ReplyWithImage {
+		t.Fatal("Image.ReplyWithImage = true, want false by default")
+	}
 }
 
 func TestApplyDefaultsMigratesCharacterCard(t *testing.T) {

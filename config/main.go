@@ -79,6 +79,7 @@ var ConfigStruct struct {
 		PromptBaseUrl   string `json:"promptBaseUrl"`
 		PromptToken     string `json:"promptToken"`
 		PromptMaxChars  int    `json:"promptMaxChars"`
+		ReplyWithImage  bool   `json:"replyWithImage"`
 	} `json:"image"`
 }
 

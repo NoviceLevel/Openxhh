@@ -830,7 +830,7 @@ func regeneratePreviousBotReply(v db.CommStruct, mentionControl MentionControl) 
 	if mention != "" && ShouldMentionTarget(v.Text) {
 		replyText = mention + " " + replyText
 	}
-	return Reply(replyText, strconv.Itoa(v.LinkID), strconv.Itoa(v.CommentID), strconv.Itoa(v.RootID), "")
+	return replyWithOptionalImage(v, replyText, questionText, info)
 }
 
 func replyWithAiComment(v db.CommStruct, mentionControl MentionControl) bool {
@@ -868,7 +868,7 @@ func replyWithAiComment(v db.CommStruct, mentionControl MentionControl) bool {
 	} else if mentionTarget {
 		ReplyText = mention + " " + ReplyText
 	}
-	return Reply(ReplyText, strconv.Itoa(v.LinkID), strconv.Itoa(v.CommentID), strconv.Itoa(v.RootID), "")
+	return replyWithOptionalImage(v, ReplyText, questionText, Info)
 }
 
 func isPronounTarget(target string) bool {
