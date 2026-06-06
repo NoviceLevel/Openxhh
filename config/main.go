@@ -34,13 +34,17 @@ var ConfigStruct struct {
 		Passwd string `json:"passwd"`
 	} `json:"database"`
 	Ai struct {
-		Model             string `json:"model"`
-		Prompt            string `json:"prompt"`
-		BaseUrl           string `json:"baseUrl"`
-		Token             string `json:"token"`
-		WebSearch         *bool  `json:"webSearch,omitempty"`
-		ForceWebSearch    *bool  `json:"forceWebSearch,omitempty"`
-		SearchContextSize string `json:"searchContextSize"`
+		Model                   string `json:"model"`
+		CharacterCard           string `json:"characterCard"`
+		FirstMessage            string `json:"firstMessage"`
+		ExampleDialogs          string `json:"exampleDialogs"`
+		Prompt                  string `json:"prompt"`
+		PostHistoryInstructions string `json:"postHistoryInstructions"`
+		BaseUrl                 string `json:"baseUrl"`
+		Token                   string `json:"token"`
+		WebSearch               *bool  `json:"webSearch,omitempty"`
+		ForceWebSearch          *bool  `json:"forceWebSearch,omitempty"`
+		SearchContextSize       string `json:"searchContextSize"`
 	} `json:"ai"`
 	FeedReply struct {
 		Enabled   bool   `json:"enabled"`

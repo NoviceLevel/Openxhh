@@ -196,7 +196,11 @@ sudo systemctl restart Openxhh
   },
   "ai": {
     "model": "你的模型名",
+    "characterCard": "",
+    "firstMessage": "",
+    "exampleDialogs": "",
     "prompt": "",
+    "postHistoryInstructions": "",
     "baseUrl": "你的 OpenAI 兼容 /v1/chat/completions 或 /v1/responses 地址",
     "token": "你的 AI API Token",
     "webSearch": true,
@@ -988,7 +992,11 @@ ls -lh /opt/Openxhh/sql.db
 | `xhh.webver` | `2.5` | 小黑盒 Web 版本字段 |
 | `xhh.version` | `999.0.4` | 小黑盒版本字段 |
 | `database.type` | `sqlite` | 个人部署推荐 SQLite |
-| `ai.prompt` | 角色设定型 Prompt | VPS Web UI 默认回复角色和语气；用户自定义后按用户 Prompt 原样生效 |
+| `ai.characterCard` | 空 | 酒馆式公共角色卡 / 人设底座；@ 回复和刷帖回复共用 |
+| `ai.firstMessage` | 空 | 酒馆式开场示例，用于示范角色第一句的动作、情绪和语气 |
+| `ai.exampleDialogs` | 空 | 酒馆式示例对话，用于稳定角色语感 |
+| `ai.prompt` | 空 | @ 回复专用场景 Prompt |
+| `ai.postHistoryInstructions` | 空 | 酒馆式后置指令，会放在 system prompt 末尾强化输出规则 |
 | `ai.webSearch` | `true` | 普通文字回复默认启用模型联网搜索 |
 | `ai.forceWebSearch` | `false` | 不强制每次回复都必须调用搜索工具 |
 | `ai.searchContextSize` | `medium` | 搜索上下文强度，可填 `low` / `medium` / `high` |
@@ -997,7 +1005,7 @@ ls -lh /opt/Openxhh/sql.db
 | `feedReply.maxPerRun` | `1` | 每轮最多处理帖子数 |
 | `feedReply.maxPerDay` | `10` | 每天最多处理帖子数 |
 | `feedReply.dryRun` | `true` | 默认只记录，不真实发评论 |
-| `feedReply.prompt` | 自动刷帖专用 Prompt | 控制主动回复风格和 `SKIP` 判断 |
+| `feedReply.prompt` | 空 | 自动刷帖专用场景 Prompt，和公共角色卡一起生效 |
 | `image.model` | `gpt-image-2` | 图片模型默认值 |
 | `image.size` | `1024x1024` | 图片尺寸默认值 |
 | `image.responseFormat` | `b64_json` | 图片接口输出格式 |

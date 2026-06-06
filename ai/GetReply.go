@@ -16,7 +16,7 @@ type Tags struct {
 }
 
 func GetAiReply(Contents []Content, UserSay string, Topics []Topics, Tags []Tags, logFields ...zap.Field) string {
-	return GetAiReplyWithPrompt(config.ConfigStruct.Ai.Prompt, Contents, UserSay, Topics, Tags, logFields...)
+	return GetAiReplyWithPrompt(replyPromptFromConfig(config.ConfigStruct.Ai.Prompt), Contents, UserSay, Topics, Tags, logFields...)
 }
 
 func GetAiReplyWithPrompt(prompt string, Contents []Content, UserSay string, Topics []Topics, Tags []Tags, logFields ...zap.Field) string {
@@ -25,6 +25,60 @@ func GetAiReplyWithPrompt(prompt string, Contents []Content, UserSay string, Top
 
 func GetAiFeedReplyWithPrompt(prompt string, Contents []Content, instruction string, Topics []Topics, Tags []Tags, logFields ...zap.Field) string {
 	return getAiReplyWithScenePrompt(prompt, Contents, buildFeedReplyScenePrompt(instruction), len([]rune(instruction)), Topics, Tags, logFields...)
+}
+
+func FeedReplyPromptFromConfig(scenePrompt string) string {
+	return buildTavernPrompt(
+		config.ConfigStruct.Ai.CharacterCard,
+		config.ConfigStruct.Ai.FirstMessage,
+		config.ConfigStruct.Ai.ExampleDialogs,
+		scenePrompt,
+		config.ConfigStruct.Ai.PostHistoryInstructions,
+	)
+}
+
+func replyPromptFromConfig(scenePrompt string) string {
+	return buildTavernPrompt(
+		config.ConfigStruct.Ai.CharacterCard,
+		config.ConfigStruct.Ai.FirstMessage,
+		config.ConfigStruct.Ai.ExampleDialogs,
+		scenePrompt,
+		config.ConfigStruct.Ai.PostHistoryInstructions,
+	)
+}
+
+func buildTavernPrompt(characterCard, firstMessage, exampleDialogs, scenePrompt, postHistoryInstructions string) string {
+	if strings.TrimSpace(characterCard) == "" &&
+		strings.TrimSpace(firstMessage) == "" &&
+		strings.TrimSpace(exampleDialogs) == "" &&
+		strings.TrimSpace(postHistoryInstructions) == "" {
+		return strings.TrimSpace(scenePrompt)
+	}
+	sections := []struct {
+		title string
+		text  string
+	}{
+		{title: "角色卡", text: characterCard},
+		{title: "开场示例", text: firstMessage},
+		{title: "示例对话", text: exampleDialogs},
+		{title: "场景规则", text: scenePrompt},
+		{title: "后置指令", text: postHistoryInstructions},
+	}
+	var builder strings.Builder
+	for _, section := range sections {
+		text := strings.TrimSpace(section.text)
+		if text == "" {
+			continue
+		}
+		if builder.Len() > 0 {
+			builder.WriteString("\n\n")
+		}
+		builder.WriteString("【")
+		builder.WriteString(section.title)
+		builder.WriteString("】\n")
+		builder.WriteString(text)
+	}
+	return builder.String()
 }
 
 func getAiReplyWithScenePrompt(prompt string, Contents []Content, scenePrompt string, textLen int, Topics []Topics, Tags []Tags, logFields ...zap.Field) string {
