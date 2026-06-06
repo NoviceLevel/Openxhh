@@ -1,7 +1,10 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"testing"
 )
@@ -97,5 +100,47 @@ func TestParseConfigTestAIResponseAcceptsSSE(t *testing.T) {
 	}
 	if tokens != 2 {
 		t.Fatalf("tokens = %d, want 2", tokens)
+	}
+}
+
+func TestConfigTestAIRetriesStreamWhenChatCompletionsReturnsEmpty(t *testing.T) {
+	attempts := 0
+	var streams []bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		attempts++
+		var body struct {
+			Stream bool `json:"stream"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		streams = append(streams, body.Stream)
+		w.Header().Set("Content-Type", "text/event-stream")
+		if !body.Stream {
+			_, _ = w.Write([]byte("data: {\"choices\":[],\"usage\":{\"total_tokens\":12}}\n\ndata: [DONE]\n\n"))
+			return
+		}
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"stream ok\"}}],\"usage\":{\"total_tokens\":13}}\n\ndata: [DONE]\n\n"))
+	}))
+	defer server.Close()
+
+	var cfg appConfig
+	cfg.AI.BaseURL = server.URL + "/v1/chat/completions"
+	cfg.AI.Model = "test-model"
+
+	text, tokens, err := testAIConfig(context.Background(), cfg, "测试一下")
+	if err != nil {
+		t.Fatalf("testAIConfig returned error: %v", err)
+	}
+	if text != "stream ok" {
+		t.Fatalf("text = %q, want stream ok", text)
+	}
+	if tokens != 13 {
+		t.Fatalf("tokens = %d, want 13", tokens)
+	}
+	if attempts != 2 || len(streams) != 2 || streams[0] || !streams[1] {
+		t.Fatalf("attempts=%d streams=%v, want [false true]", attempts, streams)
 	}
 }

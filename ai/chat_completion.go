@@ -21,6 +21,8 @@ type chatCompletionMessage struct {
 
 const chatCompletionAttempts = 3
 
+var errChatCompletionNoContent = errors.New("chat completion response has no content")
+
 func sendChatCompletion(ctx context.Context, model string, messages []chatCompletionMessage) (string, error) {
 	if strings.TrimSpace(model) == "" {
 		return "", errors.New("model is empty")
@@ -42,6 +44,9 @@ func sendChatCompletion(ctx context.Context, model string, messages []chatComple
 			lastErr = err
 			retryErr = err
 			if useResponses && i < len(payloads)-1 && shouldTryNextChatCompletionPayload(err) {
+				continue
+			}
+			if !useResponses && i < len(payloads)-1 && errors.Is(err, errChatCompletionNoContent) {
 				continue
 			}
 			break
@@ -94,7 +99,12 @@ func buildChatCompletionPayloads(model string, messages []chatCompletionMessage,
 	if err != nil {
 		return nil, err
 	}
-	return []aiRequestPayload{{Name: "chat_completions", Body: data}}, nil
+	body.Stream = true
+	streamData, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	return []aiRequestPayload{{Name: "chat_completions", Body: data}, {Name: "chat_completions_stream", Body: streamData}}, nil
 }
 
 func sendChatCompletionOnce(ctx context.Context, payload []byte, useResponses bool) (string, error) {
@@ -125,7 +135,7 @@ func sendChatCompletionOnce(ctx context.Context, payload []byte, useResponses bo
 			return "", err
 		}
 		if strings.TrimSpace(text) == "" {
-			return "", errors.New("chat completion response has no content")
+			return "", errChatCompletionNoContent
 		}
 		return text, nil
 	}
@@ -135,7 +145,7 @@ func sendChatCompletionOnce(ctx context.Context, payload []byte, useResponses bo
 		return "", err
 	}
 	if strings.TrimSpace(text) == "" {
-		return "", errors.New("chat completion response has no content")
+		return "", errChatCompletionNoContent
 	}
 	return text, nil
 }

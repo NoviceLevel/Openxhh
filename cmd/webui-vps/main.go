@@ -876,6 +876,8 @@ type responsesTestWebTool struct {
 	SearchContextSize string `json:"search_context_size,omitempty"`
 }
 
+var errConfigTestAINoContent = errors.New("AI test response has no content")
+
 type responsesTestResponse struct {
 	OutputText string `json:"output_text"`
 	Output     []struct {
@@ -954,9 +956,30 @@ func testAIConfig(ctx context.Context, cfg appConfig, prompt string) (string, in
 	if err != nil {
 		return "", 0, err
 	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.AI.BaseURL, bytes.NewReader(body))
+	text, tokens, raw, err := sendConfigTestAIRequest(ctx, cfg, body, useResponses)
 	if err != nil {
 		return "", 0, err
+	}
+	if strings.TrimSpace(text) == "" && !useResponses {
+		streamBody, buildErr := buildConfigTestAIBodyWithStream(cfg, prompt, useResponses, true)
+		if buildErr != nil {
+			return "", 0, buildErr
+		}
+		text, tokens, raw, err = sendConfigTestAIRequest(ctx, cfg, streamBody, useResponses)
+		if err != nil {
+			return "", 0, err
+		}
+	}
+	if strings.TrimSpace(text) == "" {
+		return "", 0, fmt.Errorf("%w: status=200 body=%s", errConfigTestAINoContent, limitString(string(raw), 500))
+	}
+	return strings.TrimSpace(text), tokens, nil
+}
+
+func sendConfigTestAIRequest(ctx context.Context, cfg appConfig, body []byte, useResponses bool) (string, int, []byte, error) {
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.AI.BaseURL, bytes.NewReader(body))
+	if err != nil {
+		return "", 0, nil, err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	if strings.TrimSpace(cfg.AI.Token) != "" {
@@ -964,27 +987,31 @@ func testAIConfig(ctx context.Context, cfg appConfig, prompt string) (string, in
 	}
 	resp, err := http.DefaultClient.Do(httpReq)
 	if err != nil {
-		return "", 0, err
+		return "", 0, nil, err
 	}
 	defer resp.Body.Close()
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", 0, err
+		return "", 0, data, err
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return "", 0, fmt.Errorf("AI 测试请求失败: status=%d body=%s", resp.StatusCode, limitString(string(data), 500))
+		return "", 0, data, fmt.Errorf("AI 测试请求失败: status=%d body=%s", resp.StatusCode, limitString(string(data), 500))
 	}
 	text, tokens, err := parseConfigTestAIResponse(data, useResponses)
 	if err != nil {
-		return "", 0, err
+		if errors.Is(err, errConfigTestAINoContent) {
+			return "", tokens, data, nil
+		}
+		return "", tokens, data, err
 	}
-	if strings.TrimSpace(text) == "" {
-		return "", 0, errors.New("AI 测试返回为空")
-	}
-	return strings.TrimSpace(text), tokens, nil
+	return text, tokens, data, nil
 }
 
 func buildConfigTestAIBody(cfg appConfig, prompt string, useResponses bool) ([]byte, error) {
+	return buildConfigTestAIBodyWithStream(cfg, prompt, useResponses, false)
+}
+
+func buildConfigTestAIBodyWithStream(cfg appConfig, prompt string, useResponses bool, stream bool) ([]byte, error) {
 	systemPrompt := buildConfigTestSystemPrompt(cfg)
 	if useResponses {
 		body := responsesTestBody{
@@ -994,7 +1021,7 @@ func buildConfigTestAIBody(cfg appConfig, prompt string, useResponses bool) ([]b
 				Role:    "user",
 				Content: []responsesTestInputContent{{Type: "input_text", Text: prompt}},
 			}},
-			Stream: false,
+			Stream: stream,
 		}
 		if cfg.AI.WebSearch != nil && *cfg.AI.WebSearch {
 			body.Tools = []responsesTestWebTool{{Type: "web_search_preview", SearchContextSize: configSearchContextSize(cfg.AI.SearchContextSize)}}
@@ -1015,7 +1042,7 @@ func buildConfigTestAIBody(cfg appConfig, prompt string, useResponses bool) ([]b
 			{Role: "system", Content: systemPrompt},
 			{Role: "user", Content: prompt},
 		},
-		Stream: false,
+		Stream: stream,
 	}
 	if cfg.AI.WebSearch != nil && *cfg.AI.WebSearch {
 		body.WebSearchOptions = map[string]string{"search_context_size": configSearchContextSize(cfg.AI.SearchContextSize)}
@@ -1049,7 +1076,7 @@ func parseConfigTestAIResponse(data []byte, useResponses bool) (string, int, err
 		return "", 0, err
 	}
 	if strings.TrimSpace(text) == "" {
-		return "", 0, errors.New("AI test response has no content")
+		return "", tokens, errConfigTestAINoContent
 	}
 	return text, tokens, nil
 }

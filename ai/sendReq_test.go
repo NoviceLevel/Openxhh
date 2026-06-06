@@ -210,6 +210,45 @@ func TestSendReqEmptyModelReturnsWithoutFatal(t *testing.T) {
 	}
 }
 
+func TestSendReqChatCompletionsRetriesStreamWhenEmpty(t *testing.T) {
+	restoreAIConfig(t)
+	oldLogger := loger.Loger
+	loger.Loger = zap.NewNop()
+	t.Cleanup(func() { loger.Loger = oldLogger })
+	config.ConfigStruct.Ai.WebSearch = testBoolPtr(false)
+
+	attempts := 0
+	var streams []bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		attempts++
+		var body struct {
+			Stream bool `json:"stream"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		streams = append(streams, body.Stream)
+		w.Header().Set("Content-Type", "text/event-stream")
+		if !body.Stream {
+			_, _ = w.Write([]byte("data: {\"choices\":[],\"usage\":{\"total_tokens\":12}}\n\ndata: [DONE]\n\n"))
+			return
+		}
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"stream ok\"}}],\"usage\":{\"total_tokens\":13}}\n\ndata: [DONE]\n\n"))
+	}))
+	defer server.Close()
+
+	config.ConfigStruct.Ai.BaseUrl = server.URL + "/v1/chat/completions"
+	resp := SendReq("test-model", []any{Messages[string]{Role: "user", Content: "hello"}})
+	if len(resp.Choices) != 1 || resp.Choices[0].Msg.Content != "stream ok" {
+		t.Fatalf("response = %+v", resp)
+	}
+	if attempts != 2 || len(streams) != 2 || streams[0] || !streams[1] {
+		t.Fatalf("attempts=%d streams=%v, want [false true]", attempts, streams)
+	}
+}
+
 func TestSendChatCompletionResponsesFallsBackToCompatPayload(t *testing.T) {
 	restoreAIConfig(t)
 
@@ -259,6 +298,44 @@ func TestSendChatCompletionResponsesFallsBackToCompatPayload(t *testing.T) {
 	}
 	if len(input) != 2 || input[0].Role != "developer" || input[1].Role != "user" {
 		t.Fatalf("compat input = %+v", input)
+	}
+}
+
+func TestSendChatCompletionRetriesStreamWhenEmpty(t *testing.T) {
+	restoreAIConfig(t)
+
+	attempts := 0
+	var streams []bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		attempts++
+		var body struct {
+			Stream bool `json:"stream"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		streams = append(streams, body.Stream)
+		w.Header().Set("Content-Type", "text/event-stream")
+		if !body.Stream {
+			_, _ = w.Write([]byte("data: {\"choices\":[],\"usage\":{\"total_tokens\":12}}\n\ndata: [DONE]\n\n"))
+			return
+		}
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"stream ok\"}}],\"usage\":{\"total_tokens\":13}}\n\ndata: [DONE]\n\n"))
+	}))
+	defer server.Close()
+
+	config.ConfigStruct.Ai.BaseUrl = server.URL + "/v1/chat/completions"
+	got, err := sendChatCompletion(context.Background(), "route-model", []chatCompletionMessage{{Role: "user", Content: "hello"}})
+	if err != nil {
+		t.Fatalf("sendChatCompletion returned error: %v", err)
+	}
+	if got != "stream ok" {
+		t.Fatalf("response text = %q, want stream ok", got)
+	}
+	if attempts != 2 || len(streams) != 2 || streams[0] || !streams[1] {
+		t.Fatalf("attempts=%d streams=%v, want [false true]", attempts, streams)
 	}
 }
 

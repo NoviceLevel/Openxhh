@@ -120,6 +120,7 @@ func SendReq(Model string, Msg []any) (Jresp respStruct) {
 		loger.Loger.Error("[AI]无法序列化JSON", zap.Error(err))
 		return
 	}
+	chatStreamRetried := false
 	for i := 0; i < len(payloads); i++ {
 		payload := payloads[i]
 		req, err := http.NewRequest("POST", cfg.BaseUrl, bytes.NewReader(payload.Body))
@@ -170,6 +171,16 @@ func SendReq(Model string, Msg []any) (Jresp respStruct) {
 			return
 		}
 		if len(Jresp.Choices) == 0 {
+			if !useResponsesAPI(cfg.BaseUrl) && !chatStreamRetried {
+				streamBody, streamErr := buildChatCompletionsReqBody(Model, Msg, true)
+				if streamErr == nil {
+					chatStreamRetried = true
+					payloads = append(payloads[:i+1], append([]aiRequestPayload{{Name: "chat_completions_stream", Body: streamBody}}, payloads[i+1:]...)...)
+					loger.Loger.Warn("[Ai]Chat Completions 返回空内容，尝试 stream=true 兼容格式", zap.String("variant", payload.Name), zap.Any("Resp", string(Dresp)))
+					continue
+				}
+				loger.Loger.Error("[AI]无法序列化 stream=true 请求", zap.Error(streamErr))
+			}
 			loger.Loger.Error("[Ai]Ai返回错误", zap.String("variant", payload.Name), zap.Any("Resp", string(Dresp)))
 			return
 		}
@@ -213,6 +224,18 @@ func buildReqPayloads(Model string, Msg []any) ([]aiRequestPayload, error) {
 		return nil, err
 	}
 	return []aiRequestPayload{{Name: "chat_completions", Body: data}}, nil
+}
+
+func buildChatCompletionsReqBody(Model string, Msg []any, stream bool) ([]byte, error) {
+	body := BodyStruct{
+		Model:  Model,
+		Msgs:   Msg,
+		Stream: stream,
+	}
+	if aiWebSearchEnabled() {
+		body.WebSearchOptions = &webSearchOptions{SearchContextSize: aiSearchContextSize()}
+	}
+	return json.Marshal(body)
 }
 
 func buildResponsesReqBody(Model string, Msg []any, legacy bool) ([]byte, error) {
