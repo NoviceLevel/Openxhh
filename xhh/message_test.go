@@ -79,6 +79,7 @@ func TestMsgUnmarshalNotificationReplyFields(t *testing.T) {
 		"comment_id": 867937627,
 		"root_comment_id": 867937000,
 		"reply_id": "555",
+		"userid_b": "999",
 		"linkid": 181099114,
 		"text": "楼里继续问一下"
 	}`)
@@ -87,8 +88,8 @@ func TestMsgUnmarshalNotificationReplyFields(t *testing.T) {
 	if err := json.Unmarshal(data, &msg); err != nil {
 		t.Fatalf("Unmarshal returned error: %v", err)
 	}
-	if msg.CommentID != 867937627 || msg.ReplyCommentID != 555 {
-		t.Fatalf("comment ids = (%d,%d), want (867937627,555)", msg.CommentID, msg.ReplyCommentID)
+	if msg.CommentID != 867937627 || msg.ReplyCommentID != 555 || msg.ReplyUserID != 999 {
+		t.Fatalf("comment/reply ids = (%d,%d,%d), want (867937627,555,999)", msg.CommentID, msg.ReplyCommentID, msg.ReplyUserID)
 	}
 	if msg.CommentText != "楼里继续问一下" || msg.UserName != "路人" {
 		t.Fatalf("text/user = %q/%q", msg.CommentText, msg.UserName)
@@ -125,6 +126,37 @@ func TestReplyToBotNotificationQueuesReply(t *testing.T) {
 	}
 	if count != 1 || text != "不是 @，但回复了机器人" || reply || rootID != 867937000 {
 		t.Fatalf("queued row = (%d,%q,%v,%d), want (1,不是 @，但回复了机器人,false,867937000)", count, text, reply, rootID)
+	}
+}
+
+func TestReplyToCurrentAccountNotificationQueuesReplyWithoutOutboundRecord(t *testing.T) {
+	setupXHHMessageQueueTest(t)
+	msg := Msg{
+		MsgID:          1005,
+		CommentID:      867937629,
+		RootCommentID:  867937000,
+		ReplyCommentID: 555,
+		ReplyUserID:    999,
+		LinkID:         181099114,
+		UserID:         89055874,
+		UserName:       "路人",
+		CommentText:    "别人帖子里回复了当前账号",
+	}
+
+	if notificationSource(msg) != "reply_to_bot" {
+		t.Fatalf("notificationSource = %q, want reply_to_bot", notificationSource(msg))
+	}
+	queueReplyToBotNotification(msg)
+
+	var count int
+	var text string
+	var reply bool
+	var rootID int
+	if err := sqlite.Db.QueryRow("SELECT COUNT(*), COALESCE(MAX(comment_text), ''), COALESCE(MAX(reply), false), COALESCE(MAX(comment_root_id), 0) FROM at WHERE msg_id=?", 1005).Scan(&count, &text, &reply, &rootID); err != nil {
+		t.Fatalf("query at: %v", err)
+	}
+	if count != 1 || text != "别人帖子里回复了当前账号" || reply || rootID != 867937000 {
+		t.Fatalf("queued row = (%d,%q,%v,%d), want (1,别人帖子里回复了当前账号,false,867937000)", count, text, reply, rootID)
 	}
 }
 

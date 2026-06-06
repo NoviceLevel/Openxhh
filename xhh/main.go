@@ -103,6 +103,7 @@ type Msg struct {
 	MsgID          int
 	RootCommentID  int
 	ReplyCommentID int
+	ReplyUserID    int
 	LinkID         int
 	UserID         int
 	MessageType    int
@@ -130,10 +131,17 @@ func (m *Msg) UnmarshalJSON(data []byte) error {
 		CommentIDB           json.RawMessage `json:"comment_id_b"`
 		ParentID             json.RawMessage `json:"parent_comment_id"`
 		ReplyCommentID       json.RawMessage `json:"reply_comment_id"`
+		ReplyUserID          json.RawMessage `json:"userid_b"`
+		ReplyUserIDCompat    json.RawMessage `json:"user_id_b"`
+		ReplyUserIDAlt       json.RawMessage `json:"reply_userid"`
+		ReplyUserIDAlt2      json.RawMessage `json:"reply_user_id"`
+		ToUserID             json.RawMessage `json:"to_user_id"`
+		TargetUserID         json.RawMessage `json:"target_user_id"`
 		LinkID               int             `json:"linkid"`
 		LinkIDCompat         int             `json:"link_id"`
 		UserID               json.RawMessage `json:"userid_a"`
 		UserIDCompat         json.RawMessage `json:"userid"`
+		UserNameCompat       string          `json:"user_a_name"`
 		MessageType          int             `json:"message_type"`
 		CreatedAt            json.RawMessage `json:"created_at"`
 		CreateAt             json.RawMessage `json:"create_at"`
@@ -145,6 +153,24 @@ func (m *Msg) UnmarshalJSON(data []byte) error {
 			UserID   json.RawMessage `json:"userid"`
 			UserName string          `json:"username"`
 		} `json:"user_a"`
+		UserB struct {
+			UserID       json.RawMessage `json:"userid"`
+			UserIDCompat json.RawMessage `json:"user_id"`
+		} `json:"user_b"`
+		ReplyUser struct {
+			UserID       json.RawMessage `json:"userid"`
+			UserIDCompat json.RawMessage `json:"user_id"`
+		} `json:"reply_user"`
+		ToUser struct {
+			UserID       json.RawMessage `json:"userid"`
+			UserIDCompat json.RawMessage `json:"user_id"`
+		} `json:"to_user"`
+		CommentB struct {
+			CommentID       json.RawMessage `json:"comment_id"`
+			CommentIDCompat json.RawMessage `json:"commentid"`
+			UserID          json.RawMessage `json:"userid"`
+			UserIDCompat    json.RawMessage `json:"user_id"`
+		} `json:"comment_b"`
 		Link struct {
 			LinkID int    `json:"linkid"`
 			Text   string `json:"description"`
@@ -176,7 +202,8 @@ func (m *Msg) UnmarshalJSON(data []byte) error {
 	if m.RootCommentID == 0 {
 		m.RootCommentID = aux.RootIDCompat
 	}
-	m.ReplyCommentID = firstJSONInt(aux.ReplyID, aux.ReplyIDCompat, aux.ReplyCommentIDCompat, aux.CommentBID, aux.CommentIDB, aux.ParentID, aux.ReplyCommentID)
+	m.ReplyCommentID = firstJSONInt(aux.ReplyID, aux.ReplyIDCompat, aux.ReplyCommentIDCompat, aux.CommentBID, aux.CommentIDB, aux.ParentID, aux.ReplyCommentID, aux.CommentB.CommentID, aux.CommentB.CommentIDCompat)
+	m.ReplyUserID = firstJSONInt(aux.ReplyUserID, aux.ReplyUserIDCompat, aux.ReplyUserIDAlt, aux.ReplyUserIDAlt2, aux.ToUserID, aux.TargetUserID, aux.UserB.UserID, aux.UserB.UserIDCompat, aux.ReplyUser.UserID, aux.ReplyUser.UserIDCompat, aux.ToUser.UserID, aux.ToUser.UserIDCompat, aux.CommentB.UserID, aux.CommentB.UserIDCompat)
 	m.LinkID = aux.LinkID
 	if m.LinkID == 0 {
 		m.LinkID = aux.LinkIDCompat
@@ -190,6 +217,9 @@ func (m *Msg) UnmarshalJSON(data []byte) error {
 	}
 	m.MessageType = aux.MessageType
 	m.UserName = aux.User.UserName
+	if m.UserName == "" {
+		m.UserName = aux.UserNameCompat
+	}
 	m.CreatedAt = firstJSONInt64(aux.CreatedAt, aux.CreateAt, aux.Time, aux.Timestamp, aux.Dateline, aux.MessageTime)
 	m.IsPost = aux.MessageType == messageTypeAtPost
 	if m.IsPost {
@@ -410,6 +440,8 @@ func syncNotificationsOnce() {
 			}
 			if db.SaveInboundMessage(inbound) {
 				saved++
+			}
+			if isReplyToBotComment(v) {
 				queueReplyToBotNotification(v)
 			}
 		}
@@ -449,7 +481,7 @@ func queueReplyToBotNotification(v Msg) {
 	if shouldQueueMessage(v) {
 		db.InsertWithUserName(v.MsgID, v.CommentID, v.RootCommentID, v.LinkID, v.UserID, v.UserName, v.CommentText, false)
 		if loger.Loger != nil {
-			loger.Loger.Info("[通知同步]已加入回复我的评论队列", zap.Int("msg_id", v.MsgID), zap.Int("comment_id", v.CommentID), zap.Int("reply_comment_id", v.ReplyCommentID), zap.Int("link_id", v.LinkID), zap.Int("user_id", v.UserID), zap.String("user_name", v.UserName))
+			loger.Loger.Info("[通知同步]已加入回复我的评论队列", zap.Int("msg_id", v.MsgID), zap.Int("comment_id", v.CommentID), zap.Int("reply_comment_id", v.ReplyCommentID), zap.Int("reply_user_id", v.ReplyUserID), zap.Int("link_id", v.LinkID), zap.Int("user_id", v.UserID), zap.String("user_name", v.UserName))
 		}
 	}
 }
@@ -465,7 +497,19 @@ func replyToBotTargetCommentID(v Msg) int {
 	if v.RootCommentID > 0 && db.OutboundCommentExists(int64(v.RootCommentID)) {
 		return v.RootCommentID
 	}
+	if isReplyToCurrentAccount(v) {
+		if v.ReplyCommentID > 0 {
+			return v.ReplyCommentID
+		}
+		if v.RootCommentID > 0 {
+			return v.RootCommentID
+		}
+	}
 	return 0
+}
+
+func isReplyToCurrentAccount(v Msg) bool {
+	return Info.HeyBoxId != "" && v.ReplyUserID > 0 && strconv.Itoa(v.ReplyUserID) == Info.HeyBoxId
 }
 
 func replyToBotRootCommentID(targetCommentID int) int {
