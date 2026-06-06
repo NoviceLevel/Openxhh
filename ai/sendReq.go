@@ -109,7 +109,10 @@ type responsesRespStruct struct {
 
 func SendReq(Model string, Msg []any) (Jresp respStruct) {
 	if Model == "" {
-		loger.Loger.Fatal("[Ai]请确保配置文件中的模型是存在的")
+		if loger.Loger != nil {
+			loger.Loger.Error("[Ai]请确保配置文件中的模型是存在的")
+		}
+		return
 	}
 	cfg := config.ConfigStruct.Ai
 	payloads, err := buildReqPayloads(Model, Msg)

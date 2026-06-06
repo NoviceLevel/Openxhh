@@ -199,6 +199,17 @@ func TestSendReqResponsesFallsBackToCompatPayload(t *testing.T) {
 	}
 }
 
+func TestSendReqEmptyModelReturnsWithoutFatal(t *testing.T) {
+	oldLogger := loger.Loger
+	loger.Loger = zap.NewNop()
+	t.Cleanup(func() { loger.Loger = oldLogger })
+
+	resp := SendReq("", []any{Messages[string]{Role: "user", Content: "hello"}})
+	if len(resp.Choices) != 0 {
+		t.Fatalf("SendReq empty model returned choices: %+v", resp.Choices)
+	}
+}
+
 func TestSendChatCompletionResponsesFallsBackToCompatPayload(t *testing.T) {
 	restoreAIConfig(t)
 

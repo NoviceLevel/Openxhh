@@ -62,6 +62,26 @@ func TestSanitizeFeedReply(t *testing.T) {
 }
 
 func TestFeedReplyQualityIssue(t *testing.T) {
+	oldConfig := config.ConfigStruct
+	t.Cleanup(func() {
+		config.ConfigStruct = oldConfig
+	})
+	config.ConfigStruct.Ai.ChatName = "惠惠"
+	config.ConfigStruct.Ai.Description = "红魔族 大魔法使 爆裂魔法 本大人"
+	config.ConfigStruct.Ai.Personality = ""
+	config.ConfigStruct.Ai.Scenario = ""
+	config.ConfigStruct.Ai.FirstMessage = ""
+	config.ConfigStruct.Ai.ExampleDialogs = ""
+	config.ConfigStruct.Ai.PostHistoryInstructions = ""
+	config.ConfigStruct.Ai.Prompt = ""
+	config.ConfigStruct.FeedReply.Description = ""
+	config.ConfigStruct.FeedReply.Personality = ""
+	config.ConfigStruct.FeedReply.Scenario = ""
+	config.ConfigStruct.FeedReply.FirstMessage = ""
+	config.ConfigStruct.FeedReply.ExampleDialogs = ""
+	config.ConfigStruct.FeedReply.PostHistoryInstructions = ""
+	config.ConfigStruct.FeedReply.Prompt = ""
+
 	tests := []struct {
 		name  string
 		reply string
@@ -69,7 +89,7 @@ func TestFeedReplyQualityIssue(t *testing.T) {
 		want  string
 	}{
 		{name: "valid role reply", reply: "这价格有点像把金币丢进无效咏唱里，本大人看了都摇头。", want: ""},
-		{name: "generic fantasy reply", reply: "这价格看着还行，火力也不错，可以考虑。", want: "缺少惠惠身份锚点"},
+		{name: "generic fantasy reply", reply: "这价格看着还行，火力也不错，可以考虑。", want: "缺少当前人设锚点"},
 		{name: "customer tone", reply: "建议你先看看预算和需求。", want: "客服腔或暴露 AI 身份"},
 		{name: "repeat title", title: "求评价，不玻璃心。", reply: "求评价，不玻璃心。这个配置还可以。", want: "复述标题"},
 		{name: "skip allowed", reply: "SKIP", want: ""},
@@ -78,6 +98,61 @@ func TestFeedReplyQualityIssue(t *testing.T) {
 		if got := feedReplyQualityIssue(tt.reply, tt.title); got != tt.want {
 			t.Fatalf("%s: feedReplyQualityIssue = %q, want %q", tt.name, got, tt.want)
 		}
+	}
+}
+
+func TestFeedReplyQualityIssueUsesConfiguredPersonaAnchors(t *testing.T) {
+	oldConfig := config.ConfigStruct
+	t.Cleanup(func() {
+		config.ConfigStruct = oldConfig
+	})
+	config.ConfigStruct.Ai.ChatName = "悠悠"
+	config.ConfigStruct.Ai.Description = "悠悠是红魔族法师，孤独、害羞，很想交朋友。"
+	config.ConfigStruct.Ai.Personality = ""
+	config.ConfigStruct.Ai.Scenario = ""
+	config.ConfigStruct.Ai.FirstMessage = ""
+	config.ConfigStruct.Ai.ExampleDialogs = ""
+	config.ConfigStruct.Ai.PostHistoryInstructions = ""
+	config.ConfigStruct.Ai.Prompt = ""
+	config.ConfigStruct.FeedReply.Description = ""
+	config.ConfigStruct.FeedReply.Personality = ""
+	config.ConfigStruct.FeedReply.Scenario = ""
+	config.ConfigStruct.FeedReply.FirstMessage = ""
+	config.ConfigStruct.FeedReply.ExampleDialogs = ""
+	config.ConfigStruct.FeedReply.PostHistoryInstructions = ""
+	config.ConfigStruct.FeedReply.Prompt = ""
+
+	if got := feedReplyQualityIssue("悠悠觉得这个配置还可以，只是别太冲动。", ""); got != "" {
+		t.Fatalf("feedReplyQualityIssue with configured anchor = %q, want empty", got)
+	}
+	if got := feedReplyQualityIssue("爆裂一击就够了，本大人看了都摇头。", ""); got != "缺少当前人设锚点" {
+		t.Fatalf("feedReplyQualityIssue should not accept hardcoded Megumin anchors = %q", got)
+	}
+}
+
+func TestFeedReplyQualityIssueSkipsAnchorCheckWithoutPersona(t *testing.T) {
+	oldConfig := config.ConfigStruct
+	t.Cleanup(func() {
+		config.ConfigStruct = oldConfig
+	})
+	config.ConfigStruct.Ai.ChatName = ""
+	config.ConfigStruct.Ai.Description = ""
+	config.ConfigStruct.Ai.Personality = ""
+	config.ConfigStruct.Ai.Scenario = ""
+	config.ConfigStruct.Ai.FirstMessage = ""
+	config.ConfigStruct.Ai.ExampleDialogs = ""
+	config.ConfigStruct.Ai.PostHistoryInstructions = ""
+	config.ConfigStruct.Ai.Prompt = ""
+	config.ConfigStruct.FeedReply.Description = ""
+	config.ConfigStruct.FeedReply.Personality = ""
+	config.ConfigStruct.FeedReply.Scenario = ""
+	config.ConfigStruct.FeedReply.FirstMessage = ""
+	config.ConfigStruct.FeedReply.ExampleDialogs = ""
+	config.ConfigStruct.FeedReply.PostHistoryInstructions = ""
+	config.ConfigStruct.FeedReply.Prompt = ""
+
+	if got := feedReplyQualityIssue("这价格看着还行，火力也不错，可以考虑。", ""); got != "" {
+		t.Fatalf("feedReplyQualityIssue without persona = %q, want empty", got)
 	}
 }
 

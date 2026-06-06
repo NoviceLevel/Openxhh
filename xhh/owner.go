@@ -17,13 +17,13 @@ func Check(UID int) bool {
 	}
 	if strings.TrimSpace(cfg.Owner) == "" {
 		if loger.Loger != nil {
-			loger.Loger.Fatal("您已启用白名单，但未在配置中设置 xhh.owner")
+			loger.Loger.Error("您已启用白名单，但未在配置中设置 xhh.owner")
 		}
 		return false
 	}
 	if len(ownerIDs()) == 0 {
 		if loger.Loger != nil {
-			loger.Loger.Fatal("您已启用白名单，但 xhh.owner 中没有有效 UID")
+			loger.Loger.Error("您已启用白名单，但 xhh.owner 中没有有效 UID")
 		}
 		return false
 	}
@@ -40,12 +40,9 @@ func IsOwner(UID int) bool {
 }
 
 func ownerIDs() []int {
-	if ownerIDsLoaded {
-		return Owners
-	}
 	ownerIDsLoaded = true
-	OwnArr := strings.Split(config.ConfigStruct.Xhh.Owner, ",")
-	for _, v := range OwnArr {
+	Owners = nil
+	for _, v := range strings.Split(config.ConfigStruct.Xhh.Owner, ",") {
 		v = strings.TrimSpace(v)
 		if v == "" {
 			continue

@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"go.uber.org/zap"
 )
@@ -149,7 +150,7 @@ func processFeedLink(link feedLink) db.FeedReplyRecord {
 	reply = sanitizeFeedReply(reply)
 	if issue := feedReplyQualityIssue(reply, link.Title); issue != "" && !shouldSkipFeedReply(reply) {
 		loger.Loger.Warn("[FeedReply]回复质量检查未通过，重试一次", zap.Int("link_id", link.LinkID), zap.String("title", link.Title), zap.String("issue", issue), zap.String("reply", reply))
-		retryInstruction := instruction + "\n\n上一次回复质量不合格，原因：" + issue + "。请重新生成。要求：必须像惠惠本人在小黑盒短评帖子；先回应帖子内容；至少体现一个惠惠身份锚点（本大人、红魔族、爆裂美学、魔力见底、法杖、咏唱、一击）；不要复述标题；不要客服腔；默认1-2句。"
+		retryInstruction := feedReplyRetryInstruction(instruction, issue)
 		reply = sanitizeFeedReply(ai.GetAiFeedReplyWithPrompt(ai.FeedReplyPromptFromConfig(config.ConfigStruct.FeedReply.Prompt), contents, retryInstruction, topics, tags, zap.Bool("feed_reply", true), zap.Bool("retry", true), zap.Int("link_id", link.LinkID), zap.Int64("author_id", authorID), zap.String("author_name", link.User.UserName), zap.String("feed_title", link.Title), zap.String("question", retryInstruction)))
 	}
 	if reply == "" {
@@ -234,8 +235,9 @@ func feedReplyQualityIssue(reply string, title string) string {
 	if repeatsFeedTitle(reply, title) {
 		return "复述标题"
 	}
-	if !containsAny(reply, []string{"本大人", "红魔族", "爆裂", "爆破", "魔力", "法杖", "咏唱", "一击", "惠惠"}) {
-		return "缺少惠惠身份锚点"
+	anchors := feedReplyPersonaAnchors()
+	if len(anchors) > 0 && !containsAnyFold(reply, anchors) {
+		return "缺少当前人设锚点"
 	}
 	return ""
 }
@@ -247,6 +249,137 @@ func containsAny(text string, needles []string) bool {
 		}
 	}
 	return false
+}
+
+func containsAnyFold(text string, needles []string) bool {
+	lowerText := strings.ToLower(text)
+	for _, needle := range needles {
+		needle = strings.TrimSpace(needle)
+		if needle == "" {
+			continue
+		}
+		if strings.Contains(lowerText, strings.ToLower(needle)) {
+			return true
+		}
+	}
+	return false
+}
+
+func feedReplyRetryInstruction(instruction, issue string) string {
+	var builder strings.Builder
+	builder.WriteString(instruction)
+	builder.WriteString("\n\n上一次回复质量不合格，原因：")
+	builder.WriteString(issue)
+	builder.WriteString("。请重新生成。要求：必须像当前配置的人设本人在小黑盒短评帖子；先回应帖子内容；体现当前人设的身份感和说话习惯")
+	if anchors := feedReplyPersonaAnchors(); len(anchors) > 0 {
+		builder.WriteString("，可自然使用这些人设锚点：")
+		builder.WriteString(strings.Join(limitStringSlice(anchors, 8), "、"))
+	}
+	builder.WriteString("；不要复述标题；不要客服腔；默认1-2句。")
+	return builder.String()
+}
+
+func feedReplyPersonaAnchors() []string {
+	parts := []string{
+		config.ConfigStruct.Ai.ChatName,
+		firstNonEmptyFeedPersona(config.ConfigStruct.FeedReply.Description, config.ConfigStruct.Ai.Description),
+		firstNonEmptyFeedPersona(config.ConfigStruct.FeedReply.Personality, config.ConfigStruct.Ai.Personality),
+		firstNonEmptyFeedPersona(config.ConfigStruct.FeedReply.Scenario, config.ConfigStruct.Ai.Scenario),
+		firstNonEmptyFeedPersona(config.ConfigStruct.FeedReply.FirstMessage, config.ConfigStruct.Ai.FirstMessage),
+		firstNonEmptyFeedPersona(config.ConfigStruct.FeedReply.ExampleDialogs, config.ConfigStruct.Ai.ExampleDialogs),
+		firstNonEmptyFeedPersona(config.ConfigStruct.FeedReply.PostHistoryInstructions, config.ConfigStruct.Ai.PostHistoryInstructions),
+		firstNonEmptyFeedPersona(config.ConfigStruct.FeedReply.Prompt, config.ConfigStruct.Ai.Prompt),
+	}
+	seen := make(map[string]bool)
+	anchors := make([]string, 0, 16)
+	for _, part := range parts {
+		for _, token := range personaAnchorTokens(part) {
+			key := strings.ToLower(token)
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			anchors = append(anchors, token)
+			if len(anchors) >= 24 {
+				return anchors
+			}
+		}
+	}
+	return anchors
+}
+
+func firstNonEmptyFeedPersona(primary, fallback string) string {
+	primary = strings.TrimSpace(primary)
+	if primary != "" {
+		return primary
+	}
+	return strings.TrimSpace(fallback)
+}
+
+func personaAnchorTokens(text string) []string {
+	text = strings.ReplaceAll(text, "{{char}}", config.ConfigStruct.Ai.ChatName)
+	raw := strings.FieldsFunc(text, func(r rune) bool {
+		if unicode.IsSpace(r) || unicode.IsPunct(r) || unicode.IsSymbol(r) {
+			return true
+		}
+		switch r {
+		case '、', '，', '。', '；', '：', '！', '？', '（', '）', '【', '】', '《', '》', '“', '”', '‘', '’', '「', '」', '『', '』':
+			return true
+		default:
+			return false
+		}
+	})
+	var tokens []string
+	for _, token := range raw {
+		token = strings.TrimSpace(strings.Trim(token, "`\"'“”‘’<>《》【】[]()（）"))
+		if validPersonaAnchor(token) {
+			tokens = append(tokens, token)
+		}
+	}
+	return tokens
+}
+
+func validPersonaAnchor(token string) bool {
+	runes := []rune(token)
+	if len(runes) < 2 || len(runes) > 8 {
+		return false
+	}
+	lower := strings.ToLower(token)
+	if feedReplyAnchorStopWords[lower] {
+		return false
+	}
+	hasLetter := false
+	hasDigit := false
+	for _, r := range runes {
+		if unicode.IsLetter(r) {
+			hasLetter = true
+		}
+		if unicode.IsDigit(r) {
+			hasDigit = true
+		}
+	}
+	return hasLetter && !hasDigit
+}
+
+func limitStringSlice(values []string, max int) []string {
+	if max <= 0 || len(values) <= max {
+		return values
+	}
+	return values[:max]
+}
+
+var feedReplyAnchorStopWords = map[string]bool{
+	"ai": true, "api": true, "bot": true, "chatgpt": true, "gpt": true, "skip": true,
+	"user": true, "assistant": true, "prompt": true, "reply": true, "comment": true,
+	"小黑盒": true, "帖子": true, "标题": true, "正文": true, "内容": true,
+	"用户": true, "评论": true, "回复": true, "短评": true, "首页": true,
+	"配置": true, "当前": true, "人设": true, "角色": true, "身份": true,
+	"必须": true, "不要": true, "不得": true, "只能": true, "只输出": true,
+	"最终": true, "文本": true, "上下文": true, "场景": true, "规则": true,
+	"示例": true, "对话": true, "第一条消息": true, "后置指令": true,
+	"聊天名称": true, "描述": true, "个性": true, "性格": true, "说话方式": true,
+	"语气": true, "要求": true, "禁止": true, "注意": true, "如果": true,
+	"不适合": true, "生成": true, "自然": true, "中文": true, "短句": true,
 }
 
 func repeatsFeedTitle(reply string, title string) bool {

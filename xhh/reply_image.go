@@ -17,40 +17,46 @@ const (
 	replyImageContextMaxChars = 1200
 	replyImagePersonaMaxChars = 1200
 	replyImageTextMaxChars    = 500
+	replyImageRequestTimeout  = 30 * time.Second
 )
+
+var generateReplyImage = ai.GenerateImage
+var resolveReplyImage = resolveXHHImageURL
+var sendReplyImage = ReplyImage
+var sendReplyText = Reply
 
 func replyWithOptionalImage(v db.CommStruct, replyText, questionText string, contents []ai.Content) bool {
 	linkID := strconv.Itoa(v.LinkID)
 	replyID := strconv.Itoa(v.CommentID)
 	rootID := strconv.Itoa(v.RootID)
 	if !config.ConfigStruct.Image.ReplyWithImage {
-		return Reply(replyText, linkID, replyID, rootID, "")
+		return sendReplyText(replyText, linkID, replyID, rootID, "")
 	}
 	if !ai.HasImageConfig() {
 		loger.Loger.Warn("[XHH]普通回复配图已启用，但图片模型配置不完整，回退纯文字", zap.Int("comment_id", v.CommentID), zap.Int("link_id", v.LinkID))
-		return Reply(replyText, linkID, replyID, rootID, "")
+		return sendReplyText(replyText, linkID, replyID, rootID, "")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), replyImageRequestTimeout)
 	defer cancel()
 
 	prompt := BuildReplyImagePrompt(contents, questionText, replyText)
-	imageResult, err := ai.GenerateImage(ctx, prompt)
+	imageResult, err := generateReplyImage(ctx, prompt)
 	if err != nil {
 		loger.Loger.Warn("[XHH]普通回复配图生成失败，回退纯文字", zap.Error(err), zap.Int("comment_id", v.CommentID), zap.Int("link_id", v.LinkID))
-		return Reply(replyText, linkID, replyID, rootID, "")
+		return sendReplyText(replyText, linkID, replyID, rootID, "")
 	}
-	imageURL, uploadPlan, err := resolveXHHImageURL(ctx, imageResult, false)
+	imageURL, uploadPlan, err := resolveReplyImage(ctx, imageResult, false)
 	if err != nil {
 		loger.Loger.Warn("[XHH]普通回复配图上传失败，回退纯文字", zap.Error(err), zap.Int("comment_id", v.CommentID), zap.Int("link_id", v.LinkID))
-		return Reply(replyText, linkID, replyID, rootID, "")
+		return sendReplyText(replyText, linkID, replyID, rootID, "")
 	}
 	loger.Loger.Info("[XHH]普通回复图片 URL 准备完成", zap.Int("comment_id", v.CommentID), zap.Int("link_id", v.LinkID), zap.String("image_url", imageURL), zap.String("upload_key", uploadPlan.Key), zap.Bool("uploaded", uploadPlan.Uploaded))
-	if ReplyImage(replyText, linkID, replyID, rootID, imageURL) {
+	if sendReplyImage(replyText, linkID, replyID, rootID, imageURL) {
 		return true
 	}
-	loger.Loger.Warn("[XHH]普通回复带图发送失败，回退纯文字", zap.Int("comment_id", v.CommentID), zap.Int("link_id", v.LinkID))
-	return Reply(replyText, linkID, replyID, rootID, "")
+	loger.Loger.Warn("[XHH]普通回复带图发送失败，不再立即回退纯文字，避免重复发送", zap.Int("comment_id", v.CommentID), zap.Int("link_id", v.LinkID))
+	return false
 }
 
 func BuildReplyImagePrompt(contents []ai.Content, questionText, replyText string) string {

@@ -76,7 +76,8 @@ func createComment(source, text, link_id, reply_id, root_id, iscy, imageURL stri
 		if status == "failed" {
 			CommentID, err := strconv.Atoi(reply_id)
 			if err != nil {
-				loger.Loger.Fatal("[XHH]不可能发生的事", zap.String("info", readableXHHResponseBody(string(data))), zap.Any("errs", reply_id))
+				loger.Loger.Error("[XHH]评论发送失败且 reply_id 无法解析", zap.String("info", readableXHHResponseBody(string(data))), zap.String("reply_id", reply_id))
+				return false
 			}
 			db.Replyed(CommentID)
 			loger.Loger.Warn("[XHH]异常发送：AI回复已生成但评论发送失败，已标记完成避免重复发送", zap.String("Resp", readableXHHResponseBody(string(data))), zap.String("msg", msg), zap.String("link_id", link_id), zap.String("reply_id", reply_id), zap.String("root_id", root_id))

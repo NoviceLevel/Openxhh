@@ -4,19 +4,24 @@ import (
 	"database/sql"
 	"openxhh/config"
 	"openxhh/db"
+	"openxhh/loger"
 	"openxhh/sqlite"
 	"testing"
+
+	"go.uber.org/zap"
 )
 
 func resetReplySchedulerState(t *testing.T) {
 	t.Helper()
 	oldOwner := config.ConfigStruct.Xhh.Owner
+	oldEnableWhitelist := config.ConfigStruct.Xhh.EnableWhitelist
 	oldOwners := append([]int(nil), Owners...)
 	oldOwnerIDsLoaded := ownerIDsLoaded
 	oldMaxReplyThreads := MaxReplyThreads
 	oldMaxPendingReplies := MaxPendingReplies
 	t.Cleanup(func() {
 		config.ConfigStruct.Xhh.Owner = oldOwner
+		config.ConfigStruct.Xhh.EnableWhitelist = oldEnableWhitelist
 		Owners = oldOwners
 		ownerIDsLoaded = oldOwnerIDsLoaded
 		MaxReplyThreads = oldMaxReplyThreads
@@ -231,7 +236,7 @@ func TestNextNormalReplyBatchSkipsInFlightNormalReplies(t *testing.T) {
 	}
 }
 
-func TestOwnerIDsCachesEmptyResult(t *testing.T) {
+func TestOwnerIDsReparseAfterConfigChange(t *testing.T) {
 	resetReplySchedulerState(t)
 	config.ConfigStruct.Xhh.Owner = "bad"
 	Owners = nil
@@ -241,7 +246,25 @@ func TestOwnerIDsCachesEmptyResult(t *testing.T) {
 		t.Fatalf("ownerIDs = %v, want empty", got)
 	}
 	config.ConfigStruct.Xhh.Owner = "100"
-	if got := ownerIDs(); len(got) != 0 {
-		t.Fatalf("ownerIDs after cached invalid config = %v, want empty", got)
+	if got := ownerIDs(); len(got) != 1 || got[0] != 100 {
+		t.Fatalf("ownerIDs after config change = %v, want [100]", got)
+	}
+}
+
+func TestCheckWhitelistInvalidOwnerReturnsFalse(t *testing.T) {
+	resetReplySchedulerState(t)
+	oldLogger := loger.Loger
+	loger.Loger = zap.NewNop()
+	t.Cleanup(func() {
+		loger.Loger = oldLogger
+	})
+
+	config.ConfigStruct.Xhh.EnableWhitelist = true
+	config.ConfigStruct.Xhh.Owner = "bad"
+	Owners = nil
+	ownerIDsLoaded = false
+
+	if Check(100) {
+		t.Fatal("Check returned true for invalid owner config, want false")
 	}
 }
