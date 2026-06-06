@@ -23,13 +23,13 @@ func TestBuildReplySystemPromptDoesNotInjectDefaultCharacter(t *testing.T) {
 }
 
 func TestBuildTavernPromptSkipsEmptySections(t *testing.T) {
-	got := buildTavernPrompt("角色", "", "示例", "场景", "")
-	for _, want := range []string{"【角色卡】\n角色", "【示例对话】\n示例", "【场景规则】\n场景"} {
+	got := buildTavernPrompt("惠惠", "描述", "个性", "", "第一条", "示例", "场景规则", "")
+	for _, want := range []string{"【聊天名称】\n惠惠", "【描述】\n描述", "【个性】\n个性", "【第一条消息】\n第一条", "【示例对话】\n示例", "【场景规则】\n场景规则"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("buildTavernPrompt should contain %q; got %q", want, got)
 		}
 	}
-	for _, unwanted := range []string{"【开场示例】", "【后置指令】"} {
+	for _, unwanted := range []string{"【场景】", "【后置指令】"} {
 		if strings.Contains(got, unwanted) {
 			t.Fatalf("buildTavernPrompt should skip %q; got %q", unwanted, got)
 		}
@@ -37,7 +37,7 @@ func TestBuildTavernPromptSkipsEmptySections(t *testing.T) {
 }
 
 func TestBuildTavernPromptReturnsSceneOnlyForExistingPrompt(t *testing.T) {
-	got := buildTavernPrompt("", "", "", "只用用户 Prompt", "")
+	got := buildTavernPrompt("", "", "", "", "", "", "只用用户 Prompt", "")
 	if got != "只用用户 Prompt" {
 		t.Fatalf("buildTavernPrompt = %q, want scene prompt only", got)
 	}

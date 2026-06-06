@@ -33,7 +33,10 @@ func GetAiFeedReplyWithPrompt(prompt string, Contents []Content, instruction str
 
 func FeedReplyPromptFromConfig(scenePrompt string) string {
 	return buildTavernPrompt(
-		config.ConfigStruct.Ai.CharacterCard,
+		config.ConfigStruct.Ai.ChatName,
+		config.ConfigStruct.Ai.Description,
+		config.ConfigStruct.Ai.Personality,
+		config.ConfigStruct.Ai.Scenario,
 		config.ConfigStruct.Ai.FirstMessage,
 		config.ConfigStruct.Ai.ExampleDialogs,
 		scenePrompt,
@@ -43,7 +46,10 @@ func FeedReplyPromptFromConfig(scenePrompt string) string {
 
 func replyPromptFromConfig(scenePrompt string) string {
 	return buildTavernPrompt(
-		config.ConfigStruct.Ai.CharacterCard,
+		config.ConfigStruct.Ai.ChatName,
+		config.ConfigStruct.Ai.Description,
+		config.ConfigStruct.Ai.Personality,
+		config.ConfigStruct.Ai.Scenario,
 		config.ConfigStruct.Ai.FirstMessage,
 		config.ConfigStruct.Ai.ExampleDialogs,
 		scenePrompt,
@@ -51,8 +57,11 @@ func replyPromptFromConfig(scenePrompt string) string {
 	)
 }
 
-func buildTavernPrompt(characterCard, firstMessage, exampleDialogs, scenePrompt, postHistoryInstructions string) string {
-	if strings.TrimSpace(characterCard) == "" &&
+func buildTavernPrompt(chatName, description, personality, scenario, firstMessage, exampleDialogs, scenePrompt, postHistoryInstructions string) string {
+	if strings.TrimSpace(chatName) == "" &&
+		strings.TrimSpace(description) == "" &&
+		strings.TrimSpace(personality) == "" &&
+		strings.TrimSpace(scenario) == "" &&
 		strings.TrimSpace(firstMessage) == "" &&
 		strings.TrimSpace(exampleDialogs) == "" &&
 		strings.TrimSpace(postHistoryInstructions) == "" {
@@ -62,8 +71,11 @@ func buildTavernPrompt(characterCard, firstMessage, exampleDialogs, scenePrompt,
 		title string
 		text  string
 	}{
-		{title: "角色卡", text: characterCard},
-		{title: "开场示例", text: firstMessage},
+		{title: "聊天名称", text: chatName},
+		{title: "描述", text: description},
+		{title: "个性", text: personality},
+		{title: "场景", text: scenario},
+		{title: "第一条消息", text: firstMessage},
 		{title: "示例对话", text: exampleDialogs},
 		{title: "场景规则", text: scenePrompt},
 		{title: "后置指令", text: postHistoryInstructions},

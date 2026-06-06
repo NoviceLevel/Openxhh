@@ -35,7 +35,10 @@ var ConfigStruct struct {
 	} `json:"database"`
 	Ai struct {
 		Model                   string `json:"model"`
-		CharacterCard           string `json:"characterCard"`
+		ChatName                string `json:"chatName"`
+		Description             string `json:"description"`
+		Personality             string `json:"personality"`
+		Scenario                string `json:"scenario"`
 		FirstMessage            string `json:"firstMessage"`
 		ExampleDialogs          string `json:"exampleDialogs"`
 		Prompt                  string `json:"prompt"`

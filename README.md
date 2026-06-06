@@ -196,7 +196,10 @@ sudo systemctl restart Openxhh
   },
   "ai": {
     "model": "你的模型名",
-    "characterCard": "",
+    "chatName": "",
+    "description": "",
+    "personality": "",
+    "scenario": "",
     "firstMessage": "",
     "exampleDialogs": "",
     "prompt": "",
@@ -992,8 +995,11 @@ ls -lh /opt/Openxhh/sql.db
 | `xhh.webver` | `2.5` | 小黑盒 Web 版本字段 |
 | `xhh.version` | `999.0.4` | 小黑盒版本字段 |
 | `database.type` | `sqlite` | 个人部署推荐 SQLite |
-| `ai.characterCard` | 空 | 酒馆式公共角色卡 / 人设底座；@ 回复和刷帖回复共用 |
-| `ai.firstMessage` | 空 | 酒馆式开场示例，用于示范角色第一句的动作、情绪和语气 |
+| `ai.chatName` | 空 | 酒馆式聊天内名称，例如 `惠惠` |
+| `ai.description` | 空 | 酒馆式描述字段，放角色身份、外貌、经历、说话方式等 |
+| `ai.personality` | 空 | 酒馆式个性字段，放角色性格标签或短描述 |
+| `ai.scenario` | 空 | 酒馆式场景字段，描述角色当前所处场景 |
+| `ai.firstMessage` | 空 | 酒馆式第一条消息，用于示范角色登场动作、情绪和语气 |
 | `ai.exampleDialogs` | 空 | 酒馆式示例对话，用于稳定角色语感 |
 | `ai.prompt` | 空 | @ 回复专用场景 Prompt |
 | `ai.postHistoryInstructions` | 空 | 酒馆式后置指令，会放在 system prompt 末尾强化输出规则 |
@@ -1005,7 +1011,7 @@ ls -lh /opt/Openxhh/sql.db
 | `feedReply.maxPerRun` | `1` | 每轮最多处理帖子数 |
 | `feedReply.maxPerDay` | `10` | 每天最多处理帖子数 |
 | `feedReply.dryRun` | `true` | 默认只记录，不真实发评论 |
-| `feedReply.prompt` | 空 | 自动刷帖专用场景 Prompt，和公共角色卡一起生效 |
+| `feedReply.prompt` | 空 | 自动刷帖专用场景 Prompt，和公共酒馆式人设字段一起生效 |
 | `image.model` | `gpt-image-2` | 图片模型默认值 |
 | `image.size` | `1024x1024` | 图片尺寸默认值 |
 | `image.responseFormat` | `b64_json` | 图片接口输出格式 |
