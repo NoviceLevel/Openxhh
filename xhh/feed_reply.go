@@ -146,13 +146,8 @@ func processFeedLink(link feedLink) db.FeedReplyRecord {
 		tags = link.Tags
 	}
 	instruction := "请根据这篇帖子写一条符合上下文的短评论。如果不适合回复，请只输出 SKIP。标题：" + link.Title + "\n正文摘要：" + link.Description
-	reply := ai.GetAiFeedReplyWithPrompt(ai.FeedReplyPromptFromConfig(config.ConfigStruct.FeedReply.Prompt), contents, instruction, topics, tags, zap.Bool("feed_reply", true), zap.Int("link_id", link.LinkID), zap.Int64("author_id", authorID), zap.String("author_name", link.User.UserName), zap.String("feed_title", link.Title), zap.String("question", instruction))
-	reply = sanitizeFeedReply(reply)
-	if issue := feedReplyQualityIssue(reply, link.Title); issue != "" && !shouldSkipFeedReply(reply) {
-		loger.Loger.Warn("[FeedReply]回复质量检查未通过，重试一次", zap.Int("link_id", link.LinkID), zap.String("title", link.Title), zap.String("issue", issue), zap.String("reply", reply))
-		retryInstruction := feedReplyRetryInstruction(instruction, issue)
-		reply = sanitizeFeedReply(ai.GetAiFeedReplyWithPrompt(ai.FeedReplyPromptFromConfig(config.ConfigStruct.FeedReply.Prompt), contents, retryInstruction, topics, tags, zap.Bool("feed_reply", true), zap.Bool("retry", true), zap.Int("link_id", link.LinkID), zap.Int64("author_id", authorID), zap.String("author_name", link.User.UserName), zap.String("feed_title", link.Title), zap.String("question", retryInstruction)))
-	}
+	logFields := []zap.Field{zap.Bool("feed_reply", true), zap.Int("link_id", link.LinkID), zap.Int64("author_id", authorID), zap.String("author_name", link.User.UserName), zap.String("feed_title", link.Title), zap.String("question", instruction)}
+	reply := generateFeedReplyWithQualityRetry(ai.FeedReplyPromptFromConfig(config.ConfigStruct.FeedReply.Prompt), contents, instruction, link.Title, topics, tags, logFields...)
 	if reply == "" {
 		record.Status = "failed"
 		record.Reason = "AI 返回空内容"
