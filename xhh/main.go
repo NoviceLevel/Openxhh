@@ -36,6 +36,7 @@ const maxReplyRetries = 5
 
 var replyRetryCounts sync.Map
 var notificationReplyQueueStartUnix = time.Now().Unix()
+var oldReplyNotificationSkipLogged bool
 
 const messagePageLimit = 20
 const maxMessagePages = 5
@@ -395,6 +396,7 @@ func syncNotificationsOnce() {
 		return
 	}
 	saved := 0
+	skippedOldReplyNotifications := 0
 	for page := 0; page < maxMessagePages; page++ {
 		offset := page * messagePageLimit
 		other := fmt.Sprintf("?list_type=0&offset=%v&limit=%v&no_more=false", offset, messagePageLimit)
@@ -443,7 +445,9 @@ func syncNotificationsOnce() {
 				saved++
 			}
 			if isReplyToBotComment(v) {
-				queueReplyToBotNotification(v)
+				if queueReplyToBotNotification(v) == replyNotificationQueueSkippedOld {
+					skippedOldReplyNotifications++
+				}
 			}
 		}
 		if len(msgResp.Result.Messages) < messagePageLimit {
@@ -453,7 +457,19 @@ func syncNotificationsOnce() {
 	if saved > 0 {
 		loger.Loger.Info("[通知同步]新增通知", zap.Int("saved", saved))
 	}
+	if skippedOldReplyNotifications > 0 && !oldReplyNotificationSkipLogged {
+		oldReplyNotificationSkipLogged = true
+		loger.Loger.Info("[通知同步]已跳过启动前的回复通知", zap.Int("skipped", skippedOldReplyNotifications), zap.Int64("queue_start", notificationReplyQueueStartUnix))
+	}
 }
+
+type replyNotificationQueueStatus int
+
+const (
+	replyNotificationQueueIgnored replyNotificationQueueStatus = iota
+	replyNotificationQueueQueued
+	replyNotificationQueueSkippedOld
+)
 
 func notificationSource(v Msg) string {
 	if isReplyToBotComment(v) {
@@ -462,22 +478,19 @@ func notificationSource(v Msg) string {
 	return "notification"
 }
 
-func queueReplyToBotNotification(v Msg) {
+func queueReplyToBotNotification(v Msg) replyNotificationQueueStatus {
 	targetCommentID := replyToBotTargetCommentID(v)
 	if targetCommentID <= 0 {
-		return
+		return replyNotificationQueueIgnored
 	}
 	if !isRecentReplyToBotNotification(v) {
-		if loger.Loger != nil {
-			loger.Loger.Info("[通知同步]跳过启动前的回复通知", zap.Int("msg_id", v.MsgID), zap.Int("comment_id", v.CommentID), zap.Int("reply_comment_id", v.ReplyCommentID), zap.Int("reply_user_id", v.ReplyUserID), zap.Int64("created_at", v.CreatedAt), zap.Int64("queue_start", notificationReplyQueueStartUnix))
-		}
-		return
+		return replyNotificationQueueSkippedOld
 	}
 	if v.CommentID <= 0 || v.LinkID <= 0 {
-		return
+		return replyNotificationQueueIgnored
 	}
 	if Info.HeyBoxId != "" && strconv.Itoa(v.UserID) == Info.HeyBoxId {
-		return
+		return replyNotificationQueueIgnored
 	}
 	if v.MsgID <= 0 {
 		v.MsgID = syntheticNotificationMsgID(v)
@@ -490,7 +503,9 @@ func queueReplyToBotNotification(v Msg) {
 		if loger.Loger != nil {
 			loger.Loger.Info("[通知同步]已加入回复我的评论队列", zap.Int("msg_id", v.MsgID), zap.Int("comment_id", v.CommentID), zap.Int("reply_comment_id", v.ReplyCommentID), zap.Int("reply_user_id", v.ReplyUserID), zap.Int("link_id", v.LinkID), zap.Int("user_id", v.UserID), zap.String("user_name", v.UserName))
 		}
+		return replyNotificationQueueQueued
 	}
+	return replyNotificationQueueIgnored
 }
 
 func isReplyToBotComment(v Msg) bool {
