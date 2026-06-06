@@ -44,9 +44,34 @@ func AutoFeedReply() {
 			time.Sleep(remaining)
 			continue
 		}
+		if !config.ConfigStruct.FeedReply.Enabled {
+			time.Sleep(time.Duration(feedReplyInterval()) * time.Second)
+			continue
+		}
+		if remaining := feedReplyPersistedWait(); remaining > 0 {
+			loger.Loger.Info("[FeedReply]等待持久化刷帖间隔", zap.Int64("remaining_seconds", int64(remaining/time.Second)), zap.Int("interval", feedReplyInterval()))
+			time.Sleep(remaining)
+			continue
+		}
 		processFeedReplyOnce()
-		time.Sleep(time.Duration(feedReplyInterval()) * time.Second)
+		db.SaveFeedReplyLastRunAt(time.Now().Unix())
 	}
+}
+
+func feedReplyPersistedWait() time.Duration {
+	if !config.ConfigStruct.FeedReply.Enabled {
+		return 0
+	}
+	lastRunAt := db.FeedReplyLastRunAt()
+	if lastRunAt <= 0 {
+		return 0
+	}
+	nextRunAt := lastRunAt + int64(feedReplyInterval())
+	now := time.Now().Unix()
+	if nextRunAt <= now {
+		return 0
+	}
+	return time.Duration(nextRunAt-now) * time.Second
 }
 
 func processFeedReplyOnce() {

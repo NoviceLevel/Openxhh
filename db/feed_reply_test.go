@@ -113,3 +113,37 @@ func TestFeedReplyRecordUsesLinkIDAsDedupeKey(t *testing.T) {
 		t.Fatal("FeedReplyRecordExists returned false for saved link_id")
 	}
 }
+
+func TestFeedReplyLastRunAtPersistsState(t *testing.T) {
+	setupSQLiteFeedReplyTest(t)
+
+	if got := FeedReplyLastRunAt(); got != 0 {
+		t.Fatalf("initial FeedReplyLastRunAt = %d, want 0", got)
+	}
+	if !SaveFeedReplyLastRunAt(1234) {
+		t.Fatal("SaveFeedReplyLastRunAt returned false")
+	}
+	if got := FeedReplyLastRunAt(); got != 1234 {
+		t.Fatalf("FeedReplyLastRunAt = %d, want 1234", got)
+	}
+	if !SaveFeedReplyLastRunAt(2345) {
+		t.Fatal("second SaveFeedReplyLastRunAt returned false")
+	}
+	if got := FeedReplyLastRunAt(); got != 2345 {
+		t.Fatalf("updated FeedReplyLastRunAt = %d, want 2345", got)
+	}
+}
+
+func TestFeedReplyLastRunAtFallsBackToLatestRecord(t *testing.T) {
+	setupSQLiteFeedReplyTest(t)
+	if !SaveFeedReplyRecord(FeedReplyRecord{LinkID: 1, Status: "failed", RepliedAt: 100}) {
+		t.Fatal("SaveFeedReplyRecord old returned false")
+	}
+	if !SaveFeedReplyRecord(FeedReplyRecord{LinkID: 2, Status: "sent", RepliedAt: 200}) {
+		t.Fatal("SaveFeedReplyRecord new returned false")
+	}
+
+	if got := FeedReplyLastRunAt(); got != 200 {
+		t.Fatalf("FeedReplyLastRunAt fallback = %d, want 200", got)
+	}
+}

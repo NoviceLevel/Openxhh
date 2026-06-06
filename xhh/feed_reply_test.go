@@ -1,8 +1,15 @@
 package xhh
 
 import (
+	"database/sql"
 	"openxhh/config"
+	"openxhh/db"
+	"openxhh/loger"
+	"openxhh/sqlite"
 	"testing"
+	"time"
+
+	"go.uber.org/zap"
 )
 
 func TestFeedReplyDryRunDefaultsToTrue(t *testing.T) {
@@ -38,6 +45,68 @@ func TestFeedReplyLimitsDefaultWhenInvalid(t *testing.T) {
 	}
 	if got := feedReplyMaxPerDay(); got != 10 {
 		t.Fatalf("feedReplyMaxPerDay = %d, want 10", got)
+	}
+}
+
+func TestFeedReplyPersistedWaitUsesSavedLastRun(t *testing.T) {
+	setupSQLiteFeedReplySchedulerTest(t)
+	oldConfig := config.ConfigStruct
+	t.Cleanup(func() {
+		config.ConfigStruct = oldConfig
+	})
+	config.ConfigStruct.FeedReply.Enabled = true
+	config.ConfigStruct.FeedReply.Interval = 900
+	lastRunAt := time.Now().Unix() - 300
+	if !db.SaveFeedReplyLastRunAt(lastRunAt) {
+		t.Fatal("SaveFeedReplyLastRunAt returned false")
+	}
+
+	wait := feedReplyPersistedWait()
+	if wait < 590*time.Second || wait > 610*time.Second {
+		t.Fatalf("feedReplyPersistedWait = %v, want about 600s", wait)
+	}
+}
+
+func setupSQLiteFeedReplySchedulerTest(t *testing.T) {
+	t.Helper()
+	oldType := config.ConfigStruct.DataBase.Type
+	oldDB := sqlite.Db
+	oldLogger := loger.Loger
+	loger.Loger = zap.NewNop()
+	database, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	sqlite.Db = database
+	config.ConfigStruct.DataBase.Type = "sqlite"
+	t.Cleanup(func() {
+		database.Close()
+		sqlite.Db = oldDB
+		config.ConfigStruct.DataBase.Type = oldType
+		loger.Loger = oldLogger
+	})
+	_, err = sqlite.Db.Exec(`CREATE TABLE feed_reply_records (
+		link_id BIGINT PRIMARY KEY,
+		title TEXT DEFAULT '',
+		author_id BIGINT DEFAULT 0,
+		author_name TEXT DEFAULT '',
+		post_text TEXT DEFAULT '',
+		reply_text TEXT DEFAULT '',
+		status TEXT DEFAULT '',
+		reason TEXT DEFAULT '',
+		created_at BIGINT DEFAULT 0,
+		replied_at BIGINT DEFAULT 0
+	)`)
+	if err != nil {
+		t.Fatalf("create feed_reply_records: %v", err)
+	}
+	_, err = sqlite.Db.Exec(`CREATE TABLE feed_reply_state (
+		key TEXT PRIMARY KEY,
+		value BIGINT DEFAULT 0,
+		updated_at BIGINT DEFAULT 0
+	)`)
+	if err != nil {
+		t.Fatalf("create feed_reply_state: %v", err)
 	}
 }
 
