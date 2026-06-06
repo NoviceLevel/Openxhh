@@ -8,6 +8,7 @@ import (
 	"openxhh/config"
 	"openxhh/loger"
 	"strings"
+	"sync"
 
 	"go.uber.org/zap"
 )
@@ -92,6 +93,15 @@ type aiRequestPayload struct {
 	Body []byte
 }
 
+type chatCompletionsMode string
+
+const (
+	chatCompletionsModeDefault chatCompletionsMode = ""
+	chatCompletionsModeStream  chatCompletionsMode = "stream"
+)
+
+var chatCompletionsModeCache sync.Map
+
 type responsesRespStruct struct {
 	OutputText string `json:"output_text"`
 	Output     []struct {
@@ -115,12 +125,13 @@ func SendReq(Model string, Msg []any) (Jresp respStruct) {
 		return
 	}
 	cfg := config.ConfigStruct.Ai
+	useResponses := useResponsesAPI(cfg.BaseUrl)
 	payloads, err := buildReqPayloads(Model, Msg)
 	if err != nil {
 		loger.Loger.Error("[AI]无法序列化JSON", zap.Error(err))
 		return
 	}
-	chatStreamRetried := false
+	cacheKey := chatCompletionsCacheKey(cfg.BaseUrl, Model)
 	for i := 0; i < len(payloads); i++ {
 		payload := payloads[i]
 		req, err := http.NewRequest("POST", cfg.BaseUrl, bytes.NewReader(payload.Body))
@@ -158,32 +169,31 @@ func SendReq(Model string, Msg []any) (Jresp respStruct) {
 					}
 				}
 			}
-			if i < len(payloads)-1 && shouldTryNextResponsesPayload(resp.StatusCode) {
+			if useResponses && i < len(payloads)-1 && shouldTryNextResponsesPayload(resp.StatusCode) {
 				loger.Loger.Warn("[Ai]Responses请求失败，尝试兼容格式", zap.String("variant", payload.Name), zap.Int("status", resp.StatusCode), zap.String("body", limitRefineString(bodyStr, 500)))
+				continue
+			}
+			if !useResponses && i < len(payloads)-1 {
+				loger.Loger.Warn("[Ai]Chat Completions请求失败，尝试备用格式", zap.String("variant", payload.Name), zap.Int("status", resp.StatusCode), zap.String("body", limitRefineString(bodyStr, 500)))
 				continue
 			}
 			loger.Loger.Error("[Ai]Ai返回HTTP错误", zap.String("variant", payload.Name), zap.Int("status", resp.StatusCode), zap.String("body", limitRefineString(bodyStr, 500)))
 			return
 		}
-		Jresp, err = parseAIResp(Dresp, useResponsesAPI(cfg.BaseUrl))
+		Jresp, err = parseAIResp(Dresp, useResponses)
 		if err != nil {
 			loger.Loger.Error("[Ai]无法反序列化JSON", zap.Error(err), zap.String("variant", payload.Name), zap.String("body", string(Dresp)))
 			return
 		}
 		if len(Jresp.Choices) == 0 {
-			if !useResponsesAPI(cfg.BaseUrl) && !chatStreamRetried {
-				streamBody, streamErr := buildChatCompletionsReqBody(Model, Msg, true)
-				if streamErr == nil {
-					chatStreamRetried = true
-					payloads = append(payloads[:i+1], append([]aiRequestPayload{{Name: "chat_completions_stream", Body: streamBody}}, payloads[i+1:]...)...)
-					loger.Loger.Warn("[Ai]Chat Completions 返回空内容，尝试 stream=true 兼容格式", zap.String("variant", payload.Name), zap.Any("Resp", string(Dresp)))
-					continue
-				}
-				loger.Loger.Error("[AI]无法序列化 stream=true 请求", zap.Error(streamErr))
+			if !useResponses && i < len(payloads)-1 {
+				loger.Loger.Warn("[Ai]Chat Completions 返回空内容，尝试备用格式", zap.String("variant", payload.Name), zap.Any("Resp", string(Dresp)))
+				continue
 			}
 			loger.Loger.Error("[Ai]Ai返回错误", zap.String("variant", payload.Name), zap.Any("Resp", string(Dresp)))
 			return
 		}
+		rememberChatCompletionsMode(cacheKey, payload.Name)
 		return Jresp
 	}
 	return Jresp
@@ -211,19 +221,18 @@ func buildReqPayloads(Model string, Msg []any) ([]aiRequestPayload, error) {
 		return []aiRequestPayload{{Name: "responses", Body: primary}, {Name: "responses_compat", Body: legacy}}, nil
 	}
 
-	body := BodyStruct{
-		Model:  Model,
-		Msgs:   Msg,
-		Stream: false,
-	}
-	if aiWebSearchEnabled() {
-		body.WebSearchOptions = &webSearchOptions{SearchContextSize: aiSearchContextSize()}
-	}
-	data, err := json.Marshal(body)
+	body, err := buildChatCompletionsReqBody(Model, Msg, false)
 	if err != nil {
 		return nil, err
 	}
-	return []aiRequestPayload{{Name: "chat_completions", Body: data}}, nil
+	streamBody, err := buildChatCompletionsReqBody(Model, Msg, true)
+	if err != nil {
+		return nil, err
+	}
+	if chatCompletionsCachedMode(chatCompletionsCacheKey(cfg.BaseUrl, Model)) == chatCompletionsModeStream {
+		return []aiRequestPayload{{Name: "chat_completions_stream", Body: streamBody}, {Name: "chat_completions", Body: body}}, nil
+	}
+	return []aiRequestPayload{{Name: "chat_completions", Body: body}, {Name: "chat_completions_stream", Body: streamBody}}, nil
 }
 
 func buildChatCompletionsReqBody(Model string, Msg []any, stream bool) ([]byte, error) {
@@ -236,6 +245,40 @@ func buildChatCompletionsReqBody(Model string, Msg []any, stream bool) ([]byte, 
 		body.WebSearchOptions = &webSearchOptions{SearchContextSize: aiSearchContextSize()}
 	}
 	return json.Marshal(body)
+}
+
+func chatCompletionsCacheKey(baseURL, model string) string {
+	return strings.ToLower(strings.TrimSpace(baseURL)) + "\n" + strings.TrimSpace(model)
+}
+
+func chatCompletionsCachedMode(key string) chatCompletionsMode {
+	if key == "" {
+		return chatCompletionsModeDefault
+	}
+	if value, ok := chatCompletionsModeCache.Load(key); ok {
+		if mode, ok := value.(chatCompletionsMode); ok {
+			return mode
+		}
+	}
+	return chatCompletionsModeDefault
+}
+
+func rememberChatCompletionsMode(key, payloadName string) {
+	if key == "" {
+		return
+	}
+	if strings.Contains(payloadName, "stream") {
+		chatCompletionsModeCache.Store(key, chatCompletionsModeStream)
+		return
+	}
+	chatCompletionsModeCache.Delete(key)
+}
+
+func resetChatCompletionsModeCacheForTest() {
+	chatCompletionsModeCache.Range(func(key, value any) bool {
+		chatCompletionsModeCache.Delete(key)
+		return true
+	})
 }
 
 func buildResponsesReqBody(Model string, Msg []any, legacy bool) ([]byte, error) {

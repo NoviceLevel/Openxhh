@@ -27,11 +27,13 @@ func sendChatCompletion(ctx context.Context, model string, messages []chatComple
 	if strings.TrimSpace(model) == "" {
 		return "", errors.New("model is empty")
 	}
-	useResponses := useResponsesAPI(config.ConfigStruct.Ai.BaseUrl)
+	baseURL := config.ConfigStruct.Ai.BaseUrl
+	useResponses := useResponsesAPI(baseURL)
 	payloads, err := buildChatCompletionPayloads(model, messages, useResponses)
 	if err != nil {
 		return "", err
 	}
+	cacheKey := chatCompletionsCacheKey(baseURL, model)
 
 	var lastErr error
 	for attempt := 1; attempt <= chatCompletionAttempts; attempt++ {
@@ -39,6 +41,7 @@ func sendChatCompletion(ctx context.Context, model string, messages []chatComple
 		for i, payload := range payloads {
 			content, err := sendChatCompletionOnce(ctx, payload.Body, useResponses)
 			if err == nil {
+				rememberChatCompletionsMode(cacheKey, payload.Name)
 				return content, nil
 			}
 			lastErr = err
@@ -46,7 +49,7 @@ func sendChatCompletion(ctx context.Context, model string, messages []chatComple
 			if useResponses && i < len(payloads)-1 && shouldTryNextChatCompletionPayload(err) {
 				continue
 			}
-			if !useResponses && i < len(payloads)-1 && errors.Is(err, errChatCompletionNoContent) {
+			if !useResponses && i < len(payloads)-1 && shouldTryNextChatCompletionsPayload(err) {
 				continue
 			}
 			break
@@ -103,6 +106,9 @@ func buildChatCompletionPayloads(model string, messages []chatCompletionMessage,
 	streamData, err := json.Marshal(body)
 	if err != nil {
 		return nil, err
+	}
+	if chatCompletionsCachedMode(chatCompletionsCacheKey(config.ConfigStruct.Ai.BaseUrl, model)) == chatCompletionsModeStream {
+		return []aiRequestPayload{{Name: "chat_completions_stream", Body: streamData}, {Name: "chat_completions", Body: data}}, nil
 	}
 	return []aiRequestPayload{{Name: "chat_completions", Body: data}, {Name: "chat_completions_stream", Body: streamData}}, nil
 }
@@ -162,6 +168,14 @@ func (e chatCompletionStatusError) Error() string {
 func shouldTryNextChatCompletionPayload(err error) bool {
 	var statusErr chatCompletionStatusError
 	return errors.As(err, &statusErr) && shouldTryNextResponsesPayload(statusErr.statusCode)
+}
+
+func shouldTryNextChatCompletionsPayload(err error) bool {
+	if errors.Is(err, errChatCompletionNoContent) {
+		return true
+	}
+	var statusErr chatCompletionStatusError
+	return errors.As(err, &statusErr)
 }
 
 func shouldRetryChatCompletionError(err error) bool {

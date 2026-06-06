@@ -247,6 +247,14 @@ func TestSendReqChatCompletionsRetriesStreamWhenEmpty(t *testing.T) {
 	if attempts != 2 || len(streams) != 2 || streams[0] || !streams[1] {
 		t.Fatalf("attempts=%d streams=%v, want [false true]", attempts, streams)
 	}
+
+	resp = SendReq("test-model", []any{Messages[string]{Role: "user", Content: "hello again"}})
+	if len(resp.Choices) != 1 || resp.Choices[0].Msg.Content != "stream ok" {
+		t.Fatalf("cached response = %+v", resp)
+	}
+	if attempts != 3 || len(streams) != 3 || !streams[2] {
+		t.Fatalf("cached attempts=%d streams=%v, want third stream=true", attempts, streams)
+	}
 }
 
 func TestSendChatCompletionResponsesFallsBackToCompatPayload(t *testing.T) {
@@ -336,6 +344,62 @@ func TestSendChatCompletionRetriesStreamWhenEmpty(t *testing.T) {
 	}
 	if attempts != 2 || len(streams) != 2 || streams[0] || !streams[1] {
 		t.Fatalf("attempts=%d streams=%v, want [false true]", attempts, streams)
+	}
+
+	got, err = sendChatCompletion(context.Background(), "route-model", []chatCompletionMessage{{Role: "user", Content: "hello again"}})
+	if err != nil {
+		t.Fatalf("cached sendChatCompletion returned error: %v", err)
+	}
+	if got != "stream ok" {
+		t.Fatalf("cached response text = %q, want stream ok", got)
+	}
+	if attempts != 3 || len(streams) != 3 || !streams[2] {
+		t.Fatalf("cached attempts=%d streams=%v, want third stream=true", attempts, streams)
+	}
+}
+
+func TestSendChatCompletionCachedStreamFallsBackToNonStream(t *testing.T) {
+	restoreAIConfig(t)
+
+	attempts := 0
+	var streams []bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		attempts++
+		var body struct {
+			Stream bool `json:"stream"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		streams = append(streams, body.Stream)
+		w.Header().Set("Content-Type", "application/json")
+		if body.Stream {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"error":{"message":"stream unavailable"}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"non-stream ok"}}],"usage":{"total_tokens":7}}`))
+	}))
+	defer server.Close()
+
+	config.ConfigStruct.Ai.BaseUrl = server.URL + "/v1/chat/completions"
+	cacheKey := chatCompletionsCacheKey(config.ConfigStruct.Ai.BaseUrl, "route-model")
+	chatCompletionsModeCache.Store(cacheKey, chatCompletionsModeStream)
+
+	got, err := sendChatCompletion(context.Background(), "route-model", []chatCompletionMessage{{Role: "user", Content: "hello"}})
+	if err != nil {
+		t.Fatalf("sendChatCompletion returned error: %v", err)
+	}
+	if got != "non-stream ok" {
+		t.Fatalf("response text = %q, want non-stream ok", got)
+	}
+	if attempts != 2 || len(streams) != 2 || !streams[0] || streams[1] {
+		t.Fatalf("attempts=%d streams=%v, want [true false]", attempts, streams)
+	}
+	if mode := chatCompletionsCachedMode(cacheKey); mode != chatCompletionsModeDefault {
+		t.Fatalf("cached mode = %q, want default", mode)
 	}
 }
 
@@ -484,6 +548,7 @@ func TestSendChatCompletionUsesResponsesInput(t *testing.T) {
 
 func restoreAIConfig(t *testing.T) {
 	t.Helper()
+	resetChatCompletionsModeCacheForTest()
 	oldModel := config.ConfigStruct.Ai.Model
 	oldPrompt := config.ConfigStruct.Ai.Prompt
 	oldBaseURL := config.ConfigStruct.Ai.BaseUrl
@@ -499,6 +564,7 @@ func restoreAIConfig(t *testing.T) {
 		config.ConfigStruct.Ai.WebSearch = oldWebSearch
 		config.ConfigStruct.Ai.ForceWebSearch = oldForceWebSearch
 		config.ConfigStruct.Ai.SearchContextSize = oldSearchContextSize
+		resetChatCompletionsModeCacheForTest()
 	})
 }
 
