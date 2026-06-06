@@ -1,6 +1,10 @@
 package main
 
-import "testing"
+import (
+	"encoding/json"
+	"path/filepath"
+	"testing"
+)
 
 func TestApplyConfigDefaultsMigratesCharacterCard(t *testing.T) {
 	var cfg appConfig
@@ -28,5 +32,45 @@ func TestApplyConfigDefaultsDoesNotOverwriteDescriptionWithCharacterCard(t *test
 	}
 	if cfg.AI.CharacterCard != "" {
 		t.Fatalf("AI.CharacterCard = %q, want cleared legacy field", cfg.AI.CharacterCard)
+	}
+}
+
+func TestBuildConfigTestAIBodyResponsesIncludesSearchTool(t *testing.T) {
+	var cfg appConfig
+	cfg.AI.Model = "test-model"
+	cfg.AI.ChatName = "惠惠"
+	cfg.AI.Description = "红魔族大魔法师"
+	cfg.AI.WebSearch = boolPtr(true)
+	cfg.AI.ForceWebSearch = boolPtr(true)
+	cfg.AI.SearchContextSize = "high"
+
+	body, err := buildConfigTestAIBody(cfg, "测试一下", true)
+	if err != nil {
+		t.Fatalf("buildConfigTestAIBody returned error: %v", err)
+	}
+	var got responsesTestBody
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if got.Model != "test-model" {
+		t.Fatalf("Model = %q", got.Model)
+	}
+	if got.Instructions == "" {
+		t.Fatal("Instructions should include test system prompt")
+	}
+	if len(got.Tools) != 1 || got.Tools[0].Type != "web_search_preview" || got.Tools[0].SearchContextSize != "high" {
+		t.Fatalf("Tools = %+v", got.Tools)
+	}
+	if got.ToolChoice != "required" {
+		t.Fatalf("ToolChoice = %q, want required", got.ToolChoice)
+	}
+}
+
+func TestConfigTestOutputDirUsesRootForRelativePath(t *testing.T) {
+	root := filepath.Join("C:", "Openxhh")
+	got := configTestOutputDir("images", root)
+	want := filepath.Join(root, "images")
+	if got != want {
+		t.Fatalf("configTestOutputDir = %q, want %q", got, want)
 	}
 }
