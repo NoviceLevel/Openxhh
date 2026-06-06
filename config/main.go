@@ -35,6 +35,7 @@ var ConfigStruct struct {
 	} `json:"database"`
 	Ai struct {
 		Model                   string `json:"model"`
+		CharacterCard           string `json:"characterCard,omitempty"`
 		ChatName                string `json:"chatName"`
 		Description             string `json:"description"`
 		Personality             string `json:"personality"`
@@ -169,6 +170,13 @@ func applyDefaults() bool {
 	}
 	if ConfigStruct.DataBase.Type == "" {
 		ConfigStruct.DataBase.Type = "sqlite"
+		changed = true
+	}
+	if ConfigStruct.Ai.CharacterCard != "" {
+		if ConfigStruct.Ai.Description == "" {
+			ConfigStruct.Ai.Description = ConfigStruct.Ai.CharacterCard
+		}
+		ConfigStruct.Ai.CharacterCard = ""
 		changed = true
 	}
 	if ConfigStruct.Ai.WebSearch == nil {
