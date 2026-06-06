@@ -147,6 +147,11 @@ func processFeedLink(link feedLink) db.FeedReplyRecord {
 	instruction := "请根据这篇帖子写一条符合上下文的短评论。如果不适合回复，请只输出 SKIP。标题：" + link.Title + "\n正文摘要：" + link.Description
 	reply := ai.GetAiFeedReplyWithPrompt(ai.FeedReplyPromptFromConfig(config.ConfigStruct.FeedReply.Prompt), contents, instruction, topics, tags, zap.Bool("feed_reply", true), zap.Int("link_id", link.LinkID), zap.Int64("author_id", authorID), zap.String("author_name", link.User.UserName), zap.String("feed_title", link.Title), zap.String("question", instruction))
 	reply = sanitizeFeedReply(reply)
+	if issue := feedReplyQualityIssue(reply, link.Title); issue != "" && !shouldSkipFeedReply(reply) {
+		loger.Loger.Warn("[FeedReply]回复质量检查未通过，重试一次", zap.Int("link_id", link.LinkID), zap.String("title", link.Title), zap.String("issue", issue), zap.String("reply", reply))
+		retryInstruction := instruction + "\n\n上一次回复质量不合格，原因：" + issue + "。请重新生成。要求：必须像惠惠本人在小黑盒短评帖子；先回应帖子内容；至少体现一个惠惠身份锚点（本大人、红魔族、爆裂美学、魔力见底、法杖、咏唱、一击）；不要复述标题；不要客服腔；默认1-2句。"
+		reply = sanitizeFeedReply(ai.GetAiFeedReplyWithPrompt(ai.FeedReplyPromptFromConfig(config.ConfigStruct.FeedReply.Prompt), contents, retryInstruction, topics, tags, zap.Bool("feed_reply", true), zap.Bool("retry", true), zap.Int("link_id", link.LinkID), zap.Int64("author_id", authorID), zap.String("author_name", link.User.UserName), zap.String("feed_title", link.Title), zap.String("question", retryInstruction)))
+	}
 	if reply == "" {
 		record.Status = "failed"
 		record.Reason = "AI 返回空内容"
@@ -157,6 +162,13 @@ func processFeedLink(link feedLink) db.FeedReplyRecord {
 		record.Reason = "AI 判断不适合回复"
 		record.ReplyText = reply
 		loger.Loger.Info("[FeedReply]跳过帖子", zap.Int("link_id", link.LinkID), zap.String("title", link.Title), zap.String("reason", record.Reason))
+		return record
+	}
+	if issue := feedReplyQualityIssue(reply, link.Title); issue != "" {
+		record.Status = "skipped"
+		record.Reason = "回复质量检查未通过：" + issue
+		record.ReplyText = reply
+		loger.Loger.Warn("[FeedReply]跳过低质量回复", zap.Int("link_id", link.LinkID), zap.String("title", link.Title), zap.String("issue", issue), zap.String("reply", reply))
 		return record
 	}
 	record.ReplyText = reply
@@ -206,6 +218,47 @@ func sanitizeFeedReply(reply string) string {
 func shouldSkipFeedReply(reply string) bool {
 	value := strings.ToUpper(strings.Trim(strings.TrimSpace(reply), " 。.!！?？`\"'"))
 	return value == "SKIP" || value == "跳过" || value == "不回复"
+}
+
+func feedReplyQualityIssue(reply string, title string) string {
+	reply = strings.TrimSpace(reply)
+	if reply == "" || shouldSkipFeedReply(reply) {
+		return ""
+	}
+	if len([]rune(reply)) > 120 {
+		return "回复过长"
+	}
+	if containsAny(reply, []string{"我理解你的意思", "总结一下", "建议你", "您好", "作为AI", "作为 AI", "我是AI", "我是 AI", "机器人"}) {
+		return "客服腔或暴露 AI 身份"
+	}
+	if repeatsFeedTitle(reply, title) {
+		return "复述标题"
+	}
+	if !containsAny(reply, []string{"本大人", "红魔族", "爆裂", "爆破", "魔力", "法杖", "咏唱", "一击", "惠惠"}) {
+		return "缺少惠惠身份锚点"
+	}
+	return ""
+}
+
+func containsAny(text string, needles []string) bool {
+	for _, needle := range needles {
+		if strings.Contains(text, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func repeatsFeedTitle(reply string, title string) bool {
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return false
+	}
+	trimmed := strings.Trim(title, "《》“”\"'[]【】 ")
+	if trimmed == "" {
+		return false
+	}
+	return strings.Contains(reply, title) || strings.Contains(reply, trimmed)
 }
 
 func feedReplyInterval() int {

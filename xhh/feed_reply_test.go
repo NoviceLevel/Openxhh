@@ -61,6 +61,26 @@ func TestSanitizeFeedReply(t *testing.T) {
 	}
 }
 
+func TestFeedReplyQualityIssue(t *testing.T) {
+	tests := []struct {
+		name  string
+		reply string
+		title string
+		want  string
+	}{
+		{name: "valid role reply", reply: "这价格有点像把金币丢进无效咏唱里，本大人看了都摇头。", want: ""},
+		{name: "generic fantasy reply", reply: "这价格看着还行，火力也不错，可以考虑。", want: "缺少惠惠身份锚点"},
+		{name: "customer tone", reply: "建议你先看看预算和需求。", want: "客服腔或暴露 AI 身份"},
+		{name: "repeat title", title: "求评价，不玻璃心。", reply: "求评价，不玻璃心。这个配置还可以。", want: "复述标题"},
+		{name: "skip allowed", reply: "SKIP", want: ""},
+	}
+	for _, tt := range tests {
+		if got := feedReplyQualityIssue(tt.reply, tt.title); got != tt.want {
+			t.Fatalf("%s: feedReplyQualityIssue = %q, want %q", tt.name, got, tt.want)
+		}
+	}
+}
+
 func TestLimitFeedTextCountsRunes(t *testing.T) {
 	got := limitFeedText("猫猫猫", 2)
 	if got != "猫猫" {
