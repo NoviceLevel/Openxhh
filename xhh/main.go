@@ -40,6 +40,7 @@ var oldReplyNotificationSkipLogged bool
 
 const messagePageLimit = 20
 const maxMessagePages = 5
+const replyNotificationQueueExampleLimit = 3
 const replySchedulerActivePoll = time.Second
 
 const messageTypeAtPost = 16
@@ -397,6 +398,8 @@ func syncNotificationsOnce() {
 	}
 	saved := 0
 	skippedOldReplyNotifications := 0
+	queuedReplyNotifications := 0
+	queuedReplyNotificationExamples := make([]string, 0, replyNotificationQueueExampleLimit)
 	for page := 0; page < maxMessagePages; page++ {
 		offset := page * messagePageLimit
 		other := fmt.Sprintf("?list_type=0&offset=%v&limit=%v&no_more=false", offset, messagePageLimit)
@@ -445,7 +448,11 @@ func syncNotificationsOnce() {
 				saved++
 			}
 			if isReplyToBotComment(v) {
-				if queueReplyToBotNotification(v) == replyNotificationQueueSkippedOld {
+				switch queueReplyToBotNotification(v) {
+				case replyNotificationQueueQueued:
+					queuedReplyNotifications++
+					queuedReplyNotificationExamples = appendReplyNotificationQueueExample(queuedReplyNotificationExamples, v)
+				case replyNotificationQueueSkippedOld:
 					skippedOldReplyNotifications++
 				}
 			}
@@ -454,12 +461,22 @@ func syncNotificationsOnce() {
 			break
 		}
 	}
-	if saved > 0 {
-		loger.Loger.Info("[通知同步]新增通知", zap.Int("saved", saved))
-	}
-	if skippedOldReplyNotifications > 0 && !oldReplyNotificationSkipLogged {
+	logSkippedOldReplies := skippedOldReplyNotifications > 0 && !oldReplyNotificationSkipLogged
+	if logSkippedOldReplies {
 		oldReplyNotificationSkipLogged = true
-		loger.Loger.Info("[通知同步]已跳过启动前的回复通知", zap.Int("skipped", skippedOldReplyNotifications), zap.Int64("queue_start", notificationReplyQueueStartUnix))
+	}
+	if saved > 0 || queuedReplyNotifications > 0 || logSkippedOldReplies {
+		fields := []zap.Field{
+			zap.Int("saved", saved),
+			zap.Int("queued_replies", queuedReplyNotifications),
+		}
+		if logSkippedOldReplies {
+			fields = append(fields, zap.Int("skipped_old_replies", skippedOldReplyNotifications), zap.Int64("queue_start", notificationReplyQueueStartUnix))
+		}
+		if len(queuedReplyNotificationExamples) > 0 {
+			fields = append(fields, zap.Strings("queued_reply_examples", queuedReplyNotificationExamples))
+		}
+		loger.Loger.Info("[通知同步]同步完成", fields...)
 	}
 }
 
@@ -476,6 +493,13 @@ func notificationSource(v Msg) string {
 		return "reply_to_bot"
 	}
 	return "notification"
+}
+
+func appendReplyNotificationQueueExample(examples []string, v Msg) []string {
+	if len(examples) >= replyNotificationQueueExampleLimit {
+		return examples
+	}
+	return append(examples, fmt.Sprintf("msg_id=%d comment_id=%d link_id=%d user_id=%d user_name=%s", v.MsgID, v.CommentID, v.LinkID, v.UserID, v.UserName))
 }
 
 func queueReplyToBotNotification(v Msg) replyNotificationQueueStatus {
@@ -500,9 +524,6 @@ func queueReplyToBotNotification(v Msg) replyNotificationQueueStatus {
 	}
 	if shouldQueueMessage(v) {
 		db.InsertWithUserName(v.MsgID, v.CommentID, v.RootCommentID, v.LinkID, v.UserID, v.UserName, v.CommentText, false)
-		if loger.Loger != nil {
-			loger.Loger.Info("[通知同步]已加入回复我的评论队列", zap.Int("msg_id", v.MsgID), zap.Int("comment_id", v.CommentID), zap.Int("reply_comment_id", v.ReplyCommentID), zap.Int("reply_user_id", v.ReplyUserID), zap.Int("link_id", v.LinkID), zap.Int("user_id", v.UserID), zap.String("user_name", v.UserName))
-		}
 		return replyNotificationQueueQueued
 	}
 	return replyNotificationQueueIgnored
