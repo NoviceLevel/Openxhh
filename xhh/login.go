@@ -84,6 +84,7 @@ func Qr() {
 	}
 	fmt.Println("二维码图片已保存到 qrcode.png")
 	fmt.Println("手机终端如果显示变形，请优先打开 qrcode.png 扫描")
+	fmt.Println("If terminal scanning fails, open Web UI /qrcode or /qrcode.png and scan the PNG image.")
 	fmt.Println(renderTerminalQRCode(code, terminalColumns()))
 	for {
 		path := "/account/qr_state/"

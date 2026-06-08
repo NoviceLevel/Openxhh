@@ -507,6 +507,8 @@ func main() {
 	mux.HandleFunc("/", state.handleIndex)
 	mux.HandleFunc("/login", state.handleLogin)
 	mux.HandleFunc("/logout", state.requireAuth(state.handleLogout))
+	mux.HandleFunc("/qrcode.png", state.requireAuth(state.handleQRCodeImage))
+	mux.HandleFunc("/qrcode", state.requireAuth(state.handleQRCodePage))
 	mux.HandleFunc("/api/status", state.requireAuth(state.handleStatus))
 	mux.HandleFunc("/api/config", state.requireAuth(state.handleConfig))
 	mux.HandleFunc("/api/config/test-ai", state.requireAuth(state.handleConfigTestAI))
@@ -684,6 +686,31 @@ func handleAdminAvatar(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "image/png")
 	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 	http.ServeContent(w, r, "admin-avatar.png", time.Time{}, bytes.NewReader(adminAvatar))
+}
+
+func (s *serverState) handleQRCodeImage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	path := filepath.Join(s.rootDir, "qrcode.png")
+	if _, err := os.Stat(path); err != nil {
+		http.Error(w, "qrcode.png not found; run ./Openxhh -mode login first", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Cache-Control", "no-store")
+	http.ServeFile(w, r, path)
+}
+
+func (s *serverState) handleQRCodePage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	_, _ = w.Write([]byte(`<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Openxhh QR</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#f7f8fb;font-family:system-ui,sans-serif;color:#111827}.wrap{text-align:center;padding:24px}img{width:min(82vw,520px);height:auto;image-rendering:pixelated;background:#fff;padding:18px;border-radius:16px;box-shadow:0 14px 36px rgba(15,23,42,.14)}p{color:#667085}</style></head><body><main class="wrap"><img src="/qrcode.png?ts=` + strconv.FormatInt(time.Now().Unix(), 10) + `" alt="Openxhh 登录二维码"><p>如果图片过期，回到终端重新执行登录命令。</p></main></body></html>`))
 }
 
 func (s *serverState) handleLogin(w http.ResponseWriter, r *http.Request) {

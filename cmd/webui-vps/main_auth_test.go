@@ -3,7 +3,9 @@ package main
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -126,5 +128,42 @@ func TestRecordLinkLookupColumnsAreWhitelisted(t *testing.T) {
 		if validRecordLinkLookupColumn(column) {
 			t.Fatalf("validRecordLinkLookupColumn(%q) = true", column)
 		}
+	}
+}
+
+func TestQRCodeImageServesGeneratedPNG(t *testing.T) {
+	state, token := newAuthTestState(t)
+	png := []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'}
+	if err := os.WriteFile(filepath.Join(state.rootDir, "qrcode.png"), png, 0600); err != nil {
+		t.Fatalf("write qrcode.png: %v", err)
+	}
+	req := requestWithSession(http.MethodGet, "/qrcode.png", token)
+	rr := httptest.NewRecorder()
+
+	state.requireAuth(state.handleQRCodeImage)(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusOK)
+	}
+	if rr.Header().Get("Content-Type") != "image/png" {
+		t.Fatalf("Content-Type = %q, want image/png", rr.Header().Get("Content-Type"))
+	}
+	if rr.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("Cache-Control = %q, want no-store", rr.Header().Get("Cache-Control"))
+	}
+}
+
+func TestQRCodePageLinksToImage(t *testing.T) {
+	state, token := newAuthTestState(t)
+	req := requestWithSession(http.MethodGet, "/qrcode", token)
+	rr := httptest.NewRecorder()
+
+	state.requireAuth(state.handleQRCodePage)(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusOK)
+	}
+	if !strings.Contains(rr.Body.String(), "/qrcode.png") {
+		t.Fatalf("qrcode page should link image, got %q", rr.Body.String())
 	}
 }
