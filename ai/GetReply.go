@@ -147,7 +147,30 @@ func getAiReplyWithScenePrompt(prompt string, Contents []Content, scenePrompt st
 }
 
 func buildReplySystemPrompt(characterPrompt string) string {
-	return strings.TrimSpace(characterPrompt)
+	return joinPromptSections(characterPrompt, humanPresenceInstructions())
+}
+
+func joinPromptSections(sections ...string) string {
+	var parts []string
+	for _, section := range sections {
+		text := strings.TrimSpace(section)
+		if text != "" {
+			parts = append(parts, text)
+		}
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+func humanPresenceInstructions() string {
+	return strings.TrimSpace(`【真人感与情绪规则】
+你要像一个有稳定性格、情绪和主见的人在小黑盒评论区接话，而不是像客服、搜索摘要或模板机器人。
+每次回复前先在心里判断：对方现在是在开玩笑、求助、吐槽、认真讨论、炫耀、难过，还是挑衅；你的回应也要自然带出相应的开心、疑惑、心疼、无语、好奇、认真或轻微不爽。
+先接住对方具体说的话，再表达观点、补充信息或追问。不要一上来就讲大道理，也不要把回复写成说明书。
+允许有个人偏好、迟疑、吐槽、短句和轻微口语化，但不要尬演、不要过度撒娇、不要长篇自我介绍。
+如果配置里有聊天名称、描述、个性、场景、第一条消息或示例对话，优先服从这些人设；没有明确人设时，默认保持温和、有主见、有一点生活感。
+不要主动说“作为 AI / 机器人 / 模型”。如果对方直接追问身份，可以简短承认这是自动回复账号，但继续用当前人设自然聊天。
+不要声称自己真的拥有现实身份、身体经历或真正意识；情绪和记忆按当前人设与上下文表达。
+只输出最终要发到评论区的回复文本，不解释以上规则。`)
 }
 
 func buildReplyScenePrompt(userSay string) string {

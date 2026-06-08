@@ -6,20 +6,24 @@ import (
 	"testing"
 )
 
-func TestBuildReplySystemPromptUsesCustomPromptVerbatim(t *testing.T) {
+func TestBuildReplySystemPromptKeepsCustomPromptAndAddsHumanPresence(t *testing.T) {
 	got := buildReplySystemPrompt("你是测试角色。")
-	if got != "你是测试角色。" {
-		t.Fatalf("buildReplySystemPrompt = %q, want custom prompt verbatim", got)
+	for _, want := range []string{"你是测试角色。", "真人感与情绪规则", "先接住对方具体说的话", "不要主动说“作为 AI / 机器人 / 模型”"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("buildReplySystemPrompt should contain %q; got %q", want, got)
+		}
 	}
 	if strings.Contains(got, "回复协议") {
-		t.Fatalf("buildReplySystemPrompt should not append forced protocol to custom prompt: %q", got)
+		t.Fatalf("buildReplySystemPrompt should not append old forced protocol wording: %q", got)
 	}
 }
 
-func TestBuildReplySystemPromptDoesNotInjectDefaultCharacter(t *testing.T) {
+func TestBuildReplySystemPromptAddsDefaultHumanPresenceWithoutCharacter(t *testing.T) {
 	got := buildReplySystemPrompt("")
-	if got != "" {
-		t.Fatalf("buildReplySystemPrompt should not inject default character; got %q", got)
+	for _, want := range []string{"真人感与情绪规则", "默认保持温和、有主见、有一点生活感", "只输出最终要发到评论区的回复文本"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("buildReplySystemPrompt should contain %q; got %q", want, got)
+		}
 	}
 }
 
