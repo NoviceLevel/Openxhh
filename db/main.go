@@ -52,23 +52,28 @@ func Insert(msg_id, comment_a_id, comment_root_id, link_id, user_a_id int, comme
 func InsertWithUserName(msg_id, comment_a_id, comment_root_id, link_id, user_a_id int, user_a_name, comment_text string, reply bool) bool {
 	ctx := context.Background()
 	if comment_a_id > 0 && CommentExists(comment_a_id) {
-		return true
+		return false
 	}
 	if cfg.Type == "pg" {
-		_, err := pg.Conn.Exec(ctx, "INSERT INTO at (msg_id,comment_a_id,comment_root_id,link_id,user_a_id,user_a_name,comment_text,reply) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (msg_id) DO NOTHING", msg_id, comment_a_id, comment_root_id, link_id, user_a_id, user_a_name, comment_text, reply)
+		result, err := pg.Conn.Exec(ctx, "INSERT INTO at (msg_id,comment_a_id,comment_root_id,link_id,user_a_id,user_a_name,comment_text,reply) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (msg_id) DO NOTHING", msg_id, comment_a_id, comment_root_id, link_id, user_a_id, user_a_name, comment_text, reply)
 		if err != nil {
 			loger.Loger.Info("[DB]PsqlError", zap.Error(err))
 			return false
 		}
-		return true
+		return result.RowsAffected() > 0
 	}
 	if cfg.Type == "sqlite" {
-		_, err := sqlite.Db.Exec("INSERT INTO at (msg_id,comment_a_id,comment_root_id,link_id,user_a_id,user_a_name,comment_text,reply) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT (msg_id) DO NOTHING", msg_id, comment_a_id, comment_root_id, link_id, user_a_id, user_a_name, comment_text, reply)
+		result, err := sqlite.Db.Exec("INSERT INTO at (msg_id,comment_a_id,comment_root_id,link_id,user_a_id,user_a_name,comment_text,reply) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT (msg_id) DO NOTHING", msg_id, comment_a_id, comment_root_id, link_id, user_a_id, user_a_name, comment_text, reply)
 		if err != nil {
 			loger.Loger.Info("[DB]SQLiteERROR", zap.Error(err))
 			return false
 		}
-		return true
+		rows, err := result.RowsAffected()
+		if err != nil {
+			loger.Loger.Info("[DB]SQLite rows affected error", zap.Error(err))
+			return false
+		}
+		return rows > 0
 	}
 	return false
 }

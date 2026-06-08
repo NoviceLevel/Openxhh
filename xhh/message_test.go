@@ -130,6 +130,10 @@ func TestReplyToBotNotificationQueuesReply(t *testing.T) {
 	if count != 1 || text != "不是 @，但回复了机器人" || reply || rootID != 867937000 {
 		t.Fatalf("queued row = (%d,%q,%v,%d), want (1,不是 @，但回复了机器人,false,867937000)", count, text, reply, rootID)
 	}
+
+	if got := queueReplyToBotNotification(msg); got != replyNotificationQueueIgnored {
+		t.Fatalf("duplicate queue status = %v, want ignored", got)
+	}
 }
 
 func TestReplyToCurrentAccountNotificationQueuesReplyWithoutOutboundRecord(t *testing.T) {

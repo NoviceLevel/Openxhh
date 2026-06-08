@@ -523,8 +523,9 @@ func queueReplyToBotNotification(v Msg) replyNotificationQueueStatus {
 		v.RootCommentID = replyToBotRootCommentID(targetCommentID)
 	}
 	if shouldQueueMessage(v) {
-		db.InsertWithUserName(v.MsgID, v.CommentID, v.RootCommentID, v.LinkID, v.UserID, v.UserName, v.CommentText, false)
-		return replyNotificationQueueQueued
+		if db.InsertWithUserName(v.MsgID, v.CommentID, v.RootCommentID, v.LinkID, v.UserID, v.UserName, v.CommentText, false) {
+			return replyNotificationQueueQueued
+		}
 	}
 	return replyNotificationQueueIgnored
 }

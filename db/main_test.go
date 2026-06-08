@@ -132,3 +132,17 @@ func TestGetCommByUserIDsWithoutLimitReturnsAllOwners(t *testing.T) {
 		t.Fatalf("GetCommByUserIDs msg ids = [%d %d %d], want [10 20 30]", got[0].MsgID, got[1].MsgID, got[2].MsgID)
 	}
 }
+
+func TestInsertWithUserNameReturnsFalseForDuplicateComment(t *testing.T) {
+	setupSQLiteCommTest(t)
+
+	if !InsertWithUserName(100, 200, -1, 1, 300, "user", "first", false) {
+		t.Fatal("first InsertWithUserName returned false, want true")
+	}
+	if InsertWithUserName(101, 200, -1, 1, 300, "user", "duplicate comment", false) {
+		t.Fatal("duplicate comment InsertWithUserName returned true, want false")
+	}
+	if InsertWithUserName(100, 201, -1, 1, 300, "user", "duplicate msg", false) {
+		t.Fatal("duplicate msg InsertWithUserName returned true, want false")
+	}
+}

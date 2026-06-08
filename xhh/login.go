@@ -20,6 +20,8 @@ import (
 	"go.uber.org/zap"
 )
 
+const cookieFileMode os.FileMode = 0600
+
 func Login() {
 	Qr()
 }
@@ -127,7 +129,7 @@ func Qr() {
 			loger.Loger.Error("[XHH]无法序列化", zap.Error(err))
 			return
 		}
-		err = os.WriteFile("./cookie.json", Jdata, 0775)
+		err = writeCookieFile("./cookie.json", Jdata)
 		if err != nil {
 			loger.Loger.Error("[XHH]创建Cookie失败", zap.Error(err))
 			return
@@ -135,6 +137,13 @@ func Qr() {
 		fmt.Printf("\n欢迎您 -> %s | Cookie已保存\n", resps.Result.NickName)
 		return
 	}
+}
+
+func writeCookieFile(path string, data []byte) error {
+	if err := os.WriteFile(path, data, cookieFileMode); err != nil {
+		return err
+	}
+	return os.Chmod(path, cookieFileMode)
 }
 
 func GetFuckingToken() string {
