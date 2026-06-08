@@ -28,7 +28,7 @@ func TestWriteCookieFileUsesPrivatePermissions(t *testing.T) {
 	}
 }
 
-func TestRenderTerminalQRCodeAvoidsHalfBlocksOnNarrowTerminal(t *testing.T) {
+func TestRenderTerminalQRCodeCompactsNarrowTerminalOutput(t *testing.T) {
 	code, err := qrcode.New("https://example.com/login?q=mobile", qrcode.Low)
 	if err != nil {
 		t.Fatalf("qrcode.New returned error: %v", err)
@@ -38,11 +38,13 @@ func TestRenderTerminalQRCodeAvoidsHalfBlocksOnNarrowTerminal(t *testing.T) {
 	if rendered == "" {
 		t.Fatal("renderTerminalQRCode returned empty output")
 	}
-	if strings.ContainsAny(rendered, "▀▄") {
-		t.Fatalf("narrow terminal QR contains half-block characters: %q", rendered)
+	if !strings.ContainsAny(rendered, "\u2580\u2584") {
+		t.Fatalf("narrow terminal QR should use half-block compaction: %q", rendered)
 	}
-	if !strings.Contains(rendered, "█") {
-		t.Fatalf("narrow terminal QR missing full block characters: %q", rendered)
+	lineCount := len(strings.Split(strings.TrimRight(rendered, "\n"), "\n"))
+	wantLines := (len(code.Bitmap()) + 1) / 2
+	if lineCount != wantLines {
+		t.Fatalf("narrow terminal QR line count = %d, want %d", lineCount, wantLines)
 	}
 }
 
@@ -56,7 +58,7 @@ func TestRenderTerminalQRCodeUsesImageHintWhenTerminalTooNarrow(t *testing.T) {
 	if !strings.Contains(rendered, "qrcode.png") {
 		t.Fatalf("narrow terminal hint = %q, want qrcode.png", rendered)
 	}
-	if strings.Contains(rendered, "鈻?") {
+	if strings.ContainsAny(rendered, "\u2580\u2584\u2588") {
 		t.Fatalf("too-narrow terminal should not render QR blocks: %q", rendered)
 	}
 }
@@ -71,7 +73,7 @@ func TestRenderTerminalQRCodeUsesDoubleWidthWhenItFits(t *testing.T) {
 	if rendered == "" {
 		t.Fatal("renderTerminalQRCode returned empty output")
 	}
-	if !strings.Contains(rendered, "██") {
+	if !strings.Contains(rendered, "\u2588\u2588") {
 		t.Fatalf("wide terminal QR missing double-width full blocks: %q", rendered)
 	}
 }

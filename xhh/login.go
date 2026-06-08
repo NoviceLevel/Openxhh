@@ -167,7 +167,7 @@ func renderTerminalQRCode(code *qrcode.QRCode, columns int) string {
 	if columns >= width*2 {
 		return code.ToString(true)
 	}
-	return renderNarrowQRCode(bits, true)
+	return renderCompactQRCode(bits, true)
 }
 
 func renderNarrowQRCode(bits [][]bool, inverseColor bool) string {
@@ -183,6 +183,39 @@ func renderNarrowQRCode(bits [][]bool, inverseColor bool) string {
 		buf.WriteByte('\n')
 	}
 	return buf.String()
+}
+
+func renderCompactQRCode(bits [][]bool, inverseColor bool) string {
+	var buf bytes.Buffer
+	for y := 0; y < len(bits); y += 2 {
+		top := bits[y]
+		var bottom []bool
+		if y+1 < len(bits) {
+			bottom = bits[y+1]
+		}
+		for x, topBit := range top {
+			bottomBit := !inverseColor
+			if bottom != nil && x < len(bottom) {
+				bottomBit = bottom[x]
+			}
+			buf.WriteString(compactQRBlock(topBit == inverseColor, bottomBit == inverseColor))
+		}
+		buf.WriteByte('\n')
+	}
+	return buf.String()
+}
+
+func compactQRBlock(top, bottom bool) string {
+	switch {
+	case top && bottom:
+		return "\u2588"
+	case top:
+		return "\u2580"
+	case bottom:
+		return "\u2584"
+	default:
+		return " "
+	}
 }
 
 func GetFuckingToken() string {
