@@ -214,6 +214,7 @@ func setupXHHMessageQueueTest(t *testing.T) {
 	oldMaxPendingRepliesPerUser := MaxPendingRepliesPerUser
 	oldNotificationReplyQueueStartUnix := notificationReplyQueueStartUnix
 	oldOldReplyNotificationSkipLogged := oldReplyNotificationSkipLogged
+	oldLastNotificationQueueLogSignature := lastNotificationQueueLogSignature
 	oldLogger := loger.Loger
 	loger.Loger = zap.NewNop()
 	database, err := sql.Open("sqlite", ":memory:")
@@ -231,6 +232,7 @@ func setupXHHMessageQueueTest(t *testing.T) {
 	MaxPendingRepliesPerUser = defaultMaxPendingRepliesPerUser
 	notificationReplyQueueStartUnix = 1000
 	oldReplyNotificationSkipLogged = false
+	lastNotificationQueueLogSignature = ""
 	t.Cleanup(func() {
 		database.Close()
 		sqlite.Db = oldDB
@@ -244,6 +246,7 @@ func setupXHHMessageQueueTest(t *testing.T) {
 		MaxPendingRepliesPerUser = oldMaxPendingRepliesPerUser
 		notificationReplyQueueStartUnix = oldNotificationReplyQueueStartUnix
 		oldReplyNotificationSkipLogged = oldOldReplyNotificationSkipLogged
+		lastNotificationQueueLogSignature = oldLastNotificationQueueLogSignature
 		loger.Loger = oldLogger
 	})
 	_, err = sqlite.Db.Exec(`CREATE TABLE at (
@@ -305,6 +308,26 @@ func TestParseMentionControlReferenceTarget(t *testing.T) {
 	}
 	if mentionQuestionText(got) != "要艾特她啦" {
 		t.Fatalf("mentionQuestionText = %q, want 要艾特她啦", mentionQuestionText(got))
+	}
+}
+
+func TestShouldLogQueuedReplySummaryOnlyWhenChanged(t *testing.T) {
+	oldSignature := lastNotificationQueueLogSignature
+	lastNotificationQueueLogSignature = ""
+	t.Cleanup(func() { lastNotificationQueueLogSignature = oldSignature })
+
+	examples := []string{"msg_id=1 comment_id=2"}
+	if !shouldLogQueuedReplySummary(1, examples) {
+		t.Fatal("first queue summary should be logged")
+	}
+	if shouldLogQueuedReplySummary(1, examples) {
+		t.Fatal("unchanged queue summary should not be logged again")
+	}
+	if !shouldLogQueuedReplySummary(2, examples) {
+		t.Fatal("changed queue count should be logged")
+	}
+	if shouldLogQueuedReplySummary(0, examples) {
+		t.Fatal("empty queue summary should not be logged")
 	}
 }
 

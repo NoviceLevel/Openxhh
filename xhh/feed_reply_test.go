@@ -6,6 +6,7 @@ import (
 	"openxhh/db"
 	"openxhh/loger"
 	"openxhh/sqlite"
+	"strings"
 	"testing"
 	"time"
 
@@ -166,6 +167,15 @@ func TestFeedReplyQualityIssue(t *testing.T) {
 	for _, tt := range tests {
 		if got := feedReplyQualityIssue(tt.reply, tt.title); got != tt.want {
 			t.Fatalf("%s: feedReplyQualityIssue = %q, want %q", tt.name, got, tt.want)
+		}
+	}
+}
+
+func TestFeedReplyRetryInstructionKeepsFeedRepliesSubtle(t *testing.T) {
+	got := feedReplyRetryInstruction("原始指令", "太像角色表演")
+	for _, want := range []string{"原始指令", "太像角色表演", "普通路过网友", "角色味只轻轻露出"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("feedReplyRetryInstruction missing %q in %q", want, got)
 		}
 	}
 }

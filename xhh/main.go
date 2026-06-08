@@ -37,6 +37,7 @@ const maxReplyRetries = 5
 var replyRetryCounts sync.Map
 var notificationReplyQueueStartUnix = time.Now().Unix()
 var oldReplyNotificationSkipLogged bool
+var lastNotificationQueueLogSignature string
 
 const messagePageLimit = 20
 const maxMessagePages = 5
@@ -465,7 +466,8 @@ func syncNotificationsOnce() {
 	if logSkippedOldReplies {
 		oldReplyNotificationSkipLogged = true
 	}
-	if saved > 0 || queuedReplyNotifications > 0 || logSkippedOldReplies {
+	logQueuedReplySummary := shouldLogQueuedReplySummary(queuedReplyNotifications, queuedReplyNotificationExamples)
+	if saved > 0 || logQueuedReplySummary || logSkippedOldReplies {
 		fields := []zap.Field{
 			zap.Int("saved", saved),
 			zap.Int("queued_replies", queuedReplyNotifications),
@@ -473,11 +475,23 @@ func syncNotificationsOnce() {
 		if logSkippedOldReplies {
 			fields = append(fields, zap.Int("skipped_old_replies", skippedOldReplyNotifications), zap.Int64("queue_start", notificationReplyQueueStartUnix))
 		}
-		if len(queuedReplyNotificationExamples) > 0 {
+		if logQueuedReplySummary && len(queuedReplyNotificationExamples) > 0 {
 			fields = append(fields, zap.Strings("queued_reply_examples", queuedReplyNotificationExamples))
 		}
 		loger.Loger.Info("[通知同步]同步完成", fields...)
 	}
+}
+
+func shouldLogQueuedReplySummary(count int, examples []string) bool {
+	if count <= 0 {
+		return false
+	}
+	signature := fmt.Sprintf("%d|%s", count, strings.Join(examples, "|"))
+	if signature == lastNotificationQueueLogSignature {
+		return false
+	}
+	lastNotificationQueueLogSignature = signature
+	return true
 }
 
 type replyNotificationQueueStatus int
@@ -914,6 +928,7 @@ func regeneratePreviousBotReply(v db.CommStruct, mentionControl MentionControl) 
 	regenerateContext := []ai.Content{{Type: "text", Text: "Previous bot reply to regenerate:\n" + previous[0].Text}}
 	info = append(regenerateContext, info...)
 	info = appendOwnerContext(info, v.Uid)
+	info = appendUserMemoryContext(info, v.Uid, v.UserName)
 	questionText := mentionQuestionText(mentionControl)
 	if questionText == "" {
 		questionText = "Regenerate the previous bot reply. Keep the answer natural, avoid repeating the previous wording, and answer the current user request."
@@ -929,7 +944,11 @@ func regeneratePreviousBotReply(v db.CommStruct, mentionControl MentionControl) 
 	if mention != "" && ShouldMentionTarget(v.Text) {
 		replyText = mention + " " + replyText
 	}
-	return replyWithOptionalImage(v, replyText, questionText, info)
+	ok := replyWithOptionalImage(v, replyText, questionText, info)
+	if ok {
+		rememberSuccessfulReply(v, questionText, replyText)
+	}
+	return ok
 }
 
 func replyWithAiComment(v db.CommStruct, mentionControl MentionControl) bool {
@@ -938,6 +957,7 @@ func replyWithAiComment(v db.CommStruct, mentionControl MentionControl) bool {
 		loger.Loger.Warn("[XHH]无法整理@消息上下文，使用原评论直接回复", zap.Int("comment_id", v.CommentID), zap.Int("link_id", v.LinkID))
 	}
 	Info = appendOwnerContext(Info, v.Uid)
+	Info = appendUserMemoryContext(Info, v.Uid, v.UserName)
 	mentionTrigger := ShouldMentionTarget(v.Text)
 	mentionTarget := mention != "" && mentionTrigger
 	loger.Loger.Info("[XHH]Mention decision", zap.Bool("trigger", mentionTrigger), zap.Bool("hasMention", mention != ""))
@@ -971,7 +991,11 @@ func replyWithAiComment(v db.CommStruct, mentionControl MentionControl) bool {
 	} else if mentionTarget {
 		ReplyText = mention + " " + ReplyText
 	}
-	return replyWithOptionalImage(v, ReplyText, questionText, Info)
+	ok := replyWithOptionalImage(v, ReplyText, questionText, Info)
+	if ok {
+		rememberSuccessfulReply(v, questionText, ReplyText)
+	}
+	return ok
 }
 
 func isPronounTarget(target string) bool {

@@ -170,7 +170,7 @@ func processFeedLink(link feedLink) db.FeedReplyRecord {
 		topics = link.Topics
 		tags = link.Tags
 	}
-	instruction := "请根据这篇帖子写一条符合上下文的短评论。如果不适合回复，请只输出 SKIP。标题：" + link.Title + "\n正文摘要：" + link.Description
+	instruction := "请根据这篇帖子写一条符合上下文的短评论。如果不适合回复，请只输出 SKIP。首页自动评论要更像普通路过网友，先看懂帖子再短评；角色味只轻轻露出，不要主动表演设定或高频使用专属口头禅。标题：" + link.Title + "\n正文摘要：" + link.Description
 	logFields := []zap.Field{zap.Bool("feed_reply", true), zap.Int("link_id", link.LinkID), zap.Int64("author_id", authorID), zap.String("author_name", link.User.UserName), zap.String("feed_title", link.Title), zap.String("question", instruction)}
 	reply := generateFeedReplyWithQualityRetry(ai.FeedReplyPromptFromConfig(config.ConfigStruct.FeedReply.Prompt), contents, instruction, link.Title, topics, tags, logFields...)
 	if reply == "" {
@@ -297,7 +297,7 @@ func feedReplyRetryInstruction(instruction, issue string) string {
 	builder.WriteString(instruction)
 	builder.WriteString("\n\n上一次回复质量不合格，原因：")
 	builder.WriteString(issue)
-	builder.WriteString("。请重新生成。要求：像当前配置的人设本人在小黑盒短评帖子里自然接话；先回应帖子内容；用态度、情绪和判断体现人设，不要靠反复自称名字、种族、招牌技能或口头禅证明人设；不要复述标题；不要客服腔；默认1-2句。")
+	builder.WriteString("。请重新生成。要求：像当前配置的人设本人在小黑盒短评帖子里自然接话；先回应帖子内容；首页自动评论要更像普通路过网友，角色味只轻轻露出；不要靠反复自称名字、种族、招牌技能或口头禅证明人设；不要复述标题；不要客服腔；默认1-2句。")
 	return builder.String()
 }
 
