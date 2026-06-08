@@ -36,6 +36,7 @@ func userMemoryContextText(userID int, userName string) string {
 	if len(parts) == 0 {
 		return ""
 	}
+	parts = append(parts, "Do not claim real consciousness, perfect memory, or permanent human identity.")
 	return limitUserMemoryPrompt(strings.Join(parts, "\n") + "\n使用方式：只把这些当作私下记得的关系背景，不要生硬复述，不要说“根据记忆”。")
 }
 

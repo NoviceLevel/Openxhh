@@ -34,7 +34,7 @@ func TestRenderTerminalQRCodeAvoidsHalfBlocksOnNarrowTerminal(t *testing.T) {
 		t.Fatalf("qrcode.New returned error: %v", err)
 	}
 
-	rendered := renderTerminalQRCode(code, 20)
+	rendered := renderTerminalQRCode(code, 40)
 	if rendered == "" {
 		t.Fatal("renderTerminalQRCode returned empty output")
 	}
@@ -43,6 +43,21 @@ func TestRenderTerminalQRCodeAvoidsHalfBlocksOnNarrowTerminal(t *testing.T) {
 	}
 	if !strings.Contains(rendered, "█") {
 		t.Fatalf("narrow terminal QR missing full block characters: %q", rendered)
+	}
+}
+
+func TestRenderTerminalQRCodeUsesImageHintWhenTerminalTooNarrow(t *testing.T) {
+	code, err := qrcode.New("https://example.com/login?q=mobile", qrcode.Low)
+	if err != nil {
+		t.Fatalf("qrcode.New returned error: %v", err)
+	}
+
+	rendered := renderTerminalQRCode(code, 20)
+	if !strings.Contains(rendered, "qrcode.png") {
+		t.Fatalf("narrow terminal hint = %q, want qrcode.png", rendered)
+	}
+	if strings.Contains(rendered, "鈻?") {
+		t.Fatalf("too-narrow terminal should not render QR blocks: %q", rendered)
 	}
 }
 

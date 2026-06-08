@@ -44,6 +44,21 @@ func TestAIReplyQualityIssueDoesNotTreatSkipAsValid(t *testing.T) {
 	}
 }
 
+func TestAIReplyQualityIssueRejectsRepeatedChatName(t *testing.T) {
+	oldConfig := config.ConfigStruct
+	t.Cleanup(func() {
+		config.ConfigStruct = oldConfig
+	})
+	config.ConfigStruct.Ai.ChatName = "惠惠"
+
+	if got := aiReplyQualityIssue("惠惠觉得这事可以先缓一下，惠惠不是不管你。"); got == "" {
+		t.Fatal("aiReplyQualityIssue repeated chat name = empty, want issue")
+	}
+	if got := aiReplyQualityIssue("这事可以先缓一下，我会看着点。"); got != "" {
+		t.Fatalf("aiReplyQualityIssue natural reply = %q, want empty", got)
+	}
+}
+
 func TestAIReplyRetryInstructionAvoidsForcingPersonaAnchors(t *testing.T) {
 	oldConfig := config.ConfigStruct
 	t.Cleanup(func() {

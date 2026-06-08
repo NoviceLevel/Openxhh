@@ -101,6 +101,12 @@ type loginFail struct {
 	LockedTil time.Time
 }
 
+type indexViewData struct {
+	Authed    bool
+	Service   string
+	CSRFToken string
+}
+
 type logFile struct {
 	Name    string `json:"name"`
 	Label   string `json:"label"`
@@ -662,7 +668,12 @@ func (s *serverState) handleIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_ = indexTemplate.Execute(w, map[string]any{"Authed": s.validSession(r), "Service": s.service})
+	authed := s.validSession(r)
+	data := indexViewData{Authed: authed, Service: s.service}
+	if authed {
+		data.CSRFToken = s.csrfToken(r)
+	}
+	_ = indexTemplate.Execute(w, data)
 }
 
 func handleAdminAvatar(w http.ResponseWriter, r *http.Request) {
@@ -716,7 +727,7 @@ func (s *serverState) handleLogin(w http.ResponseWriter, r *http.Request) {
 		Expires:  expiresAt,
 		MaxAge:   int(time.Until(expiresAt).Seconds()),
 	})
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "csrfToken": csrfTokenForSession(token)})
 }
 
 func (s *serverState) lockedUntil(ip string) time.Time {
@@ -752,8 +763,8 @@ func (s *serverState) validSession(r *http.Request) bool {
 	if err != nil || cookie.Value == "" {
 		return false
 	}
-	if s.validSessionToken(cookie.Value) {
-		return true
+	if !s.validSessionToken(cookie.Value) {
+		return false
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -763,6 +774,31 @@ func (s *serverState) validSession(r *http.Request) bool {
 		return false
 	}
 	return true
+}
+
+func (s *serverState) csrfToken(r *http.Request) string {
+	cookie, err := r.Cookie(webuiSessionCookieName)
+	if err != nil || cookie.Value == "" || !s.validSession(r) {
+		return ""
+	}
+	return csrfTokenForSession(cookie.Value)
+}
+
+func csrfTokenForSession(sessionToken string) string {
+	sum := sha256.Sum256([]byte("csrf:" + sessionToken))
+	return base64.RawURLEncoding.EncodeToString(sum[:])
+}
+
+func (s *serverState) validCSRF(r *http.Request) bool {
+	if r.Method == http.MethodGet || r.Method == http.MethodHead || r.Method == http.MethodOptions {
+		return true
+	}
+	token := strings.TrimSpace(r.Header.Get("X-CSRF-Token"))
+	if token == "" {
+		return false
+	}
+	expected := s.csrfToken(r)
+	return expected != "" && hmac.Equal([]byte(token), []byte(expected))
 }
 
 func (s *serverState) handleLogout(w http.ResponseWriter, r *http.Request) {
@@ -786,6 +822,10 @@ func (s *serverState) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !s.validSession(r) {
 			writeJSON(w, http.StatusUnauthorized, map[string]any{"ok": false, "error": "未登录"})
+			return
+		}
+		if !s.validCSRF(r) {
+			writeJSON(w, http.StatusForbidden, map[string]any{"ok": false, "error": "CSRF token missing or invalid"})
 			return
 		}
 		next(w, r)
@@ -4881,6 +4921,9 @@ func fillSQLiteRecordLinkMap(database *sql.DB, column string, ids []int64, links
 	if len(ids) == 0 {
 		return nil
 	}
+	if !validRecordLinkLookupColumn(column) {
+		return fmt.Errorf("invalid record lookup column: %s", column)
+	}
 	query := fmt.Sprintf("SELECT %s, link_id, COALESCE(comment_text, '') FROM at WHERE %s IN (%s)", column, column, sqlitePlaceholders(len(ids)))
 	args := int64Args(ids)
 	rows, err := database.Query(query, args...)
@@ -4926,6 +4969,9 @@ func fillPostgresRecordLinkMap(ctx context.Context, pool *pgxpool.Pool, column s
 	if len(ids) == 0 {
 		return nil
 	}
+	if !validRecordLinkLookupColumn(column) {
+		return fmt.Errorf("invalid record lookup column: %s", column)
+	}
 	query := fmt.Sprintf("SELECT %s, link_id, COALESCE(comment_text, '') FROM at WHERE %s IN (%s)", column, column, postgresPlaceholders(len(ids)))
 	args := int64Args(ids)
 	rows, err := pool.Query(ctx, query, args...)
@@ -4951,6 +4997,10 @@ func fillPostgresRecordLinkMap(ctx context.Context, pool *pgxpool.Pool, column s
 		}
 	}
 	return rows.Err()
+}
+
+func validRecordLinkLookupColumn(column string) bool {
+	return column == "msg_id" || column == "comment_a_id"
 }
 
 func sqlitePlaceholders(count int) string {
@@ -5471,17 +5521,18 @@ const emojiCacheStorageKey='openxhh.webui.emojiLibrary.v1';
 const emojiCacheTTL=24*60*60*1000;
 const recordSummaryCacheStorageKey='openxhh.webui.recordSummary.v1';
 const recordSummaryCacheTTL=5*60*1000;
+let csrfToken='{{.CSRFToken}}';
 
 function showApp(ok){loginView.classList.toggle('hidden',ok);appView.classList.toggle('hidden',!ok);if(ok){switchView(savedActiveView());bootstrap()}}
 function savedActiveView(){const name=localStorage.getItem(activeViewStorageKey)||'home';return document.querySelector('#view-'+name)?name:'home'}
-async function api(path,options={}){const res=await fetch(path,{headers:{'Content-Type':'application/json'},credentials:'same-origin',...options});const data=await res.json().catch(()=>({}));if(!res.ok)throw new Error(data.error||'请求失败');return data}
+async function api(path,options={}){const method=(options.method||'GET').toUpperCase();const headers={'Content-Type':'application/json',...(options.headers||{})};if(csrfToken&&!['GET','HEAD','OPTIONS'].includes(method))headers['X-CSRF-Token']=csrfToken;const res=await fetch(path,{credentials:'same-origin',...options,headers});const data=await res.json().catch(()=>({}));if(data.csrfToken)csrfToken=data.csrfToken;if(!res.ok)throw new Error(data.error||'请求失败');return data}
 function switchView(name){const previous=activeView;activeView=name;localStorage.setItem(activeViewStorageKey,name);document.querySelectorAll('.view').forEach(view=>view.classList.toggle('active',view.id==='view-'+name));document.querySelectorAll('.nav').forEach(btn=>btn.classList.toggle('active',btn.dataset.view===name));document.querySelector('#adminMenuBtn')?.classList.toggle('active',name==='settings');const mobile=document.querySelector('#mobileNav');if(mobile&&name!=='settings')mobile.value=name;if(name==='logs'&&previous!=='logs'){logScrollLatestOnce=true;loadCurrentLog(true)}if(name==='home'){loadAllRecords(true)}if(name==='failed-records'){if(failedRecordsMeta)failedRecordsMeta.textContent='正在读取失败发送...';loadAllRecords()}if(name==='records'){if(recordsMeta)recordsMeta.textContent='正在读取最近24小时机器人评论...';loadAllRecords()}if(name==='inbound-records'){if(inboundRecordsMeta)inboundRecordsMeta.textContent='正在读取最近24小时用户评论...';loadAllRecords()}}
 document.querySelectorAll('[data-view], [data-view-button]').forEach(el=>el.addEventListener('click',()=>switchView(el.dataset.view||el.dataset.viewButton)));
 document.querySelector('#adminMenuBtn')?.addEventListener('click',()=>switchView('settings'));
 document.querySelector('#settingsHomeBtn')?.addEventListener('click',()=>switchView('home'));
 document.querySelector('#mobileNav')?.addEventListener('change',event=>switchView(event.target.value));
 
-document.querySelector('#loginForm').addEventListener('submit',async event=>{event.preventDefault();loginToast.textContent='';try{await api('/login',{method:'POST',body:JSON.stringify({password:document.querySelector('#password').value})});showApp(true)}catch(err){loginToast.textContent=err.message}});
+document.querySelector('#loginForm').addEventListener('submit',async event=>{event.preventDefault();loginToast.textContent='';try{const data=await api('/login',{method:'POST',body:JSON.stringify({password:document.querySelector('#password').value})});if(data.csrfToken)csrfToken=data.csrfToken;showApp(true)}catch(err){loginToast.textContent=err.message}});
 function bindAction(ids,path,text){for(const id of ids){const el=document.querySelector('#'+id);if(el)el.addEventListener('click',()=>action(path,text))}}
 bindAction(['serviceStartBtn'],'/api/start','启动命令已发送');
 bindAction(['serviceStopBtn'],'/api/stop','停止命令已发送');

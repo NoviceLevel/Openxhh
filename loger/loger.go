@@ -21,11 +21,11 @@ func InitLog() {
 	if err != nil {
 		panic(err)
 	}
-	err = os.MkdirAll(wd+"/log", 0775)
+	err = os.MkdirAll(wd+"/log", 0700)
 	if err != nil {
 		panic(err)
 	}
-	File, err := os.Create(wd + "/log/" + time.Now().Format("2006-01-02_15_04_05") + ".log")
+	File, err := os.OpenFile(wd+"/log/"+time.Now().Format("2006-01-02_15_04_05")+".log", os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
 	if err != nil {
 		panic(err)
 	}

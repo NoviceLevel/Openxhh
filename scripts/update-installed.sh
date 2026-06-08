@@ -32,6 +32,27 @@ log() {
 
 }
 
+fix_runtime_permissions() {
+  chmod 700 "$INSTALL_DIR" 2>/dev/null || true
+  chmod 600 "$INSTALL_DIR/config.json" "$INSTALL_DIR/cookie.json" "$INSTALL_DIR/sql.db" "$INSTALL_DIR/webui_auth.json" "$INSTALL_DIR/webui_password.txt" 2>/dev/null || true
+  if [ -d "$INSTALL_DIR/log" ]; then
+    chmod 700 "$INSTALL_DIR/log" 2>/dev/null || true
+    find "$INSTALL_DIR/log" -type f -name '*.log' -exec chmod 600 {} + 2>/dev/null || true
+  fi
+}
+
+rollback_hint() {
+  local code="${1:-1}"
+  if [ -n "${timestamp:-}" ]; then
+    log "更新失败。可用备份回滚："
+    log "  cp $INSTALL_DIR/Openxhh.bak-$timestamp $INSTALL_DIR/Openxhh && chmod +x $INSTALL_DIR/Openxhh"
+    if [ "$INSTALL_WEBUI" != "0" ]; then
+      log "  cp $INSTALL_DIR/$WEBUI_BIN_NAME.bak-$timestamp $INSTALL_DIR/$WEBUI_BIN_NAME && chmod +x $INSTALL_DIR/$WEBUI_BIN_NAME"
+    fi
+  fi
+  exit "$code"
+}
+
 
 
 need_root() {
@@ -157,6 +178,7 @@ main() {
 
 
   timestamp="$(date +%Y%m%d-%H%M%S)"
+  trap 'rollback_hint $?' ERR
 
   service_exists=0
 
@@ -217,12 +239,14 @@ main() {
   cp "$tmp_dir/Openxhh" "$INSTALL_DIR/Openxhh"
 
   chmod +x "$INSTALL_DIR/Openxhh"
+  fix_runtime_permissions
 
   if [ "$INSTALL_WEBUI" != "0" ]; then
 
     cp "$tmp_dir/$WEBUI_BIN_NAME" "$INSTALL_DIR/$WEBUI_BIN_NAME"
 
     chmod +x "$INSTALL_DIR/$WEBUI_BIN_NAME"
+    fix_runtime_permissions
 
   fi
 
@@ -233,6 +257,7 @@ main() {
     mkdir -p "$INSTALL_DIR/scripts"
 
     cp "$tmp_dir/src/scripts/openxhh.sh" "$INSTALL_DIR/scripts/openxhh.sh"
+    chmod +x "$INSTALL_DIR/scripts/openxhh.sh"
 
     cp "$tmp_dir/src/scripts/openxhh.sh" /usr/local/bin/xhh
 

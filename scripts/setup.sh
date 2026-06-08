@@ -22,6 +22,15 @@ WEBUI_PORT="${WEBUI_PORT:-29173}"
 log() { printf '\033[1;32m[Openxhh]\033[0m %s\n' "$*"; }
 err() { printf '\033[1;31m[Openxhh]\033[0m %s\n' "$*" >&2; }
 
+fix_runtime_permissions() {
+  chmod 700 "$INSTALL_DIR" 2>/dev/null || true
+  chmod 600 "$INSTALL_DIR/config.json" "$INSTALL_DIR/cookie.json" "$INSTALL_DIR/sql.db" "$INSTALL_DIR/webui_auth.json" "$INSTALL_DIR/webui_password.txt" 2>/dev/null || true
+  if [ -d "$INSTALL_DIR/log" ]; then
+    chmod 700 "$INSTALL_DIR/log" 2>/dev/null || true
+    find "$INSTALL_DIR/log" -type f -name '*.log' -exec chmod 600 {} + 2>/dev/null || true
+  fi
+}
+
 need_root() {
   if [ "$(id -u)" -ne 0 ]; then
     err "请使用 root 运行，或使用：curl -fsSL <脚本地址> | sudo bash"
@@ -87,6 +96,7 @@ install_binaries() {
   chmod +x "$INSTALL_DIR/Openxhh"
   cp "$tmp_dir/$WEBUI_BIN_NAME" "$INSTALL_DIR/$WEBUI_BIN_NAME"
   chmod +x "$INSTALL_DIR/$WEBUI_BIN_NAME"
+  fix_runtime_permissions
   log "二进制已安装到 $INSTALL_DIR"
 }
 
@@ -226,8 +236,10 @@ main() {
   install_binaries "$tmp_dir"
   mkdir -p "$INSTALL_DIR/scripts"
   cp "$tmp_dir/src/scripts/openxhh.sh" "$INSTALL_DIR/scripts/openxhh.sh"
+  chmod +x "$INSTALL_DIR/scripts/openxhh.sh"
   install_manager_menu
   generate_config
+  fix_runtime_permissions
   create_systemd_services
   start_services
   print_summary

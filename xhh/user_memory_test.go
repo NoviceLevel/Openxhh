@@ -70,6 +70,9 @@ func TestAppendUserMemoryContextInjectsRelationshipAndMood(t *testing.T) {
 			t.Fatalf("memory context missing %q in %q", want, got)
 		}
 	}
+	if !strings.Contains(got, "Do not claim real consciousness") {
+		t.Fatalf("memory context missing consciousness boundary in %q", got)
+	}
 }
 
 func TestRememberSuccessfulReplyStoresMemoryAndMood(t *testing.T) {
