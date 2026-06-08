@@ -158,7 +158,7 @@ func TestFeedReplyQualityIssue(t *testing.T) {
 		want  string
 	}{
 		{name: "valid role reply", reply: "这价格有点像把金币丢进无效咏唱里，本大人看了都摇头。", want: ""},
-		{name: "generic fantasy reply", reply: "这价格看着还行，火力也不错，可以考虑。", want: "缺少当前人设锚点"},
+		{name: "natural reply without explicit anchor", reply: "这价格看着还行，火力也不错，可以考虑。", want: ""},
 		{name: "customer tone", reply: "建议你先看看预算和需求。", want: "客服腔或暴露 AI 身份"},
 		{name: "repeat title", title: "求评价，不玻璃心。", reply: "求评价，不玻璃心。这个配置还可以。", want: "复述标题"},
 		{name: "skip allowed", reply: "SKIP", want: ""},
@@ -194,8 +194,8 @@ func TestFeedReplyQualityIssueUsesConfiguredPersonaAnchors(t *testing.T) {
 	if got := feedReplyQualityIssue("悠悠觉得这个配置还可以，只是别太冲动。", ""); got != "" {
 		t.Fatalf("feedReplyQualityIssue with configured anchor = %q, want empty", got)
 	}
-	if got := feedReplyQualityIssue("爆裂一击就够了，本大人看了都摇头。", ""); got != "缺少当前人设锚点" {
-		t.Fatalf("feedReplyQualityIssue should not accept hardcoded Megumin anchors = %q", got)
+	if got := feedReplyQualityIssue("爆裂一击就够了，本大人看了都摇头。", ""); got != "" {
+		t.Fatalf("feedReplyQualityIssue should not reject natural wording without configured anchor = %q", got)
 	}
 }
 

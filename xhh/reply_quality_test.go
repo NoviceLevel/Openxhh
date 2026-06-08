@@ -10,7 +10,7 @@ import (
 	"go.uber.org/zap"
 )
 
-func TestAIReplyQualityIssueUsesAIPersonaAnchors(t *testing.T) {
+func TestAIReplyQualityIssueAllowsNaturalReplyWithoutExplicitPersonaAnchor(t *testing.T) {
 	oldConfig := config.ConfigStruct
 	t.Cleanup(func() {
 		config.ConfigStruct = oldConfig
@@ -27,8 +27,8 @@ func TestAIReplyQualityIssueUsesAIPersonaAnchors(t *testing.T) {
 	if got := aiReplyQualityIssue("Megumin says explosion solves this."); got != "" {
 		t.Fatalf("aiReplyQualityIssue valid reply = %q, want empty", got)
 	}
-	if got := aiReplyQualityIssue("That looks pretty reasonable."); got == "" {
-		t.Fatal("aiReplyQualityIssue generic reply = empty, want issue")
+	if got := aiReplyQualityIssue("That looks pretty reasonable."); got != "" {
+		t.Fatalf("aiReplyQualityIssue natural reply = %q, want empty", got)
 	}
 }
 
@@ -44,7 +44,7 @@ func TestAIReplyQualityIssueDoesNotTreatSkipAsValid(t *testing.T) {
 	}
 }
 
-func TestAIReplyRetryInstructionIncludesAnchors(t *testing.T) {
+func TestAIReplyRetryInstructionAvoidsForcingPersonaAnchors(t *testing.T) {
 	oldConfig := config.ConfigStruct
 	t.Cleanup(func() {
 		config.ConfigStruct = oldConfig
@@ -53,9 +53,14 @@ func TestAIReplyRetryInstructionIncludesAnchors(t *testing.T) {
 	config.ConfigStruct.Ai.Personality = "explosion magic"
 
 	got := aiReplyRetryInstruction("hello", "missing persona")
-	for _, want := range []string{"hello", "missing persona", "Megumin", "explosion"} {
+	for _, want := range []string{"hello", "missing persona", "不要靠反复自称名字", "用态度、情绪和判断体现人设"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("aiReplyRetryInstruction missing %q in %q", want, got)
+		}
+	}
+	for _, unwanted := range []string{"Megumin", "explosion", "人设锚点"} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("aiReplyRetryInstruction should not force anchor %q in %q", unwanted, got)
 		}
 	}
 }
@@ -68,8 +73,8 @@ func TestGenerateAIReplyWithQualityRetryUntilValid(t *testing.T) {
 	calls := 0
 	getAIReplyForQualityRetry = func([]ai.Content, string, []ai.Topics, []ai.Tags, ...zap.Field) string {
 		calls++
-		if calls < 4 {
-			return "That looks reasonable."
+		if calls == 1 {
+			return "建议你先别急着买。"
 		}
 		return "Megumin says explosion is the answer."
 	}
@@ -81,12 +86,12 @@ func TestGenerateAIReplyWithQualityRetryUntilValid(t *testing.T) {
 	if got != "Megumin says explosion is the answer." {
 		t.Fatalf("reply = %q", got)
 	}
-	if calls != 4 {
-		t.Fatalf("calls = %d, want 4", calls)
+	if calls != 2 {
+		t.Fatalf("calls = %d, want 2", calls)
 	}
 }
 
-func TestGenerateAIReplyWithQualityRetryStopsAtLimit(t *testing.T) {
+func TestGenerateAIReplyWithQualityRetryAcceptsNaturalReplyWithoutExplicitAnchor(t *testing.T) {
 	restoreReplyQualityTestState(t)
 	config.ConfigStruct.Ai.ChatName = "Megumin"
 	config.ConfigStruct.Ai.Personality = "explosion magic"
@@ -98,14 +103,14 @@ func TestGenerateAIReplyWithQualityRetryStopsAtLimit(t *testing.T) {
 	}
 
 	got, skipped := generateAIReplyWithQualityRetry(nil, "hello", nil, nil)
-	if !skipped {
-		t.Fatal("generateAIReplyWithQualityRetry skipped = false, want true")
+	if skipped {
+		t.Fatal("generateAIReplyWithQualityRetry skipped = true, want false")
 	}
-	if got != "" {
-		t.Fatalf("reply = %q, want empty", got)
+	if got != "That looks reasonable." {
+		t.Fatalf("reply = %q", got)
 	}
-	if calls != maxReplyQualityAttempts {
-		t.Fatalf("calls = %d, want %d", calls, maxReplyQualityAttempts)
+	if calls != 1 {
+		t.Fatalf("calls = %d, want 1", calls)
 	}
 }
 
@@ -117,8 +122,8 @@ func TestGenerateFeedReplyWithQualityRetryUntilValid(t *testing.T) {
 	calls := 0
 	getAIFeedReplyForQualityRetry = func(string, []ai.Content, string, []ai.Topics, []ai.Tags, ...zap.Field) string {
 		calls++
-		if calls < 3 {
-			return "That looks reasonable."
+		if calls == 1 {
+			return "建议你先看看预算和需求。"
 		}
 		return "Megumin says explosion belongs in this post."
 	}
@@ -127,8 +132,8 @@ func TestGenerateFeedReplyWithQualityRetryUntilValid(t *testing.T) {
 	if got != "Megumin says explosion belongs in this post." {
 		t.Fatalf("reply = %q", got)
 	}
-	if calls != 3 {
-		t.Fatalf("calls = %d, want 3", calls)
+	if calls != 2 {
+		t.Fatalf("calls = %d, want 2", calls)
 	}
 }
 

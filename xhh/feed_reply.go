@@ -266,9 +266,6 @@ func replyQualityIssue(reply string, title string, anchors []string, checkTitle 
 	if checkTitle && repeatsFeedTitle(reply, title) {
 		return "复述标题"
 	}
-	if len(anchors) > 0 && !containsAnyFold(reply, anchors) {
-		return "缺少当前人设锚点"
-	}
 	return ""
 }
 
@@ -300,12 +297,7 @@ func feedReplyRetryInstruction(instruction, issue string) string {
 	builder.WriteString(instruction)
 	builder.WriteString("\n\n上一次回复质量不合格，原因：")
 	builder.WriteString(issue)
-	builder.WriteString("。请重新生成。要求：必须像当前配置的人设本人在小黑盒短评帖子；先回应帖子内容；体现当前人设的身份感和说话习惯")
-	if anchors := feedReplyPersonaAnchors(); len(anchors) > 0 {
-		builder.WriteString("，可自然使用这些人设锚点：")
-		builder.WriteString(strings.Join(limitStringSlice(anchors, 8), "、"))
-	}
-	builder.WriteString("；不要复述标题；不要客服腔；默认1-2句。")
+	builder.WriteString("。请重新生成。要求：像当前配置的人设本人在小黑盒短评帖子里自然接话；先回应帖子内容；用态度、情绪和判断体现人设，不要靠反复自称名字、种族、招牌技能或口头禅证明人设；不要复述标题；不要客服腔；默认1-2句。")
 	return builder.String()
 }
 
