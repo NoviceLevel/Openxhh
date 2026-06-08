@@ -21,7 +21,10 @@ import (
 	"go.uber.org/zap"
 )
 
-const cookieFileMode os.FileMode = 0600
+const (
+	cookieFileMode       os.FileMode = 0600
+	loginQRCodeImageSize             = 360
+)
 
 func Login() {
 	Qr()
@@ -77,7 +80,7 @@ func Qr() {
 		loger.Loger.Error("[XHH]无法生成二维码", zap.Error(err))
 		return
 	}
-	err = code.WriteFile(512, "qrcode.png")
+	err = code.WriteFile(loginQRCodeImageSize, "qrcode.png")
 	if err != nil {
 		loger.Loger.Error("[XHH]创建二维码图片失败", zap.Error(err))
 		return

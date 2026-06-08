@@ -168,7 +168,7 @@ func TestQRCodePageLinksToImage(t *testing.T) {
 	}
 }
 
-func TestQRCodePageKeepsPNGAtNaturalScanSize(t *testing.T) {
+func TestQRCodePageShowsCompactScanSize(t *testing.T) {
 	state, token := newAuthTestState(t)
 	req := requestWithSession(http.MethodGet, "/qrcode", token)
 	rr := httptest.NewRecorder()
@@ -176,7 +176,7 @@ func TestQRCodePageKeepsPNGAtNaturalScanSize(t *testing.T) {
 	state.requireAuth(state.handleQRCodePage)(rr, req)
 
 	body := rr.Body.String()
-	for _, want := range []string{"overflow:auto", "width:512px", "max-width:none"} {
+	for _, want := range []string{"overflow:auto", "width:360px", "height:360px"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("qrcode page missing %q in %q", want, body)
 		}
