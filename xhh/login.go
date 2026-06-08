@@ -1,6 +1,7 @@
 package xhh
 
 import (
+	"bytes"
 	"crypto/md5"
 	"crypto/rsa"
 	"crypto/x509"
@@ -50,7 +51,6 @@ func Qr() {
 	var resps data
 	read, err := io.ReadAll(resp.Body)
 	_ = resp.Body.Close()
-	fmt.Println(string(read))
 	if err != nil {
 		loger.Loger.Error("[XHH]Can't Read Body")
 		return
@@ -65,6 +65,7 @@ func Qr() {
 		loger.Loger.Error("[XHH]登录二维码为空")
 		return
 	}
+	fmt.Println("扫码链接：", qrURL)
 	qrLoginURL, err := url.Parse(qrURL)
 	if err != nil || qrLoginURL.RawQuery == "" {
 		loger.Loger.Error("[XHH]登录二维码地址格式异常", zap.String("qr_url", qrURL), zap.Error(err))
@@ -76,14 +77,14 @@ func Qr() {
 		loger.Loger.Error("[XHH]无法生成二维码", zap.Error(err))
 		return
 	}
-	err = code.WriteFile(256, "qrcode.png")
+	err = code.WriteFile(512, "qrcode.png")
 	if err != nil {
 		loger.Loger.Error("[XHH]创建二维码图片失败", zap.Error(err))
 		return
 	}
 	fmt.Println("二维码图片已保存到 qrcode.png")
-	ascii := code.ToSmallString(true)
-	fmt.Println(ascii)
+	fmt.Println("手机终端如果显示变形，请优先打开 qrcode.png 扫描")
+	fmt.Println(renderTerminalQRCode(code, terminalColumns()))
 	for {
 		path := "/account/qr_state/"
 		resp := SendReq("GET", path, nil, qrStateQuery)
@@ -144,6 +145,41 @@ func writeCookieFile(path string, data []byte) error {
 		return err
 	}
 	return os.Chmod(path, cookieFileMode)
+}
+
+func terminalColumns() int {
+	columns, err := strconv.Atoi(strings.TrimSpace(os.Getenv("COLUMNS")))
+	if err != nil || columns <= 0 {
+		return 0
+	}
+	return columns
+}
+
+func renderTerminalQRCode(code *qrcode.QRCode, columns int) string {
+	bits := code.Bitmap()
+	if len(bits) == 0 {
+		return ""
+	}
+	width := len(bits[0])
+	if columns >= width*2 {
+		return code.ToString(true)
+	}
+	return renderNarrowQRCode(bits, true)
+}
+
+func renderNarrowQRCode(bits [][]bool, inverseColor bool) string {
+	var buf bytes.Buffer
+	for _, row := range bits {
+		for _, bit := range row {
+			if bit == inverseColor {
+				buf.WriteString("█")
+			} else {
+				buf.WriteString(" ")
+			}
+		}
+		buf.WriteByte('\n')
+	}
+	return buf.String()
 }
 
 func GetFuckingToken() string {
