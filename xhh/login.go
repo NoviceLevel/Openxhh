@@ -162,13 +162,13 @@ func renderTerminalQRCode(code *qrcode.QRCode, columns int) string {
 		return ""
 	}
 	width := len(bits[0])
-	if columns > 0 && columns < width {
-		return fmt.Sprintf("Terminal is too narrow for a scannable QR code (%d columns, need at least %d). Open qrcode.png and scan the image.\n", columns, width)
-	}
 	if columns >= width*2 {
 		return code.ToString(true)
 	}
-	return renderCompactQRCode(bits, true)
+	if columns > 0 {
+		return fmt.Sprintf("Terminal is too narrow for a scannable QR code (%d columns, need at least %d). Open qrcode.png or Web UI /qrcode and scan the PNG image.\n", columns, width*2)
+	}
+	return "Terminal width is unknown. Open qrcode.png or Web UI /qrcode and scan the PNG image.\n"
 }
 
 func renderNarrowQRCode(bits [][]bool, inverseColor bool) string {

@@ -28,23 +28,21 @@ func TestWriteCookieFileUsesPrivatePermissions(t *testing.T) {
 	}
 }
 
-func TestRenderTerminalQRCodeCompactsNarrowTerminalOutput(t *testing.T) {
+func TestRenderTerminalQRCodeUsesImageHintOnMobileWidth(t *testing.T) {
 	code, err := qrcode.New("https://example.com/login?q=mobile", qrcode.Low)
 	if err != nil {
 		t.Fatalf("qrcode.New returned error: %v", err)
 	}
 
 	rendered := renderTerminalQRCode(code, 40)
-	if rendered == "" {
-		t.Fatal("renderTerminalQRCode returned empty output")
+	if !strings.Contains(rendered, "qrcode.png") {
+		t.Fatalf("mobile terminal hint = %q, want qrcode.png", rendered)
 	}
-	if !strings.ContainsAny(rendered, "\u2580\u2584") {
-		t.Fatalf("narrow terminal QR should use half-block compaction: %q", rendered)
+	if !strings.Contains(rendered, "/qrcode") {
+		t.Fatalf("mobile terminal hint = %q, want Web UI qrcode path", rendered)
 	}
-	lineCount := len(strings.Split(strings.TrimRight(rendered, "\n"), "\n"))
-	wantLines := (len(code.Bitmap()) + 1) / 2
-	if lineCount != wantLines {
-		t.Fatalf("narrow terminal QR line count = %d, want %d", lineCount, wantLines)
+	if strings.ContainsAny(rendered, "\u2580\u2584\u2588") {
+		t.Fatalf("mobile terminal should not render compressed QR blocks: %q", rendered)
 	}
 }
 
@@ -60,6 +58,21 @@ func TestRenderTerminalQRCodeUsesImageHintWhenTerminalTooNarrow(t *testing.T) {
 	}
 	if strings.ContainsAny(rendered, "\u2580\u2584\u2588") {
 		t.Fatalf("too-narrow terminal should not render QR blocks: %q", rendered)
+	}
+}
+
+func TestRenderTerminalQRCodeUsesImageHintWhenColumnsUnknown(t *testing.T) {
+	code, err := qrcode.New("https://example.com/login?q=mobile", qrcode.Low)
+	if err != nil {
+		t.Fatalf("qrcode.New returned error: %v", err)
+	}
+
+	rendered := renderTerminalQRCode(code, 0)
+	if !strings.Contains(rendered, "qrcode.png") {
+		t.Fatalf("unknown-width terminal hint = %q, want qrcode.png", rendered)
+	}
+	if strings.ContainsAny(rendered, "\u2580\u2584\u2588") {
+		t.Fatalf("unknown-width terminal should not render QR blocks: %q", rendered)
 	}
 }
 

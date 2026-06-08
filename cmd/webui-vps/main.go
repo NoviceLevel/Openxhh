@@ -710,7 +710,11 @@ func (s *serverState) handleQRCodePage(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	_, _ = w.Write([]byte(`<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Openxhh QR</title><style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#f7f8fb;font-family:system-ui,sans-serif;color:#111827}.wrap{text-align:center;padding:24px}img{width:min(82vw,520px);height:auto;image-rendering:pixelated;background:#fff;padding:18px;border-radius:16px;box-shadow:0 14px 36px rgba(15,23,42,.14)}p{color:#667085}</style></head><body><main class="wrap"><img src="/qrcode.png?ts=` + strconv.FormatInt(time.Now().Unix(), 10) + `" alt="Openxhh 登录二维码"><p>如果图片过期，回到终端重新执行登录命令。</p></main></body></html>`))
+	_, _ = w.Write([]byte(qrCodePageHTML(time.Now().Unix())))
+}
+
+func qrCodePageHTML(unixTime int64) string {
+	return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Openxhh QR</title><style>body{margin:0;min-height:100vh;background:#f7f8fb;font-family:system-ui,sans-serif;color:#111827}.wrap{min-height:100vh;display:grid;place-items:center;text-align:center;padding:24px;box-sizing:border-box}.qr-scroll{max-width:100%;overflow:auto;padding:4px 0 18px}img{display:block;width:512px;max-width:none;height:512px;image-rendering:pixelated;background:#fff;padding:24px;border-radius:12px;box-shadow:0 14px 36px rgba(15,23,42,.14);box-sizing:border-box}p{margin:16px 0 0;color:#667085;font-size:15px;line-height:1.5}</style></head><body><main class="wrap"><div class="qr-scroll"><img src="/qrcode.png?ts=` + strconv.FormatInt(unixTime, 10) + `" alt="Openxhh login QR code"></div><p>If this image expires, run the login command again.</p></main></body></html>`
 }
 
 func (s *serverState) handleLogin(w http.ResponseWriter, r *http.Request) {

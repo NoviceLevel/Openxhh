@@ -167,3 +167,18 @@ func TestQRCodePageLinksToImage(t *testing.T) {
 		t.Fatalf("qrcode page should link image, got %q", rr.Body.String())
 	}
 }
+
+func TestQRCodePageKeepsPNGAtNaturalScanSize(t *testing.T) {
+	state, token := newAuthTestState(t)
+	req := requestWithSession(http.MethodGet, "/qrcode", token)
+	rr := httptest.NewRecorder()
+
+	state.requireAuth(state.handleQRCodePage)(rr, req)
+
+	body := rr.Body.String()
+	for _, want := range []string{"overflow:auto", "width:512px", "max-width:none"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("qrcode page missing %q in %q", want, body)
+		}
+	}
+}
