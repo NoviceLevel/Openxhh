@@ -227,13 +227,15 @@ func feedText(link feedLink) string {
 	return strings.TrimSpace(strings.Join(parts, "\n"))
 }
 
+const xhhCommentMaxRunes = 1000
+
 func sanitizeFeedReply(reply string) string {
 	reply = strings.TrimSpace(reply)
 	reply = strings.TrimPrefix(reply, "```json")
 	reply = strings.TrimPrefix(reply, "```")
 	reply = strings.TrimSuffix(reply, "```")
 	reply = strings.TrimSpace(reply)
-	return limitFeedText(reply, 220)
+	return limitFeedText(reply, xhhCommentMaxRunes)
 }
 
 func shouldSkipFeedReply(reply string) bool {
@@ -257,7 +259,7 @@ func replyQualityIssue(reply string, title string, anchors []string, checkTitle 
 	if shouldSkipFeedReply(reply) {
 		return "回复为跳过指令"
 	}
-	if len([]rune(reply)) > 120 {
+	if len([]rune(reply)) > xhhCommentMaxRunes {
 		return "回复过长"
 	}
 	if containsAny(reply, []string{"我理解你的意思", "总结一下", "建议你", "您好", "作为AI", "作为 AI", "我是AI", "我是 AI", "机器人"}) {
@@ -335,8 +337,8 @@ func feedReplyRetryInstruction(instruction, issue string) string {
 	builder.WriteString(instruction)
 	builder.WriteString("\n\n上一次回复质量不合格，原因：")
 	builder.WriteString(issue)
-	builder.WriteString("。请重新生成。要求：像当前配置的人设本人在小黑盒短评帖子里自然接话；先回应帖子内容；首页自动评论要更像普通路过网友，角色味只轻轻露出；不要靠反复自称名字、种族、招牌技能或口头禅证明人设；不要复述标题；不要客服腔；默认1-2句。")
-	builder.WriteString("\nNatural rewrite note: answer the post itself first; do not stack persona terms such as 红魔族、爆裂魔法、本大魔法师、委托、召唤、咒文 in one short comment.")
+	builder.WriteString("。请重新生成。要求：像当前配置的人设本人在小黑盒帖子里自然接话；先回应帖子内容；可以保留动作、停顿、情绪和一点酒馆式反应；不要靠反复自称名字、种族、招牌技能或口头禅证明人设；不要复述标题；不要客服腔；不需要刻意压成短评，但必须适合作为公开评论。")
+	builder.WriteString("\nNatural rewrite note: answer the post itself first; do not stack persona terms such as 红魔族、爆裂魔法、本大魔法师、委托、召唤、咒文 in one reply.")
 	return builder.String()
 }
 

@@ -171,9 +171,36 @@ func TestFeedReplyQualityIssue(t *testing.T) {
 	}
 }
 
+func TestReplyQualityAllowsTavernLengthWithinXHHLimit(t *testing.T) {
+	oldConfig := config.ConfigStruct
+	t.Cleanup(func() {
+		config.ConfigStruct = oldConfig
+	})
+	config.ConfigStruct.Ai.ChatName = "惠惠"
+
+	longReply := strings.Repeat("这是一句带动作和情绪的酒馆回复。", 20)
+	if len([]rune(longReply)) <= 120 {
+		t.Fatalf("test reply length = %d, want above old limit", len([]rune(longReply)))
+	}
+	if got := aiReplyQualityIssue(longReply); got != "" {
+		t.Fatalf("aiReplyQualityIssue = %q, want empty for tavern-length reply", got)
+	}
+	if got := feedReplyQualityIssue(longReply, ""); got != "" {
+		t.Fatalf("feedReplyQualityIssue = %q, want empty for tavern-length feed reply", got)
+	}
+
+	tooLong := strings.Repeat("测", xhhCommentMaxRunes+1)
+	if got := aiReplyQualityIssue(tooLong); got != "回复过长" {
+		t.Fatalf("aiReplyQualityIssue over limit = %q, want 回复过长", got)
+	}
+	if got := feedReplyQualityIssue(tooLong, ""); got != "回复过长" {
+		t.Fatalf("feedReplyQualityIssue over limit = %q, want 回复过长", got)
+	}
+}
+
 func TestFeedReplyRetryInstructionKeepsFeedRepliesSubtle(t *testing.T) {
 	got := feedReplyRetryInstruction("原始指令", "太像角色表演")
-	for _, want := range []string{"原始指令", "太像角色表演", "普通路过网友", "角色味只轻轻露出"} {
+	for _, want := range []string{"原始指令", "太像角色表演", "酒馆式反应", "不需要刻意压成短评"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("feedReplyRetryInstruction missing %q in %q", want, got)
 		}
