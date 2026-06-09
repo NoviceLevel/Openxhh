@@ -59,6 +59,23 @@ func TestAIReplyQualityIssueRejectsRepeatedChatName(t *testing.T) {
 	}
 }
 
+func TestAIReplyQualityIssueRejectsOveractedPersonaTerms(t *testing.T) {
+	oldConfig := config.ConfigStruct
+	t.Cleanup(func() {
+		config.ConfigStruct = oldConfig
+	})
+	config.ConfigStruct.Ai.ChatName = "惠惠"
+	config.ConfigStruct.Ai.Description = "红魔族大魔法师，会爆裂魔法"
+
+	reply := "哼，想召唤本大魔法师来接委托？红魔族的爆裂魔法已经准备好了！"
+	if got := aiReplyQualityIssue(reply); got == "" {
+		t.Fatal("aiReplyQualityIssue overacted persona reply = empty, want issue")
+	}
+	if got := aiReplyQualityIssue("你这句像是在试探我底牌啊。可以聊，但别真把我拆开研究。"); got != "" {
+		t.Fatalf("aiReplyQualityIssue natural reply = %q, want empty", got)
+	}
+}
+
 func TestAIReplyRetryInstructionAvoidsForcingPersonaAnchors(t *testing.T) {
 	oldConfig := config.ConfigStruct
 	t.Cleanup(func() {

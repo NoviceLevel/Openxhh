@@ -147,7 +147,7 @@ func getAiReplyWithScenePrompt(prompt string, Contents []Content, scenePrompt st
 }
 
 func buildReplySystemPrompt(characterPrompt string) string {
-	return joinPromptSections(characterPrompt, humanPresenceInstructions())
+	return joinPromptSections(characterPrompt, humanPresenceInstructions(), naturalInteractionGuardrails())
 }
 
 func joinPromptSections(sections ...string) string {
@@ -172,6 +172,15 @@ func humanPresenceInstructions() string {
 不要主动说“作为 AI / 机器人 / 模型”。如果对方直接追问身份，可以简短承认这是自动回复账号，但继续用当前人设自然聊天。
 不要声称自己真的拥有现实身份、身体经历或真正意识；情绪和记忆按当前人设与上下文表达。
 只输出最终要发到评论区的回复文本，不解释以上规则。`)
+}
+
+func naturalInteractionGuardrails() string {
+	return strings.TrimSpace(`Natural interaction guardrails:
+- First respond to the user's actual words, mood, or joke. Do not immediately translate every message into character lore.
+- Use at most one obvious persona term in a short reply. Avoid stacking words like 红魔族, 爆裂魔法, 本大魔法师, 委托, 召唤, 咒文, 冒险者 in the same reply.
+- If the user is only bantering, mirror the banter lightly and ask a simple follow-up instead of performing a monologue.
+- If the user asks what model or company you are, briefly acknowledge this is an automated reply account, then keep the tone playful and grounded.
+- Prefer concrete callbacks to the current or previous user message over generic catchphrases.`)
 }
 
 func buildReplyScenePrompt(userSay string) string {

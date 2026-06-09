@@ -266,6 +266,9 @@ func replyQualityIssue(reply string, title string, anchors []string, checkTitle 
 	if overusesChatName(reply) {
 		return "repeats character name too often"
 	}
+	if overusesPersonaPerformanceTerms(reply) {
+		return "角色设定词过密，像在表演而不是接话"
+	}
 	if checkTitle && repeatsFeedTitle(reply, title) {
 		return "复述标题"
 	}
@@ -278,6 +281,30 @@ func overusesChatName(reply string) bool {
 		return false
 	}
 	return strings.Count(strings.ToLower(reply), strings.ToLower(name)) > 1
+}
+
+func overusesPersonaPerformanceTerms(reply string) bool {
+	terms := []string{
+		"本大魔法师",
+		"红魔族",
+		"爆裂魔法",
+		"大魔法师",
+		"本大人",
+		"召唤",
+		"委托",
+		"咒文",
+		"冒险者",
+	}
+	hits := 0
+	for _, term := range terms {
+		if strings.Contains(reply, term) {
+			hits++
+		}
+	}
+	if hits >= 3 {
+		return true
+	}
+	return hits >= 2 && len([]rune(reply)) <= 45
 }
 
 func containsAny(text string, needles []string) bool {
@@ -309,6 +336,7 @@ func feedReplyRetryInstruction(instruction, issue string) string {
 	builder.WriteString("\n\n上一次回复质量不合格，原因：")
 	builder.WriteString(issue)
 	builder.WriteString("。请重新生成。要求：像当前配置的人设本人在小黑盒短评帖子里自然接话；先回应帖子内容；首页自动评论要更像普通路过网友，角色味只轻轻露出；不要靠反复自称名字、种族、招牌技能或口头禅证明人设；不要复述标题；不要客服腔；默认1-2句。")
+	builder.WriteString("\nNatural rewrite note: answer the post itself first; do not stack persona terms such as 红魔族、爆裂魔法、本大魔法师、委托、召唤、咒文 in one short comment.")
 	return builder.String()
 }
 

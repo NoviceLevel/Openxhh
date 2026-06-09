@@ -27,6 +27,20 @@ func TestBuildReplySystemPromptAddsDefaultHumanPresenceWithoutCharacter(t *testi
 	}
 }
 
+func TestBuildReplySystemPromptAddsNaturalInteractionGuardrails(t *testing.T) {
+	got := buildReplySystemPrompt("persona")
+	for _, want := range []string{
+		"Natural interaction guardrails",
+		"Do not immediately translate every message into character lore",
+		"Use at most one obvious persona term",
+		"Prefer concrete callbacks",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("buildReplySystemPrompt missing %q in %q", want, got)
+		}
+	}
+}
+
 func TestBuildTavernPromptSkipsEmptySections(t *testing.T) {
 	got := buildTavernPrompt("惠惠", "描述", "个性", "", "第一条", "示例", "场景规则", "")
 	for _, want := range []string{"【聊天名称】\n惠惠", "【描述】\n描述", "【个性】\n个性", "【第一条消息】\n第一条", "【示例对话】\n示例", "【场景规则】\n场景规则"} {
