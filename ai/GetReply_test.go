@@ -114,4 +114,23 @@ func TestBuildFeedReplyScenePromptFramesPostComment(t *testing.T) {
 	if strings.Contains(got, "角色、语气和规则") {
 		t.Fatalf("buildFeedReplyScenePrompt should not add style instructions: %q", got)
 	}
+	for _, unwanted := range []string{"普通路过网友", "角色味只轻轻露出"} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("buildFeedReplyScenePrompt should not force old feed style %q: %q", unwanted, got)
+		}
+	}
+}
+
+func TestBuildFeedReplyScenePromptDefaultUsesTavernStyle(t *testing.T) {
+	got := buildFeedReplyScenePrompt("")
+	for _, want := range []string{"普通回复一样的酒馆人设", "自然接话", "动作、停顿、情绪和角色反应", "SKIP"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("buildFeedReplyScenePrompt default missing %q in %q", want, got)
+		}
+	}
+	for _, unwanted := range []string{"短评论", "普通路过网友", "角色味只轻轻露出"} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("buildFeedReplyScenePrompt default should not contain old feed wording %q: %q", unwanted, got)
+		}
+	}
 }

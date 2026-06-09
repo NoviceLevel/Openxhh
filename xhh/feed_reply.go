@@ -170,7 +170,7 @@ func processFeedLink(link feedLink) db.FeedReplyRecord {
 		topics = link.Topics
 		tags = link.Tags
 	}
-	instruction := "请根据这篇帖子写一条符合上下文的短评论。如果不适合回复，请只输出 SKIP。首页自动评论要更像普通路过网友，先看懂帖子再短评；角色味只轻轻露出，不要主动表演设定或高频使用专属口头禅。标题：" + link.Title + "\n正文摘要：" + link.Description
+	instruction := buildFeedReplyInstruction(link)
 	logFields := []zap.Field{zap.Bool("feed_reply", true), zap.Int("link_id", link.LinkID), zap.Int64("author_id", authorID), zap.String("author_name", link.User.UserName), zap.String("feed_title", link.Title), zap.String("question", instruction)}
 	reply := generateFeedReplyWithQualityRetry(ai.FeedReplyPromptFromConfig(config.ConfigStruct.FeedReply.Prompt), contents, instruction, link.Title, topics, tags, logFields...)
 	if reply == "" {
@@ -212,6 +212,10 @@ func processFeedLink(link feedLink) db.FeedReplyRecord {
 
 func ReplyPost(text, linkID string) bool {
 	return createComment("feed_reply", text, linkID, "-1", "-1", "0", "")
+}
+
+func buildFeedReplyInstruction(link feedLink) string {
+	return "请根据这篇帖子写一条符合上下文的评论。如果不适合回复，请只输出 SKIP。刷帖也使用普通回复一样的酒馆人设，先看懂帖子内容，再自然接话；可以有动作、停顿、情绪和角色反应，不需要刻意压成短评，但必须适合作为公开评论。标题：" + link.Title + "\n正文摘要：" + link.Description
 }
 
 func fallbackFeedContents(link feedLink) []ai.Content {

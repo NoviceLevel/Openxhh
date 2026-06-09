@@ -207,6 +207,23 @@ func TestFeedReplyRetryInstructionKeepsFeedRepliesSubtle(t *testing.T) {
 	}
 }
 
+func TestBuildFeedReplyInstructionUsesTavernReplyStyle(t *testing.T) {
+	got := buildFeedReplyInstruction(feedLink{
+		Title:       "测试帖子",
+		Description: "正文摘要",
+	})
+	for _, want := range []string{"符合上下文的评论", "普通回复一样的酒馆人设", "自然接话", "动作、停顿、情绪和角色反应", "测试帖子", "正文摘要"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("buildFeedReplyInstruction missing %q in %q", want, got)
+		}
+	}
+	for _, unwanted := range []string{"短评论", "普通路过网友", "角色味只轻轻露出"} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("buildFeedReplyInstruction should not contain old feed wording %q: %q", unwanted, got)
+		}
+	}
+}
+
 func TestFeedReplyQualityIssueUsesConfiguredPersonaAnchors(t *testing.T) {
 	oldConfig := config.ConfigStruct
 	t.Cleanup(func() {

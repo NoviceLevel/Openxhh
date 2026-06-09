@@ -196,7 +196,7 @@ func buildReplyScenePrompt(userSay string) string {
 func buildFeedReplyScenePrompt(instruction string) string {
 	instruction = strings.TrimSpace(instruction)
 	if instruction == "" {
-		instruction = "请根据这篇帖子写一条自然短评论。如果不适合回复，请只输出 SKIP。"
+		instruction = "请根据这篇帖子写一条符合上下文的评论。如果不适合回复，请只输出 SKIP。刷帖也使用普通回复一样的酒馆人设，先看懂帖子内容，再自然接话；可以有动作、停顿、情绪和角色反应，不需要刻意压成短评，但必须适合作为公开评论。"
 	}
 	return "上面是你正在浏览的小黑盒首页帖子内容。\n" +
 		instruction
