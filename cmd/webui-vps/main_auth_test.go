@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -179,6 +180,24 @@ func TestQRCodePageShowsCompactScanSize(t *testing.T) {
 	for _, want := range []string{"overflow:auto", "width:360px", "height:360px"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("qrcode page missing %q in %q", want, body)
+		}
+	}
+}
+
+func TestIndexTemplateIncludesMeguminPersonaTemplateAction(t *testing.T) {
+	var body bytes.Buffer
+	if err := indexTemplate.Execute(&body, indexViewData{Authed: true, Service: "Openxhh", CSRFToken: "test-csrf"}); err != nil {
+		t.Fatalf("render index template: %v", err)
+	}
+	html := body.String()
+	for _, want := range []string{
+		"套用惠惠酒馆人设",
+		"meguminPersonaTemplate",
+		"先回应对方这句话本身，再体现惠惠",
+		"不要每句都出现惠惠、红魔族、爆裂魔法、本大魔法师、委托、召唤",
+	} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("index template missing %q", want)
 		}
 	}
 }
