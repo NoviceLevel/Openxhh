@@ -44,8 +44,10 @@ func TestBuildReplySystemPromptAddsNaturalInteractionGuardrails(t *testing.T) {
 		"Be willing to play along with harmless requests",
 		"Do not generate explicit sexual content",
 		"deflect briefly in character",
-		"use any official Xiaoheihe shortcode emoji",
+		"Prefer no emoji-like reaction",
 		"[cube_喜欢]",
+		"[cube_哭泣]",
+		"[cube_滑稽]",
 		"Do not output raw Unicode emoji",
 		"Prefer concrete callbacks",
 	} {

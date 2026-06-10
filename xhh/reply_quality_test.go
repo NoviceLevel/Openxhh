@@ -156,6 +156,20 @@ func TestAIReplyQualityIssueRejectsRawEmojiButAllowsXHHShortcodes(t *testing.T) 
 	}
 }
 
+func TestAIReplyQualityIssueRejectsOilyOrOffPersonaXHHShortcodes(t *testing.T) {
+	restoreReplyQualityTestState(t)
+
+	for _, reply := range []string{
+		"说得对，我收回[cube_哭泣]",
+		"先奖励一点点[cube_滑稽]",
+		"别乱来[cube_色]",
+	} {
+		if got := aiReplyQualityIssue(reply); got != "使用了不符合惠惠的油腻表情" {
+			t.Fatalf("aiReplyQualityIssue oily shortcode = %q, want 使用了不符合惠惠的油腻表情 for %q", got, reply)
+		}
+	}
+}
+
 func TestAIReplyQualityIssueRejectsExplicitSexualContent(t *testing.T) {
 	restoreReplyQualityTestState(t)
 
