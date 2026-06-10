@@ -28,28 +28,25 @@ func TestWriteCookieFileUsesPrivatePermissions(t *testing.T) {
 	}
 }
 
-func TestRenderTerminalQRCodeUsesImageHintOnMobileWidth(t *testing.T) {
+func TestRenderTerminalQRCodeRendersCompactQRCodeOnMobileWidth(t *testing.T) {
 	code, err := qrcode.New("https://example.com/login?q=mobile", qrcode.Low)
 	if err != nil {
 		t.Fatalf("qrcode.New returned error: %v", err)
 	}
 
 	rendered := renderTerminalQRCode(code, 40)
-	if !strings.Contains(rendered, "qrcode.png") {
-		t.Fatalf("mobile terminal hint = %q, want qrcode.png", rendered)
-	}
 	if !strings.Contains(rendered, "/opt/Openxhh/qrcode.png") {
 		t.Fatalf("mobile terminal hint = %q, want absolute qrcode path", rendered)
 	}
 	if !strings.Contains(rendered, "/qrcode") {
 		t.Fatalf("mobile terminal hint = %q, want Web UI qrcode path", rendered)
 	}
-	if strings.ContainsAny(rendered, "\u2580\u2584\u2588") {
-		t.Fatalf("mobile terminal should not render compressed QR blocks: %q", rendered)
+	if !strings.ContainsAny(rendered, "\u2580\u2584\u2588") {
+		t.Fatalf("mobile terminal should render compact QR blocks: %q", rendered)
 	}
 }
 
-func TestRenderTerminalQRCodeUsesImageHintWhenTerminalTooNarrow(t *testing.T) {
+func TestRenderTerminalQRCodeRendersCompactQRCodeWhenTerminalTooNarrow(t *testing.T) {
 	code, err := qrcode.New("https://example.com/login?q=mobile", qrcode.Low)
 	if err != nil {
 		t.Fatalf("qrcode.New returned error: %v", err)
@@ -59,8 +56,8 @@ func TestRenderTerminalQRCodeUsesImageHintWhenTerminalTooNarrow(t *testing.T) {
 	if !strings.Contains(rendered, "qrcode.png") {
 		t.Fatalf("narrow terminal hint = %q, want qrcode.png", rendered)
 	}
-	if strings.ContainsAny(rendered, "\u2580\u2584\u2588") {
-		t.Fatalf("too-narrow terminal should not render QR blocks: %q", rendered)
+	if !strings.ContainsAny(rendered, "\u2580\u2584\u2588") {
+		t.Fatalf("too-narrow terminal should render compact QR blocks: %q", rendered)
 	}
 }
 
