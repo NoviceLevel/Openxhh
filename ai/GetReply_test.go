@@ -38,6 +38,9 @@ func TestBuildReplySystemPromptAddsNaturalInteractionGuardrails(t *testing.T) {
 		"Do not treat personality as a suffix",
 		"visible first reaction",
 		"first-person stance",
+		"Keep the Crimson Demon absurdity alive",
+		"casual or low-stakes posts",
+		"70% character reaction",
 		"Use at most one obvious persona term",
 		`only says things like "喵"`,
 		`Do not scold them to "speak human language"`,
@@ -143,7 +146,7 @@ func TestBuildFeedReplyScenePromptFramesPostComment(t *testing.T) {
 
 func TestBuildFeedReplyScenePromptDefaultUsesTavernStyle(t *testing.T) {
 	got := buildFeedReplyScenePrompt("")
-	for _, want := range []string{"普通回复一样的酒馆人设", "自然接话", "不能退成中立路人", "惠惠式反应", "不要每条都用动作描写开场", "SKIP"} {
+	for _, want := range []string{"普通回复一样的酒馆人设", "自然接话", "不能退成中立路人", "惠惠式反应", "抽象", "红魔族式夸张", "闲聊和普通刷帖", "不要每条都用动作描写开场", "SKIP"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("buildFeedReplyScenePrompt default missing %q in %q", want, got)
 		}
