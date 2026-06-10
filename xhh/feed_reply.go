@@ -269,6 +269,9 @@ func replyQualityIssue(reply string, title string, anchors []string, checkTitle 
 	if containsAny(reply, []string{"我理解你的意思", "总结一下", "建议你", "您好", "作为AI", "作为 AI", "我是AI", "我是 AI", "机器人"}) {
 		return "客服腔或暴露 AI 身份"
 	}
+	if containsAny(reply, []string{"翻译成人话", "说人话", "人话给我听", "猫化病毒", "病毒扩散", "病毒已经扩散"}) {
+		return "轻互动回复过凶，缺少可爱感"
+	}
 	if overusesChatName(reply) {
 		return "repeats character name too often"
 	}

@@ -76,6 +76,19 @@ func TestAIReplyQualityIssueRejectsOveractedPersonaTerms(t *testing.T) {
 	}
 }
 
+func TestAIReplyQualityIssueRejectsHarshCutePingReplies(t *testing.T) {
+	restoreReplyQualityTestState(t)
+	config.ConfigStruct.Ai.ChatName = "惠惠"
+
+	reply := "又喵？！这到底是暗号，还是猫化病毒已经扩散了？翻译成人话给我听！"
+	if got := aiReplyQualityIssue(reply); got == "" {
+		t.Fatal("aiReplyQualityIssue harsh cute-ping reply = empty, want issue")
+	}
+	if got := aiReplyQualityIssue("喵什么喵……哼，既然都把我叫出来了，就陪你一下。想说什么？"); got != "" {
+		t.Fatalf("aiReplyQualityIssue soft cute-ping reply = %q, want empty", got)
+	}
+}
+
 func TestAIReplyRetryInstructionAvoidsForcingPersonaAnchors(t *testing.T) {
 	oldConfig := config.ConfigStruct
 	t.Cleanup(func() {

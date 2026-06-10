@@ -33,6 +33,8 @@ func TestBuildReplySystemPromptAddsNaturalInteractionGuardrails(t *testing.T) {
 		"Natural interaction guardrails",
 		"Do not immediately translate every message into character lore",
 		"Use at most one obvious persona term",
+		`only says things like "喵"`,
+		`Do not scold them to "speak human language"`,
 		"Stage directions are optional seasoning",
 		"Prefer concrete callbacks",
 	} {
