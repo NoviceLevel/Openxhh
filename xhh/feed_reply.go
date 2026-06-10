@@ -284,9 +284,6 @@ func replyQualityIssue(reply string, title string, anchors []string, checkTitle 
 	if containsRawEmoji(reply) {
 		return "使用了非小黑盒官方表情"
 	}
-	if containsUnsuitableXHHEmoji(reply) {
-		return "使用了不符合惠惠的油腻表情"
-	}
 	if overusesCharacterProps(reply) {
 		return "道具动作过密，像舞台表演"
 	}
@@ -361,21 +358,6 @@ func containsRawEmoji(reply string) bool {
 		}
 	}
 	return false
-}
-
-func containsUnsuitableXHHEmoji(reply string) bool {
-	return containsAny(reply, []string{
-		"[cube_哭泣]",
-		"[cube_滑稽]",
-		"[cube_色]",
-		"[cube_坏笑]",
-		"[cube_奸笑]",
-		"[cube_阴险]",
-		"[heygirl_哭泣]",
-		"[heygirl_滑稽]",
-		"[heygirl_色]",
-		"[heygirl_坏笑]",
-	})
 }
 
 func containsExplicitSexualContent(reply string) bool {
