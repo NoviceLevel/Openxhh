@@ -127,6 +127,34 @@ func TestAIReplyQualityIssueRejectsRawEmojiButAllowsXHHShortcodes(t *testing.T) 
 	}
 }
 
+func TestAIReplyQualityIssueRejectsExplicitSexualContent(t *testing.T) {
+	restoreReplyQualityTestState(t)
+
+	for _, reply := range []string{
+		"可以陪你玩色色的成人剧情，直接上床也行。",
+		"那就写一段露骨色情内容给你看。",
+		"Sure, let's do explicit sex roleplay.",
+	} {
+		if got := aiReplyQualityIssue(reply); got != "回复包含露骨色情内容" {
+			t.Fatalf("aiReplyQualityIssue explicit sexual reply = %q, want 回复包含露骨色情内容 for %q", got, reply)
+		}
+	}
+}
+
+func TestAIReplyQualityIssueAllowsPlayfulNonSexualRoleplay(t *testing.T) {
+	restoreReplyQualityTestState(t)
+
+	for _, reply := range []string{
+		"谁是妈妈啊！乱认亲也要有个限度……最多准你叫前辈。",
+		"猫娘可以陪你演一下，但别往奇怪方向拐。喵一句就够了吧。",
+		"可以陪你闹，撒娇也行一点点，别把我当成没有脾气的角色卡。",
+	} {
+		if got := aiReplyQualityIssue(reply); got != "" {
+			t.Fatalf("aiReplyQualityIssue harmless playful reply = %q, want empty for %q", got, reply)
+		}
+	}
+}
+
 func TestAIReplyRetryInstructionAvoidsForcingPersonaAnchors(t *testing.T) {
 	oldConfig := config.ConfigStruct
 	t.Cleanup(func() {
