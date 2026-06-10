@@ -272,6 +272,12 @@ func replyQualityIssue(reply string, title string, anchors []string, checkTitle 
 	if containsAny(reply, []string{"翻译成人话", "说人话", "人话给我听", "猫化病毒", "病毒扩散", "病毒已经扩散"}) {
 		return "轻互动回复过凶，缺少可爱感"
 	}
+	if containsAny(reply, []string{"病毒污染", "高危魔物", "可疑发言人员", "奇怪路线", "低阶召唤失败", "猫夺舍"}) {
+		return "玩笑回复过度危险化"
+	}
+	if overusesCharacterProps(reply) {
+		return "道具动作过密，像舞台表演"
+	}
 	if overusesChatName(reply) {
 		return "repeats character name too often"
 	}
@@ -317,6 +323,20 @@ func overusesPersonaPerformanceTerms(reply string) bool {
 		return true
 	}
 	return hits >= 2 && len([]rune(reply)) <= 45
+}
+
+func overusesCharacterProps(reply string) bool {
+	terms := []string{"帽檐", "法杖", "披风", "眼罩", "爆裂魔法", "本大魔法师", "红魔族", "大魔法师"}
+	hits := 0
+	for _, term := range terms {
+		if strings.Contains(reply, term) {
+			hits++
+		}
+	}
+	if hits >= 4 {
+		return true
+	}
+	return hits >= 3 && len([]rune(reply)) <= 90
 }
 
 func overusesStageDirections(reply string) bool {

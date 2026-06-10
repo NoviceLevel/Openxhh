@@ -36,6 +36,8 @@ func TestBuildReplySystemPromptAddsNaturalInteractionGuardrails(t *testing.T) {
 		`only says things like "喵"`,
 		`Do not scold them to "speak human language"`,
 		"Stage directions are optional seasoning",
+		"Do not turn every joke into danger labels",
+		"Do not default to prop choreography",
 		"Prefer concrete callbacks",
 	} {
 		if !strings.Contains(got, want) {

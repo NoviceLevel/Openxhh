@@ -89,6 +89,30 @@ func TestAIReplyQualityIssueRejectsHarshCutePingReplies(t *testing.T) {
 	}
 }
 
+func TestAIReplyQualityIssueRejectsDangerLabelsForBanter(t *testing.T) {
+	restoreReplyQualityTestState(t)
+
+	reply := "你这输入法已经被病毒污染了吧，先登记成高危魔物！"
+	if got := aiReplyQualityIssue(reply); got == "" {
+		t.Fatal("aiReplyQualityIssue danger-label banter reply = empty, want issue")
+	}
+	if got := aiReplyQualityIssue("你这输入法也太会拐弯了吧。先说正事，我听一句。"); got != "" {
+		t.Fatalf("aiReplyQualityIssue playful banter reply = %q, want empty", got)
+	}
+}
+
+func TestAIReplyQualityIssueRejectsOverusedCharacterProps(t *testing.T) {
+	restoreReplyQualityTestState(t)
+
+	reply := "*惠惠按住帽檐，举起法杖，披风一甩，眼罩都差点歪掉。* 这是本大魔法师的爆裂魔法警告！"
+	if got := aiReplyQualityIssue(reply); got == "" {
+		t.Fatal("aiReplyQualityIssue prop-heavy reply = empty, want issue")
+	}
+	if got := aiReplyQualityIssue("不转不转，职业栏已经够挤了。你要是真有事，就好好说一句。"); got != "" {
+		t.Fatalf("aiReplyQualityIssue natural banter reply = %q, want empty", got)
+	}
+}
+
 func TestAIReplyRetryInstructionAvoidsForcingPersonaAnchors(t *testing.T) {
 	oldConfig := config.ConfigStruct
 	t.Cleanup(func() {
