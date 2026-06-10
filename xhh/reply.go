@@ -8,6 +8,7 @@ import (
 	"openxhh/db"
 	"openxhh/loger"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -62,28 +63,26 @@ func createCommentResult(source, text, link_id, reply_id, root_id, iscy, imageUR
 	lock.Lock()
 	defer lock.Unlock()
 	Path := "/bbs/app/comment/create"
-	Body := CommentCreateFormData(text, link_id, reply_id, root_id, iscy, imageURL).Encode()
-	resp := SendReq("POST", Path, bytes.NewReader([]byte(Body)), "")
-	if resp == nil {
-		loger.Loger.Error("[XHH]链接发送失败了")
+	sendText := rewriteXHHSensitiveCommentText(text)
+	if sendText != text {
+		loger.Loger.Info("[XHH]评论发送前已改写可能触发屏蔽的词", zap.String("source", source), zap.String("link_id", link_id), zap.String("reply_id", reply_id), zap.String("root_id", root_id))
+	}
+	status, msg, commentID, createdAt, data, ok := sendCommentCreateRequest(Path, sendText, link_id, reply_id, root_id, iscy, imageURL)
+	if !ok {
 		return commentCreateResult{}
 	}
-	defer resp.Body.Close()
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		loger.Loger.Error("[XHH]无法解析Body", zap.Error(err), zap.Int("status", resp.StatusCode), zap.String("link_id", link_id), zap.String("reply_id", reply_id), zap.String("root_id", root_id), zap.Bool("has_image", imageURL != ""))
-		return commentCreateResult{}
-	}
-	if !isHTTPSuccess(resp.StatusCode) {
-		body := string(data)
-		loger.Loger.Error("[XHH]评论发送 HTTP 失败", zap.Int("status", resp.StatusCode), zap.String("link_id", link_id), zap.String("reply_id", reply_id), zap.String("root_id", root_id), zap.Bool("has_image", imageURL != ""), zap.String("body", readableXHHResponseBody(body)))
-		handleXHHHTTPFailure("comment_create", resp.StatusCode, body, zap.String("link_id", link_id), zap.String("reply_id", reply_id), zap.String("root_id", root_id), zap.Bool("has_image", imageURL != ""))
-		return commentCreateResult{}
-	}
-	status, msg, commentID, createdAt := parseCommentCreateResponse(data)
-	if status == "" {
-		loger.Loger.Error("[XHH]无法反序列化", zap.String("body", readableXHHResponseBody(string(data))))
-		return commentCreateResult{}
+	if status != "ok" && isXHHBlockedWordMessage(msg) {
+		fallbackText := blockedWordFallbackComment()
+		if fallbackText != sendText {
+			loger.Loger.Warn("[XHH]评论触发屏蔽词，改用固定兜底回复", zap.String("source", source), zap.String("link_id", link_id), zap.String("reply_id", reply_id), zap.String("root_id", root_id))
+			status, msg, commentID, createdAt, data, ok = sendCommentCreateRequest(Path, fallbackText, link_id, reply_id, root_id, iscy, imageURL)
+			if !ok {
+				return commentCreateResult{}
+			}
+			if status == "ok" {
+				sendText = fallbackText
+			}
+		}
 	}
 	if status != "ok" {
 		if status == "failed" {
@@ -104,9 +103,90 @@ func createCommentResult(source, text, link_id, reply_id, root_id, iscy, imageUR
 		loger.Loger.Error("[XHH]评论发送失败", zap.String("status", status), zap.String("msg", msg))
 		return commentCreateResult{}
 	}
-	recordOutboundComment(source, text, link_id, reply_id, root_id, imageURL, data, commentID, createdAt)
+	recordOutboundComment(source, sendText, link_id, reply_id, root_id, imageURL, data, commentID, createdAt)
 	time.Sleep(5 * time.Second)
 	return commentCreateResult{Sent: true, Handled: true}
+}
+
+func sendCommentCreateRequest(path, text, linkID, replyID, rootID, iscy, imageURL string) (status string, msg string, commentID int64, createdAt int64, data []byte, ok bool) {
+	body := CommentCreateFormData(text, linkID, replyID, rootID, iscy, imageURL).Encode()
+	resp := SendReq("POST", path, bytes.NewReader([]byte(body)), "")
+	if resp == nil {
+		loger.Loger.Error("[XHH]链接发送失败了")
+		return "", "", 0, 0, nil, false
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		loger.Loger.Error("[XHH]无法解析Body", zap.Error(err), zap.Int("status", resp.StatusCode), zap.String("link_id", linkID), zap.String("reply_id", replyID), zap.String("root_id", rootID), zap.Bool("has_image", imageURL != ""))
+		return "", "", 0, 0, data, false
+	}
+	if !isHTTPSuccess(resp.StatusCode) {
+		body := string(data)
+		loger.Loger.Error("[XHH]评论发送 HTTP 失败", zap.Int("status", resp.StatusCode), zap.String("link_id", linkID), zap.String("reply_id", replyID), zap.String("root_id", rootID), zap.Bool("has_image", imageURL != ""), zap.String("body", readableXHHResponseBody(body)))
+		handleXHHHTTPFailure("comment_create", resp.StatusCode, body, zap.String("link_id", linkID), zap.String("reply_id", replyID), zap.String("root_id", rootID), zap.Bool("has_image", imageURL != ""))
+		return "", "", 0, 0, data, false
+	}
+	status, msg, commentID, createdAt = parseCommentCreateResponse(data)
+	if status == "" {
+		loger.Loger.Error("[XHH]无法反序列化", zap.String("body", readableXHHResponseBody(string(data))))
+		return "", "", 0, 0, data, false
+	}
+	return status, msg, commentID, createdAt, data, true
+}
+
+func rewriteXHHSensitiveCommentText(text string) string {
+	replacer := strings.NewReplacer(
+		"Telegram", "那个聊天软件",
+		"telegram", "那个聊天软件",
+		"TELEGRAM", "那个聊天软件",
+		"tg", "那个聊天软件",
+		"TG", "那个聊天软件",
+		"电报", "那个聊天软件",
+		"验证码", "那串验证数字",
+		"手机号码", "绑定号码",
+		"手机号", "绑定号码",
+		"邮箱", "绑定邮箱",
+		"账号密码", "账户登录口令",
+		"密码", "登录口令",
+		"账号", "账户",
+		"改密", "改登录口令",
+		"盗号", "账户被拿走",
+		"冻结", "先暂停相关功能",
+	)
+	rewritten := replacer.Replace(text)
+	rewritten = strings.ReplaceAll(rewritten, "绑定号码给", "绑定号码也给")
+	rewritten = strings.ReplaceAll(rewritten, "绑定邮箱给", "绑定邮箱也给")
+	return rewritten
+}
+
+func blockedWordFallbackComment() string {
+	return "Manbaout"
+}
+
+func rewriteXHHBlockedCommentText(text string) string {
+	text = rewriteXHHSensitiveCommentText(text)
+	replacer := strings.NewReplacer(
+		"改登录口令", "换个暗号",
+		"登录口令", "暗号",
+		"陌生设备", "陌生记录",
+		"设备", "记录",
+		"不认识的", "陌生的",
+		"陌生登录", "陌生进入",
+		"登录", "进入",
+		"验证", "确认",
+		"数字", "信息",
+		"口令", "暗号",
+		"账户", "号",
+		"找回", "申诉处理",
+		"申诉", "找客服处理",
+		"安全", "稳妥",
+	)
+	return replacer.Replace(text)
+}
+
+func isXHHBlockedWordMessage(msg string) bool {
+	return strings.Contains(msg, "屏蔽词") || strings.Contains(strings.ToLower(msg), "blocked")
 }
 
 func recordOutboundComment(source, text, linkIDText, replyIDText, rootIDText, imageURL string, response []byte, commentID int64, createdAt int64) {
