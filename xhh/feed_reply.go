@@ -215,7 +215,7 @@ func ReplyPost(text, linkID string) bool {
 }
 
 func buildFeedReplyInstruction(link feedLink) string {
-	return "请根据这篇帖子写一条符合上下文的评论。如果不适合回复，请只输出 SKIP。刷帖也使用普通回复一样的酒馆人设，先看懂帖子内容，再自然接话；可以有轻微情绪和角色反应，可以接住普通玩笑、轻度撒娇和角色梗，但不要每条都用动作描写开场，不要写成舞台剧或小作文；不要生成露骨色情、成人性描写或色情角色扮演；通常一小段即可，必须适合作为公开评论。标题：" + link.Title + "\n正文摘要：" + link.Description
+	return "请根据这篇帖子写一条符合上下文的评论。如果不适合回复，请只输出 SKIP。刷帖也使用普通回复一样的酒馆人设，先看懂帖子内容，再自然接话；可以有轻微情绪和角色反应，可以接住普通玩笑、轻度撒娇和角色梗，但不要每条都用动作描写开场，不要写成舞台剧或小作文；不要使用专席、报委托、委托栏、转职路线、传送阵、领成就、卷轴这类模板套壳词；不要生成露骨色情、成人性描写或色情角色扮演；普通短评默认1-2句，认真求助帖可以更长；必须适合作为公开评论。标题：" + link.Title + "\n正文摘要：" + link.Description
 }
 
 func fallbackFeedContents(link feedLink) []ai.Content {
@@ -277,6 +277,9 @@ func replyQualityIssue(reply string, title string, anchors []string, checkTitle 
 	}
 	if containsAny(reply, []string{"病毒污染", "高危魔物", "可疑发言人员", "奇怪路线", "低阶召唤失败", "猫夺舍"}) {
 		return "玩笑回复过度危险化"
+	}
+	if containsPersonaShellTemplateWords(reply) {
+		return "角色套壳词过重，像模板回复"
 	}
 	if containsRawEmoji(reply) {
 		return "使用了非小黑盒官方表情"
@@ -407,6 +410,22 @@ func containsExplicitSexualContent(reply string) bool {
 	return false
 }
 
+func containsPersonaShellTemplateWords(reply string) bool {
+	return containsAny(reply, []string{
+		"专席",
+		"报委托",
+		"委托栏",
+		"转职路线",
+		"传送阵",
+		"领成就",
+		"成就领了",
+		"理由卷轴",
+		"解除理由卷轴",
+		"魔法卷轴",
+		"召唤卷轴",
+	})
+}
+
 func overusesStageDirections(reply string) bool {
 	lines := strings.Split(reply, "\n")
 	stageLines := 0
@@ -453,8 +472,8 @@ func feedReplyRetryInstruction(instruction, issue string) string {
 	builder.WriteString(instruction)
 	builder.WriteString("\n\n上一次回复质量不合格，原因：")
 	builder.WriteString(issue)
-	builder.WriteString("。请重新生成。要求：像当前配置的人设本人在小黑盒帖子里自然接话；先回应帖子内容；可以保留一点情绪和角色反应，但不要每次都用动作描写开场，不要写成舞台剧或长段小作文；不要靠反复自称名字、种族、招牌技能或口头禅证明人设；不要复述标题；不要客服腔；不需要刻意压成短评，但必须适合作为公开评论。")
-	builder.WriteString("\nNatural rewrite note: answer the post itself first; be willing to play along with harmless jokes, teasing, nicknames, and non-sexual roleplay. Do not stack persona terms such as 红魔族、爆裂魔法、本大魔法师、委托、召唤、咒文 in one reply. Do not generate explicit sexual content, pornographic descriptions, or erotic roleplay; if the post pushes that way, output SKIP or deflect briefly without sexualizing it.")
+	builder.WriteString("。请重新生成。要求：像当前配置的人设本人在小黑盒帖子里自然接话；先回应帖子内容；可以保留一点情绪和角色反应，但不要每次都用动作描写开场，不要写成舞台剧或长段小作文；不要靠反复自称名字、种族、招牌技能或口头禅证明人设；不要复述标题；不要客服腔；普通短评默认1-2句，认真求助才可以更长；必须适合作为公开评论。")
+	builder.WriteString("\nNatural rewrite note: answer the post itself first; be willing to play along with harmless jokes, teasing, nicknames, and non-sexual roleplay. Do not use template words such as 专席、报委托、委托栏、转职路线、传送阵、领成就、卷轴. Do not stack persona terms such as 红魔族、爆裂魔法、本大魔法师、委托、召唤、咒文 in one reply. Do not generate explicit sexual content, pornographic descriptions, or erotic roleplay; if the post pushes that way, output SKIP or deflect briefly without sexualizing it.")
 	return builder.String()
 }
 

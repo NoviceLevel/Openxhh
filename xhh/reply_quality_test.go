@@ -101,6 +101,35 @@ func TestAIReplyQualityIssueRejectsDangerLabelsForBanter(t *testing.T) {
 	}
 }
 
+func TestAIReplyQualityIssueRejectsPersonaShellTemplateWords(t *testing.T) {
+	restoreReplyQualityTestState(t)
+
+	for _, reply := range []string{
+		"这里是惠惠专席，要么领成就，要么报委托。",
+		"你这转职路线跳太快了，先从传送阵出来再说。",
+		"这公司像临时拼出来的解除理由卷轴，先别被他们带节奏。",
+	} {
+		if got := aiReplyQualityIssue(reply); got != "角色套壳词过重，像模板回复" {
+			t.Fatalf("aiReplyQualityIssue persona shell reply = %q, want 角色套壳词过重，像模板回复 for %q", got, reply)
+		}
+	}
+}
+
+func TestAIReplyQualityIssueAllowsNaturalShortMemeReplies(t *testing.T) {
+	restoreReplyQualityTestState(t)
+
+	for _, reply := range []string{
+		"不转不转，你这是把我当转接台了是吧。下一个还准备转谁？",
+		"奖励可以有，但别笑得这么可疑。先说好，只奖励一点点。",
+		"谁是妈妈啊！乱叫也要有个限度，最多准你叫前辈。",
+		"喵什么喵……行吧，听见了。你这是在撒娇还是在试探我？",
+	} {
+		if got := aiReplyQualityIssue(reply); got != "" {
+			t.Fatalf("aiReplyQualityIssue natural short meme reply = %q, want empty for %q", got, reply)
+		}
+	}
+}
+
 func TestAIReplyQualityIssueRejectsOverusedCharacterProps(t *testing.T) {
 	restoreReplyQualityTestState(t)
 

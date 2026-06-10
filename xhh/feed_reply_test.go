@@ -200,7 +200,7 @@ func TestReplyQualityAllowsTavernLengthWithinXHHLimit(t *testing.T) {
 
 func TestFeedReplyRetryInstructionKeepsFeedRepliesSubtle(t *testing.T) {
 	got := feedReplyRetryInstruction("原始指令", "太像角色表演")
-	for _, want := range []string{"原始指令", "太像角色表演", "角色反应", "不要每次都用动作描写开场", "不需要刻意压成短评"} {
+	for _, want := range []string{"原始指令", "太像角色表演", "角色反应", "不要每次都用动作描写开场", "普通短评默认1-2句", "专席、报委托、委托栏、转职路线、传送阵、领成就、卷轴"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("feedReplyRetryInstruction missing %q in %q", want, got)
 		}
