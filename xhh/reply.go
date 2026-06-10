@@ -42,9 +42,22 @@ func CommentCreateFormData(text, linkID, replyID, rootID, iscy, imageURL string)
 	return form
 }
 
+type commentCreateResult struct {
+	Sent    bool
+	Handled bool
+}
+
 func createComment(source, text, link_id, reply_id, root_id, iscy, imageURL string) (isok bool) {
+	return createCommentResult(source, text, link_id, reply_id, root_id, iscy, imageURL).Handled
+}
+
+func createCommentSent(source, text, link_id, reply_id, root_id, iscy, imageURL string) bool {
+	return createCommentResult(source, text, link_id, reply_id, root_id, iscy, imageURL).Sent
+}
+
+func createCommentResult(source, text, link_id, reply_id, root_id, iscy, imageURL string) commentCreateResult {
 	if xhhCaptchaCoolingDown("comment_create", zap.String("source", source), zap.String("link_id", link_id), zap.String("reply_id", reply_id), zap.String("root_id", root_id)) {
-		return false
+		return commentCreateResult{}
 	}
 	lock.Lock()
 	defer lock.Unlock()
@@ -53,47 +66,47 @@ func createComment(source, text, link_id, reply_id, root_id, iscy, imageURL stri
 	resp := SendReq("POST", Path, bytes.NewReader([]byte(Body)), "")
 	if resp == nil {
 		loger.Loger.Error("[XHH]链接发送失败了")
-		return
+		return commentCreateResult{}
 	}
 	defer resp.Body.Close()
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
 		loger.Loger.Error("[XHH]无法解析Body", zap.Error(err), zap.Int("status", resp.StatusCode), zap.String("link_id", link_id), zap.String("reply_id", reply_id), zap.String("root_id", root_id), zap.Bool("has_image", imageURL != ""))
-		return false
+		return commentCreateResult{}
 	}
 	if !isHTTPSuccess(resp.StatusCode) {
 		body := string(data)
 		loger.Loger.Error("[XHH]评论发送 HTTP 失败", zap.Int("status", resp.StatusCode), zap.String("link_id", link_id), zap.String("reply_id", reply_id), zap.String("root_id", root_id), zap.Bool("has_image", imageURL != ""), zap.String("body", readableXHHResponseBody(body)))
 		handleXHHHTTPFailure("comment_create", resp.StatusCode, body, zap.String("link_id", link_id), zap.String("reply_id", reply_id), zap.String("root_id", root_id), zap.Bool("has_image", imageURL != ""))
-		return false
+		return commentCreateResult{}
 	}
 	status, msg, commentID, createdAt := parseCommentCreateResponse(data)
 	if status == "" {
 		loger.Loger.Error("[XHH]无法反序列化", zap.String("body", readableXHHResponseBody(string(data))))
-		return false
+		return commentCreateResult{}
 	}
 	if status != "ok" {
 		if status == "failed" {
 			CommentID, err := strconv.Atoi(reply_id)
-			if err != nil {
+			if err != nil || CommentID <= 0 {
 				loger.Loger.Error("[XHH]评论发送失败且 reply_id 无法解析", zap.String("info", readableXHHResponseBody(string(data))), zap.String("reply_id", reply_id))
-				return false
+				return commentCreateResult{Sent: false, Handled: false}
 			}
 			db.Replyed(CommentID)
 			loger.Loger.Warn("[XHH]异常发送：AI回复已生成但评论发送失败，已标记完成避免重复发送", zap.String("Resp", readableXHHResponseBody(string(data))), zap.String("msg", msg), zap.String("link_id", link_id), zap.String("reply_id", reply_id), zap.String("root_id", root_id))
 			time.Sleep(5 * time.Second)
-			return true
+			return commentCreateResult{Sent: false, Handled: true}
 		}
 		if msg == "评论已被删除" {
 			time.Sleep(5 * time.Second)
-			return true
+			return commentCreateResult{Sent: false, Handled: true}
 		}
 		loger.Loger.Error("[XHH]评论发送失败", zap.String("status", status), zap.String("msg", msg))
-		return false
+		return commentCreateResult{}
 	}
 	recordOutboundComment(source, text, link_id, reply_id, root_id, imageURL, data, commentID, createdAt)
 	time.Sleep(5 * time.Second)
-	return true
+	return commentCreateResult{Sent: true, Handled: true}
 }
 
 func recordOutboundComment(source, text, linkIDText, replyIDText, rootIDText, imageURL string, response []byte, commentID int64, createdAt int64) {

@@ -211,11 +211,11 @@ func processFeedLink(link feedLink) db.FeedReplyRecord {
 }
 
 func ReplyPost(text, linkID string) bool {
-	return createComment("feed_reply", text, linkID, "-1", "-1", "0", "")
+	return createCommentSent("feed_reply", text, linkID, "-1", "-1", "0", "")
 }
 
 func buildFeedReplyInstruction(link feedLink) string {
-	return "请根据这篇帖子写一条符合上下文的评论。如果不适合回复，请只输出 SKIP。刷帖也使用普通回复一样的酒馆人设，先看懂帖子内容，再自然接话；可以有动作、停顿、情绪和角色反应，不需要刻意压成短评，但必须适合作为公开评论。标题：" + link.Title + "\n正文摘要：" + link.Description
+	return "请根据这篇帖子写一条符合上下文的评论。如果不适合回复，请只输出 SKIP。刷帖也使用普通回复一样的酒馆人设，先看懂帖子内容，再自然接话；可以有轻微情绪和角色反应，但不要每条都用动作描写开场，不要写成舞台剧或小作文；通常一小段即可，必须适合作为公开评论。标题：" + link.Title + "\n正文摘要：" + link.Description
 }
 
 func fallbackFeedContents(link feedLink) []ai.Content {
@@ -275,6 +275,9 @@ func replyQualityIssue(reply string, title string, anchors []string, checkTitle 
 	if overusesPersonaPerformanceTerms(reply) {
 		return "角色设定词过密，像在表演而不是接话"
 	}
+	if overusesStageDirections(reply) {
+		return "动作描写过多，像舞台表演"
+	}
 	if checkTitle && repeatsFeedTitle(reply, title) {
 		return "复述标题"
 	}
@@ -313,6 +316,24 @@ func overusesPersonaPerformanceTerms(reply string) bool {
 	return hits >= 2 && len([]rune(reply)) <= 45
 }
 
+func overusesStageDirections(reply string) bool {
+	lines := strings.Split(reply, "\n")
+	stageLines := 0
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if len([]rune(line)) > 100 {
+			continue
+		}
+		if strings.HasPrefix(line, "*") && strings.HasSuffix(line, "*") {
+			stageLines++
+		}
+	}
+	if stageLines >= 2 {
+		return true
+	}
+	return stageLines == 1 && len([]rune(reply)) > 260
+}
+
 func containsAny(text string, needles []string) bool {
 	for _, needle := range needles {
 		if strings.Contains(text, needle) {
@@ -341,7 +362,7 @@ func feedReplyRetryInstruction(instruction, issue string) string {
 	builder.WriteString(instruction)
 	builder.WriteString("\n\n上一次回复质量不合格，原因：")
 	builder.WriteString(issue)
-	builder.WriteString("。请重新生成。要求：像当前配置的人设本人在小黑盒帖子里自然接话；先回应帖子内容；可以保留动作、停顿、情绪和一点酒馆式反应；不要靠反复自称名字、种族、招牌技能或口头禅证明人设；不要复述标题；不要客服腔；不需要刻意压成短评，但必须适合作为公开评论。")
+	builder.WriteString("。请重新生成。要求：像当前配置的人设本人在小黑盒帖子里自然接话；先回应帖子内容；可以保留一点情绪和角色反应，但不要每次都用动作描写开场，不要写成舞台剧或长段小作文；不要靠反复自称名字、种族、招牌技能或口头禅证明人设；不要复述标题；不要客服腔；不需要刻意压成短评，但必须适合作为公开评论。")
 	builder.WriteString("\nNatural rewrite note: answer the post itself first; do not stack persona terms such as 红魔族、爆裂魔法、本大魔法师、委托、召唤、咒文 in one reply.")
 	return builder.String()
 }

@@ -179,6 +179,7 @@ func naturalInteractionGuardrails() string {
 - First respond to the user's actual words, mood, or joke. Do not immediately translate every message into character lore.
 - Use at most one obvious persona term in a short reply. Avoid stacking words like 红魔族, 爆裂魔法, 本大魔法师, 委托, 召唤, 咒文, 冒险者 in the same reply.
 - If the user is only bantering, mirror the banter lightly and ask a simple follow-up instead of performing a monologue.
+- Stage directions are optional seasoning, not the main answer. Do not use multiple action/narration blocks in one public comment, and do not start every reply with an action.
 - If the user asks what model or company you are, briefly acknowledge this is an automated reply account, then keep the tone playful and grounded.
 - Prefer concrete callbacks to the current or previous user message over generic catchphrases.`)
 }
@@ -196,7 +197,7 @@ func buildReplyScenePrompt(userSay string) string {
 func buildFeedReplyScenePrompt(instruction string) string {
 	instruction = strings.TrimSpace(instruction)
 	if instruction == "" {
-		instruction = "请根据这篇帖子写一条符合上下文的评论。如果不适合回复，请只输出 SKIP。刷帖也使用普通回复一样的酒馆人设，先看懂帖子内容，再自然接话；可以有动作、停顿、情绪和角色反应，不需要刻意压成短评，但必须适合作为公开评论。"
+		instruction = "请根据这篇帖子写一条符合上下文的评论。如果不适合回复，请只输出 SKIP。刷帖也使用普通回复一样的酒馆人设，先看懂帖子内容，再自然接话；可以有轻微情绪和角色反应，但不要每条都用动作描写开场，不要写成舞台剧或小作文；通常一小段即可，必须适合作为公开评论。"
 	}
 	return "上面是你正在浏览的小黑盒首页帖子内容。\n" +
 		instruction

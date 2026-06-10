@@ -33,6 +33,7 @@ func TestBuildReplySystemPromptAddsNaturalInteractionGuardrails(t *testing.T) {
 		"Natural interaction guardrails",
 		"Do not immediately translate every message into character lore",
 		"Use at most one obvious persona term",
+		"Stage directions are optional seasoning",
 		"Prefer concrete callbacks",
 	} {
 		if !strings.Contains(got, want) {
@@ -123,7 +124,7 @@ func TestBuildFeedReplyScenePromptFramesPostComment(t *testing.T) {
 
 func TestBuildFeedReplyScenePromptDefaultUsesTavernStyle(t *testing.T) {
 	got := buildFeedReplyScenePrompt("")
-	for _, want := range []string{"普通回复一样的酒馆人设", "自然接话", "动作、停顿、情绪和角色反应", "SKIP"} {
+	for _, want := range []string{"普通回复一样的酒馆人设", "自然接话", "轻微情绪和角色反应", "不要每条都用动作描写开场", "SKIP"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("buildFeedReplyScenePrompt default missing %q in %q", want, got)
 		}

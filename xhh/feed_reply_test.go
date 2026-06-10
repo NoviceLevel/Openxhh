@@ -200,7 +200,7 @@ func TestReplyQualityAllowsTavernLengthWithinXHHLimit(t *testing.T) {
 
 func TestFeedReplyRetryInstructionKeepsFeedRepliesSubtle(t *testing.T) {
 	got := feedReplyRetryInstruction("原始指令", "太像角色表演")
-	for _, want := range []string{"原始指令", "太像角色表演", "酒馆式反应", "不需要刻意压成短评"} {
+	for _, want := range []string{"原始指令", "太像角色表演", "角色反应", "不要每次都用动作描写开场", "不需要刻意压成短评"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("feedReplyRetryInstruction missing %q in %q", want, got)
 		}
@@ -212,7 +212,7 @@ func TestBuildFeedReplyInstructionUsesTavernReplyStyle(t *testing.T) {
 		Title:       "测试帖子",
 		Description: "正文摘要",
 	})
-	for _, want := range []string{"符合上下文的评论", "普通回复一样的酒馆人设", "自然接话", "动作、停顿、情绪和角色反应", "测试帖子", "正文摘要"} {
+	for _, want := range []string{"符合上下文的评论", "普通回复一样的酒馆人设", "自然接话", "轻微情绪和角色反应", "不要每条都用动作描写开场", "测试帖子", "正文摘要"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("buildFeedReplyInstruction missing %q in %q", want, got)
 		}
@@ -221,6 +221,16 @@ func TestBuildFeedReplyInstructionUsesTavernReplyStyle(t *testing.T) {
 		if strings.Contains(got, unwanted) {
 			t.Fatalf("buildFeedReplyInstruction should not contain old feed wording %q: %q", unwanted, got)
 		}
+	}
+}
+
+func TestReplyQualityRejectsOverusedStageDirections(t *testing.T) {
+	reply := "*惠惠压低帽檐。*\n\n这事确实要先看清楚。\n\n*她又把法杖往地上一杵。*\n\n别急着把钱交出去，先确认来源。"
+	if got := aiReplyQualityIssue(reply); got != "动作描写过多，像舞台表演" {
+		t.Fatalf("aiReplyQualityIssue overused stage directions = %q", got)
+	}
+	if got := feedReplyQualityIssue(reply, ""); got != "动作描写过多，像舞台表演" {
+		t.Fatalf("feedReplyQualityIssue overused stage directions = %q", got)
 	}
 }
 

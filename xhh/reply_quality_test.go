@@ -85,7 +85,7 @@ func TestAIReplyRetryInstructionAvoidsForcingPersonaAnchors(t *testing.T) {
 	config.ConfigStruct.Ai.Personality = "explosion magic"
 
 	got := aiReplyRetryInstruction("hello", "missing persona")
-	for _, want := range []string{"hello", "missing persona", "不要靠反复自称名字", "用态度、情绪和判断体现人设"} {
+	for _, want := range []string{"hello", "missing persona", "不要靠反复自称名字", "用态度、情绪和判断体现人设", "动作描写只能少量点到"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("aiReplyRetryInstruction missing %q in %q", want, got)
 		}
