@@ -275,6 +275,9 @@ func replyQualityIssue(reply string, title string, anchors []string, checkTitle 
 	if containsAny(reply, []string{"病毒污染", "高危魔物", "可疑发言人员", "奇怪路线", "低阶召唤失败", "猫夺舍"}) {
 		return "玩笑回复过度危险化"
 	}
+	if containsRawEmoji(reply) {
+		return "使用了非小黑盒官方表情"
+	}
 	if overusesCharacterProps(reply) {
 		return "道具动作过密，像舞台表演"
 	}
@@ -337,6 +340,18 @@ func overusesCharacterProps(reply string) bool {
 		return true
 	}
 	return hits >= 3 && len([]rune(reply)) <= 90
+}
+
+func containsRawEmoji(reply string) bool {
+	for _, r := range reply {
+		switch {
+		case r >= 0x1F300 && r <= 0x1FAFF:
+			return true
+		case r >= 0x2600 && r <= 0x27BF:
+			return true
+		}
+	}
+	return false
 }
 
 func overusesStageDirections(reply string) bool {

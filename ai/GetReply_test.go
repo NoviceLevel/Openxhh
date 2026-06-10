@@ -38,6 +38,9 @@ func TestBuildReplySystemPromptAddsNaturalInteractionGuardrails(t *testing.T) {
 		"Stage directions are optional seasoning",
 		"Do not turn every joke into danger labels",
 		"Do not default to prop choreography",
+		"use any official Xiaoheihe shortcode emoji",
+		"[cube_喜欢]",
+		"Do not output raw Unicode emoji",
 		"Prefer concrete callbacks",
 	} {
 		if !strings.Contains(got, want) {

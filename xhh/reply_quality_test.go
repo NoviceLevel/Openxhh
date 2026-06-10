@@ -113,6 +113,20 @@ func TestAIReplyQualityIssueRejectsOverusedCharacterProps(t *testing.T) {
 	}
 }
 
+func TestAIReplyQualityIssueRejectsRawEmojiButAllowsXHHShortcodes(t *testing.T) {
+	restoreReplyQualityTestState(t)
+
+	if got := aiReplyQualityIssue("哼，这次算你说得不错🙂"); got == "" {
+		t.Fatal("aiReplyQualityIssue raw emoji reply = empty, want issue")
+	}
+	if got := aiReplyQualityIssue("哼，这次算你说得不错[cube_喜欢]"); got != "" {
+		t.Fatalf("aiReplyQualityIssue XHH shortcode reply = %q, want empty", got)
+	}
+	if got := aiReplyQualityIssue("行吧，这个表情我收下了[heygirl_开心]"); got != "" {
+		t.Fatalf("aiReplyQualityIssue arbitrary official shortcode reply = %q, want empty", got)
+	}
+}
+
 func TestAIReplyRetryInstructionAvoidsForcingPersonaAnchors(t *testing.T) {
 	oldConfig := config.ConfigStruct
 	t.Cleanup(func() {
