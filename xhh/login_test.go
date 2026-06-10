@@ -38,6 +38,9 @@ func TestRenderTerminalQRCodeUsesImageHintOnMobileWidth(t *testing.T) {
 	if !strings.Contains(rendered, "qrcode.png") {
 		t.Fatalf("mobile terminal hint = %q, want qrcode.png", rendered)
 	}
+	if !strings.Contains(rendered, "/opt/Openxhh/qrcode.png") {
+		t.Fatalf("mobile terminal hint = %q, want absolute qrcode path", rendered)
+	}
 	if !strings.Contains(rendered, "/qrcode") {
 		t.Fatalf("mobile terminal hint = %q, want Web UI qrcode path", rendered)
 	}
@@ -71,8 +74,11 @@ func TestRenderTerminalQRCodeUsesImageHintWhenColumnsUnknown(t *testing.T) {
 	if !strings.Contains(rendered, "qrcode.png") {
 		t.Fatalf("unknown-width terminal hint = %q, want qrcode.png", rendered)
 	}
-	if strings.ContainsAny(rendered, "\u2580\u2584\u2588") {
-		t.Fatalf("unknown-width terminal should not render QR blocks: %q", rendered)
+	if !strings.Contains(rendered, "/opt/Openxhh/qrcode.png") {
+		t.Fatalf("unknown-width terminal hint = %q, want absolute qrcode path", rendered)
+	}
+	if !strings.ContainsAny(rendered, "\u2580\u2584\u2588") {
+		t.Fatalf("unknown-width terminal should render compact QR blocks: %q", rendered)
 	}
 }
 

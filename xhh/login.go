@@ -24,6 +24,7 @@ import (
 const (
 	cookieFileMode       os.FileMode = 0600
 	loginQRCodeImageSize             = 360
+	loginQRCodePath                  = "/opt/Openxhh/qrcode.png"
 )
 
 func Login() {
@@ -86,7 +87,8 @@ func Qr() {
 		return
 	}
 	fmt.Println("二维码图片已保存到 qrcode.png")
-	fmt.Println("手机终端如果显示变形，请优先打开 qrcode.png 扫描")
+	fmt.Println("服务器绝对路径：", loginQRCodePath)
+	fmt.Println("手机终端如果显示变形，请优先打开", loginQRCodePath, "扫描")
 	fmt.Println("If terminal scanning fails, open Web UI /qrcode or /qrcode.png and scan the PNG image.")
 	fmt.Println(renderTerminalQRCode(code, terminalColumns()))
 	for {
@@ -169,9 +171,9 @@ func renderTerminalQRCode(code *qrcode.QRCode, columns int) string {
 		return code.ToString(true)
 	}
 	if columns > 0 {
-		return fmt.Sprintf("Terminal is too narrow for a scannable QR code (%d columns, need at least %d). Open qrcode.png or Web UI /qrcode and scan the PNG image.\n", columns, width*2)
+		return fmt.Sprintf("Terminal is too narrow for a scannable QR code (%d columns, need at least %d). Open %s or Web UI /qrcode and scan the PNG image.\n", columns, width*2, loginQRCodePath)
 	}
-	return "Terminal width is unknown. Open qrcode.png or Web UI /qrcode and scan the PNG image.\n"
+	return fmt.Sprintf("Terminal width is unknown; showing compact QR anyway. If it looks broken, open %s or Web UI /qrcode.\n\n%s", loginQRCodePath, renderCompactQRCode(bits, true))
 }
 
 func renderNarrowQRCode(bits [][]bool, inverseColor bool) string {
