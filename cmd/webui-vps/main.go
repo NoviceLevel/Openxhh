@@ -5695,17 +5695,7 @@ function applyMeguminPersonaTemplate(){
 const aiTemplate=meguminPersonaTemplate();
 setConfigValue('ai.chatName','惠惠');
 applyPersonaFields('ai',aiTemplate);
-const feedTemplate={
-...aiTemplate,
-prompt:lineText([
-'当前场景：你正在浏览小黑盒首页帖子。',
-'请基于当前帖子内容，以惠惠的人格写一条公开评论。',
-'它应该像评论区真人短评，不是酒馆 RP。先贴合标题和正文，再带一点惠惠式反应。',
-'不要每篇都硬拐爆裂魔法；不要长篇自我介绍；不要多段舞台动作。',
-'认真求助、家庭矛盾、未成年、自伤或现实风险内容要少演一点，先给稳妥回应；不适合公开回复时输出 SKIP。',
-'只输出评论正文；不适合公开回复时输出 SKIP。'
-])
-};applyPersonaFields('feedReply',feedTemplate);
+applyPersonaFields('feedReply',aiTemplate);
 updateFeedFallbackHint();
 if(configToast)configToast.textContent='已套用惠惠评论区人设；保存配置并重启服务后生效'
 }
@@ -5713,8 +5703,8 @@ function ensureReplyImageConfigField(){if(!configForm||configField('image.replyW
 function configField(path){return configForm?.querySelector('[data-path="'+path+'"]')}
 function configValue(path){const field=configField(path);return field?(field.type==='checkbox'?(field.checked?'true':''):field.value||''):''}
 function setConfigValue(path,value){const field=configField(path);if(field)field.value=value||''}
-function copyAiPersonaToFeed(){const pairs=[['ai.description','feedReply.description'],['ai.personality','feedReply.personality'],['ai.scenario','feedReply.scenario'],['ai.firstMessage','feedReply.firstMessage'],['ai.exampleDialogs','feedReply.exampleDialogs'],['ai.postHistoryInstructions','feedReply.postHistoryInstructions']];for(const [from,to] of pairs)setConfigValue(to,configValue(from));updateFeedFallbackHint();if(configToast)configToast.textContent='已复制 AI 人设字段到自动刷帖；保存并重启后生效'}
-function updateFeedFallbackHint(){if(!feedFallbackHint)return;const fields=['description','personality','scenario','firstMessage','exampleDialogs','postHistoryInstructions'];const empty=fields.filter(name=>!configValue('feedReply.'+name).trim());const usingFallback=empty.filter(name=>configValue('ai.'+name).trim());if(usingFallback.length){feedFallbackHint.textContent='提示：刷帖 '+usingFallback.join('、')+' 为空，当前会回退使用上方 AI 人设字段。'}else if(empty.length){feedFallbackHint.textContent='提示：部分刷帖人设为空，且上方 AI 对应字段也为空；刷帖可能只按自动刷帖 Prompt 生成。'}else{feedFallbackHint.textContent='提示：自动刷帖正在使用专属刷帖人设字段。'}}
+function copyAiPersonaToFeed(){const pairs=[['ai.description','feedReply.description'],['ai.personality','feedReply.personality'],['ai.scenario','feedReply.scenario'],['ai.firstMessage','feedReply.firstMessage'],['ai.exampleDialogs','feedReply.exampleDialogs'],['ai.prompt','feedReply.prompt'],['ai.postHistoryInstructions','feedReply.postHistoryInstructions']];for(const [from,to] of pairs)setConfigValue(to,configValue(from));updateFeedFallbackHint();if(configToast)configToast.textContent='已复制 AI 人设字段到自动刷帖；保存并重启后生效'}
+function updateFeedFallbackHint(){if(!feedFallbackHint)return;const fields=['description','personality','scenario','firstMessage','exampleDialogs','prompt','postHistoryInstructions'];const empty=fields.filter(name=>!configValue('feedReply.'+name).trim());const usingFallback=empty.filter(name=>configValue('ai.'+name).trim());if(usingFallback.length){feedFallbackHint.textContent='提示：刷帖 '+usingFallback.join('、')+' 为空，当前会回退使用上方 AI 人设字段。'}else if(empty.length){feedFallbackHint.textContent='提示：部分刷帖人设为空，且上方 AI 对应字段也为空；刷帖可能只按已有帖子内容生成。'}else{feedFallbackHint.textContent='提示：自动刷帖正在使用专属刷帖人设字段。'}}
 function configTestPayload(){return{config:collectConfig(),prompt:(testImagePrompt?.value||'').trim()}}
 function setConfigTestText(text){if(configTestResult)configTestResult.textContent=text}
 function setConfigTestImage(dataUrl){if(!configTestImageWrap||!configTestImage)return;if(dataUrl){configTestImage.src=dataUrl;configTestImageWrap.classList.remove('hidden')}else{configTestImage.removeAttribute('src');configTestImageWrap.classList.add('hidden')}}

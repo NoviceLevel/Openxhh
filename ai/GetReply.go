@@ -39,6 +39,7 @@ func FeedReplyPromptFromConfig(scenePrompt string) string {
 	firstMessage := firstNonEmpty(config.ConfigStruct.FeedReply.FirstMessage, config.ConfigStruct.Ai.FirstMessage)
 	exampleDialogs := firstNonEmpty(config.ConfigStruct.FeedReply.ExampleDialogs, config.ConfigStruct.Ai.ExampleDialogs)
 	postHistoryInstructions := firstNonEmpty(config.ConfigStruct.FeedReply.PostHistoryInstructions, config.ConfigStruct.Ai.PostHistoryInstructions)
+	scenePrompt = firstNonEmpty(scenePrompt, config.ConfigStruct.Ai.Prompt)
 	return buildTavernPrompt(
 		chatName,
 		description,

@@ -72,6 +72,20 @@ func TestFeedReplyPromptFromConfigUsesFeedSpecificFields(t *testing.T) {
 	}
 }
 
+func TestFeedReplyPromptFromConfigFallsBackToAIStylePrompt(t *testing.T) {
+	oldConfig := config.ConfigStruct
+	t.Cleanup(func() { config.ConfigStruct = oldConfig })
+
+	config.ConfigStruct.Ai.ChatName = "惠惠"
+	config.ConfigStruct.Ai.Prompt = "普通回复场景"
+	config.ConfigStruct.FeedReply.Prompt = ""
+
+	got := FeedReplyPromptFromConfig("")
+	if !strings.Contains(got, "【场景规则】\n普通回复场景") {
+		t.Fatalf("FeedReplyPromptFromConfig should fall back to AI prompt; got %q", got)
+	}
+}
+
 func TestBuildReplyScenePromptFramesCommentReply(t *testing.T) {
 	got := buildReplyScenePrompt("@小猫娘 这个配置怎么改")
 	for _, want := range []string{"小黑盒帖子和评论楼层", "对方刚刚完整说的是", "机器人 @ 只是叫你出来"} {

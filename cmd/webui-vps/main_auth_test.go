@@ -197,9 +197,8 @@ func TestIndexTemplateIncludesMeguminPersonaTemplateAction(t *testing.T) {
 		"一天只能使用一次强大的爆裂魔法",
 		"公开评论区，不是酒馆私聊",
 		"回复要适合公开评论区",
-		"像评论区真人短评",
-		"如果涉及家庭矛盾",
-		"请基于当前帖子内容，以惠惠的人格写一条公开评论",
+		"applyPersonaFields('feedReply',aiTemplate)",
+		"['ai.prompt','feedReply.prompt']",
 	} {
 		if !strings.Contains(html, want) {
 			t.Fatalf("index template missing %q", want)
