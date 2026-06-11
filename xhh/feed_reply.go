@@ -215,7 +215,7 @@ func ReplyPost(text, linkID string) bool {
 }
 
 func buildFeedReplyInstruction(link feedLink) string {
-	return "请根据这篇帖子写一条符合上下文的评论。如果不适合回复，请只输出 SKIP。刷帖也使用普通回复一样的酒馆人设，先看懂帖子内容，再自然接话；不能退成中立路人或普通助手，必须有被帖子刺激到的第一反应和惠惠式反应：嘴硬、得意、不服气、炸毛、夸张判断、别扭关心或短促反击；闲聊和普通刷帖要保留一点抽象、红魔族式夸张和怪比喻，不要变成攻略顾问或理性点评员；不要把人格当成句尾挂件，不要只在普通评论末尾贴一个“哼”；可以接住普通玩笑、轻度撒娇和角色梗，但不要每条都用动作描写开场，不要写成舞台剧或小作文；不要使用专席、报委托、委托栏、转职路线、传送阵、领成就、卷轴这类模板套壳词；不要生成露骨色情、成人性描写或色情角色扮演；普通短评默认1-2句，认真求助帖可以更长；必须适合作为公开评论。标题：" + link.Title + "\n正文摘要：" + link.Description
+	return "请写出惠惠刷到这篇帖子后的公开评论。如果不适合回复，请只输出 SKIP。刷帖也使用普通回复一样的酒馆人设：先看懂帖子内容，再像惠惠本人被这条内容刺到一样自然接话；不能退成普通评论员、中立路人或普通助手，必须有被帖子刺激到的第一反应和惠惠式反应：嘴硬、得意、不服气、炸毛、夸张判断、别扭关心或短促反击；先有角色反应，再给贴合内容的吐槽、安慰、评价或短建议。闲聊和普通刷帖要保留一点抽象、红魔族式夸张和怪比喻，不要变成攻略顾问或理性点评员；不要把人格当成句尾挂件，不要只在普通评论末尾贴一个“哼”；可以接住普通玩笑、轻度撒娇和角色梗，但不要每条都用动作描写开场，不要写成舞台剧或小作文；不要使用专席、报委托、委托栏、转职路线、传送阵、领成就、卷轴这类模板套壳词；不要生成露骨色情、成人性描写或色情角色扮演；普通短评默认1-2句，认真求助帖可以更长；必须适合作为公开评论。标题：" + link.Title + "\n正文摘要：" + link.Description
 }
 
 func fallbackFeedContents(link feedLink) []ai.Content {
@@ -248,11 +248,27 @@ func shouldSkipFeedReply(reply string) bool {
 }
 
 func feedReplyQualityIssue(reply string, title string) string {
-	return replyQualityIssue(reply, title, feedReplyPersonaAnchors(), true, true)
+	if issue := replyQualityIssue(reply, title, feedReplyPersonaAnchors(), true, true); issue != "" {
+		return issue
+	}
+	if feedReplyLacksCharacterHeat(reply) {
+		return "刷帖回复太像普通网友，缺少惠惠第一反应"
+	}
+	return ""
 }
 
 func aiReplyQualityIssue(reply string) string {
 	return replyQualityIssue(reply, "", aiReplyPersonaAnchors(), false, false)
+}
+
+func aiReplyQualityIssueForQuestion(reply string, questionText string) string {
+	if issue := aiReplyQualityIssue(reply); issue != "" {
+		return issue
+	}
+	if shortMemePullsUnmentionedPostTopic(reply, questionText) {
+		return "短梗回复强行拉回主帖主题"
+	}
+	return ""
 }
 
 func replyQualityIssue(reply string, title string, anchors []string, checkTitle bool, allowSkip bool) string {
@@ -332,6 +348,55 @@ func overusesPersonaPerformanceTerms(reply string) bool {
 		return true
 	}
 	return hits >= 2 && len([]rune(reply)) <= 45
+}
+
+func feedReplyLacksCharacterHeat(reply string) bool {
+	reply = strings.TrimSpace(reply)
+	if reply == "" || shouldSkipFeedReply(reply) || len(feedReplyPersonaAnchors()) == 0 {
+		return false
+	}
+	if hasCharacterHeatSignal(reply) {
+		return false
+	}
+	return containsAny(reply, []string{
+		"先别硬扛",
+		"至少",
+		"建议",
+		"可以先",
+		"最好",
+		"关键是",
+		"先冷静",
+		"别硬吃",
+		"真别",
+		"先把",
+	})
+}
+
+func hasCharacterHeatSignal(reply string) bool {
+	return containsAny(reply, []string{
+		"可恶",
+		"哼",
+		"欸",
+		"诶",
+		"哈？",
+		"谁是",
+		"不转",
+		"不许",
+		"别以为",
+		"我可",
+		"我先承认",
+		"我差点",
+		"我都",
+		"本大人",
+		"本大魔法师",
+		"红魔族",
+		"爆裂",
+		"炸毛",
+		"不服气",
+		"嘴硬",
+		"大发慈悲",
+		"火力拉满",
+	})
 }
 
 func overusesCharacterProps(reply string) bool {
@@ -467,12 +532,87 @@ func containsAnyFold(text string, needles []string) bool {
 	return false
 }
 
+func shortMemePullsUnmentionedPostTopic(reply, questionText string) bool {
+	question := stripXHHShortcodes(strings.TrimSpace(questionText))
+	if !looksLikeShortMemeQuestion(question) {
+		return false
+	}
+	for _, term := range postTopicLeakTerms() {
+		if strings.Contains(reply, term) && !strings.Contains(question, term) {
+			return true
+		}
+	}
+	return false
+}
+
+func looksLikeShortMemeQuestion(question string) bool {
+	question = strings.TrimSpace(question)
+	if question == "" || len([]rune(question)) > 14 {
+		return false
+	}
+	for _, term := range postTopicLeakTerms() {
+		if strings.Contains(question, term) {
+			return false
+		}
+	}
+	return strings.HasPrefix(question, "转") || containsAny(question, []string{
+		"喵",
+		"奖励",
+		"叫妈妈",
+		"妈妈",
+		"喜欢你",
+		"我是你的父亲",
+	})
+}
+
+func stripXHHShortcodes(text string) string {
+	for {
+		start := strings.Index(text, "[")
+		if start < 0 {
+			break
+		}
+		endRel := strings.Index(text[start:], "]")
+		if endRel < 0 {
+			break
+		}
+		token := text[start : start+endRel+1]
+		if !strings.HasPrefix(token, "[cube_") && !strings.HasPrefix(token, "[hey") {
+			break
+		}
+		text = text[:start] + text[start+endRel+1:]
+	}
+	return strings.TrimSpace(text)
+}
+
+func postTopicLeakTerms() []string {
+	return []string{
+		"6.4万",
+		"画饼",
+		"大饼",
+		"选装费",
+		"车企",
+		"车主",
+		"GTA",
+		"愿望单",
+		"钱包",
+		"发售表",
+		"库存",
+		"主帖",
+		"原帖",
+		"帖子",
+		"这篇",
+		"文章",
+		"楼主",
+		"标题",
+	}
+}
+
 func feedReplyRetryInstruction(instruction, issue string) string {
 	var builder strings.Builder
 	builder.WriteString(instruction)
 	builder.WriteString("\n\n上一次回复质量不合格，原因：")
 	builder.WriteString(issue)
-	builder.WriteString("。请重新生成。要求：像当前配置的人设本人在小黑盒帖子里自然接话；先回应帖子内容；如果上一版像普通路人短评，补回惠惠式反应：嘴硬、得意、不服气、炸毛、夸张判断、别扭关心或短促反击；不要退成中立路人；开头要有被帖子刺激到的第一反应，不要只在句尾贴一个“哼”；闲聊和普通帖子要更抽象一点，允许红魔族式夸张、怪比喻、突然炸毛，不要变成攻略顾问；不要每次都用动作描写开场，不要写成舞台剧或长段小作文；不要靠反复自称名字、种族、招牌技能或口头禅证明人设；不要复述标题；不要客服腔；普通短评默认1-2句，认真求助才可以更长；必须适合作为公开评论。")
+	builder.WriteString("。请重新生成。要求：像当前配置的人设本人在小黑盒帖子里自然接话；先回应帖子内容；如果上一版像普通路人短评或普通评论员建议，改成惠惠刷到这篇帖子后的第一反应，再接一句贴合内容的话；补回惠惠式反应：嘴硬、得意、不服气、炸毛、夸张判断、别扭关心或短促反击；不要退成中立路人；开头要有被帖子刺激到的第一反应，不要只在句尾贴一个“哼”；闲聊和普通帖子要更抽象一点，允许红魔族式夸张、怪比喻、突然炸毛，不要变成攻略顾问；不要每次都用动作描写开场，不要写成舞台剧或长段小作文；不要靠反复自称名字、种族、招牌技能或口头禅证明人设；不要复述标题；不要客服腔；普通短评默认1-2句，认真求助才可以更长；必须适合作为公开评论。")
 	builder.WriteString("\nNatural rewrite note: answer the post itself first; keep a character-like emotional stance without repeating names or lore labels; be willing to play along with harmless jokes, teasing, nicknames, and non-sexual roleplay. Do not use template words such as 专席、报委托、委托栏、转职路线、传送阵、领成就、卷轴. Do not stack persona terms such as 红魔族、爆裂魔法、本大魔法师、委托、召唤、咒文 in one reply. Do not generate explicit sexual content, pornographic descriptions, or erotic roleplay; if the post pushes that way, output SKIP or deflect briefly without sexualizing it.")
 	return builder.String()
 }

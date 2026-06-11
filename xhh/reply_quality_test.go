@@ -184,6 +184,21 @@ func TestAIReplyQualityIssueAllowsPlayfulNonSexualRoleplay(t *testing.T) {
 	}
 }
 
+func TestAIReplyQualityIssueForQuestionRejectsShortMemePullingPostTopic(t *testing.T) {
+	restoreReplyQualityTestState(t)
+
+	reply := "转雨姐？你们这楼是准备把我当万能转盘了吧。行，雨姐可以来，但这6.4万的大饼先别想躲雨里蒙混过去。"
+	if got := aiReplyQualityIssueForQuestion(reply, "转雨姐[cube_喜欢]"); got != "短梗回复强行拉回主帖主题" {
+		t.Fatalf("aiReplyQualityIssueForQuestion short meme old topic = %q", got)
+	}
+	if got := aiReplyQualityIssueForQuestion("转雨姐？不转不转，你把我当转盘了是吧。下一个还准备转谁？", "转雨姐[cube_喜欢]"); got != "" {
+		t.Fatalf("aiReplyQualityIssueForQuestion natural short meme = %q, want empty", got)
+	}
+	if got := aiReplyQualityIssueForQuestion("6.4万的大饼确实该被炸出原形。", "6.4万这个事怎么看"); got != "" {
+		t.Fatalf("aiReplyQualityIssueForQuestion explicit topic mention = %q, want empty", got)
+	}
+}
+
 func TestAIReplyRetryInstructionAvoidsForcingPersonaAnchors(t *testing.T) {
 	oldConfig := config.ConfigStruct
 	t.Cleanup(func() {

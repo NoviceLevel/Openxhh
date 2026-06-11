@@ -26,7 +26,7 @@ func generateAIReplyWithQualityRetry(contents []ai.Content, questionText string,
 		if reply == "" {
 			return "", false
 		}
-		issue := aiReplyQualityIssue(reply)
+		issue := aiReplyQualityIssueForQuestion(reply, questionText)
 		if issue == "" {
 			return reply, false
 		}

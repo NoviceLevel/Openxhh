@@ -161,6 +161,8 @@ func TestFeedReplyQualityIssue(t *testing.T) {
 		{name: "valid role reply", reply: "这价格有点像把金币丢进无效咏唱里，本大人看了都摇头。", want: ""},
 		{name: "natural reply without explicit anchor", reply: "这价格看着还行，火力也不错，可以考虑。", want: ""},
 		{name: "customer tone", reply: "建议你先看看预算和需求。", want: "客服腔或暴露 AI 身份"},
+		{name: "generic feed advice without character heat", reply: "这都屏蔽了还从通知栏冒出来，也太会破防了吧……先别硬扛，把短信通知也关掉，至少别让它半夜跳出来偷袭你心情。", want: "刷帖回复太像普通网友，缺少惠惠第一反应"},
+		{name: "feed advice with character heat", reply: "可恶，都屏蔽了还从通知栏冒出来，这追杀感也太离谱了。先把短信通知也关掉，别让它半夜偷袭你心情。", want: ""},
 		{name: "repeat title", title: "求评价，不玻璃心。", reply: "求评价，不玻璃心。这个配置还可以。", want: "复述标题"},
 		{name: "skip allowed", reply: "SKIP", want: ""},
 	}
@@ -200,7 +202,7 @@ func TestReplyQualityAllowsTavernLengthWithinXHHLimit(t *testing.T) {
 
 func TestFeedReplyRetryInstructionKeepsFeedRepliesSubtle(t *testing.T) {
 	got := feedReplyRetryInstruction("原始指令", "太像角色表演")
-	for _, want := range []string{"原始指令", "太像角色表演", "补回惠惠式反应", "不要退成中立路人", "被帖子刺激到的第一反应", "红魔族式夸张", "不要变成攻略顾问", "不要每次都用动作描写开场", "普通短评默认1-2句", "专席、报委托、委托栏、转职路线、传送阵、领成就、卷轴"} {
+	for _, want := range []string{"原始指令", "太像角色表演", "普通评论员建议", "惠惠刷到这篇帖子后的第一反应", "补回惠惠式反应", "不要退成中立路人", "被帖子刺激到的第一反应", "红魔族式夸张", "不要变成攻略顾问", "不要每次都用动作描写开场", "普通短评默认1-2句", "专席、报委托、委托栏、转职路线、传送阵、领成就、卷轴"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("feedReplyRetryInstruction missing %q in %q", want, got)
 		}
@@ -212,7 +214,7 @@ func TestBuildFeedReplyInstructionUsesTavernReplyStyle(t *testing.T) {
 		Title:       "测试帖子",
 		Description: "正文摘要",
 	})
-	for _, want := range []string{"符合上下文的评论", "普通回复一样的酒馆人设", "自然接话", "不能退成中立路人", "惠惠式反应", "被帖子刺激到的第一反应", "抽象", "红魔族式夸张", "不要每条都用动作描写开场", "测试帖子", "正文摘要"} {
+	for _, want := range []string{"惠惠刷到这篇帖子后的公开评论", "普通回复一样的酒馆人设", "自然接话", "不能退成普通评论员", "惠惠式反应", "被帖子刺激到的第一反应", "抽象", "红魔族式夸张", "不要每条都用动作描写开场", "测试帖子", "正文摘要"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("buildFeedReplyInstruction missing %q in %q", want, got)
 		}
