@@ -45,6 +45,8 @@ func TestBuildReplySystemPromptAddsNaturalInteractionGuardrails(t *testing.T) {
 		`only says things like "喵"`,
 		`Do not scold them to "speak human language"`,
 		`For short memes like "转xxx", "奖励", "喵", or "叫妈妈"`,
+		"do not pull the main post topic back into the reply",
+		"Only use the post topic if the user explicitly mentions it",
 		"Stage directions are optional seasoning",
 		"Do not turn every joke into danger labels",
 		"Do not default to prop choreography",
