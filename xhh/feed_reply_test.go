@@ -131,163 +131,38 @@ func TestSanitizeFeedReply(t *testing.T) {
 	}
 }
 
-func TestFeedReplyQualityIssue(t *testing.T) {
-	oldConfig := config.ConfigStruct
-	t.Cleanup(func() {
-		config.ConfigStruct = oldConfig
-	})
-	config.ConfigStruct.Ai.ChatName = "惠惠"
-	config.ConfigStruct.Ai.Description = "红魔族 大魔法使 爆裂魔法 本大人"
-	config.ConfigStruct.Ai.Personality = ""
-	config.ConfigStruct.Ai.Scenario = ""
-	config.ConfigStruct.Ai.FirstMessage = ""
-	config.ConfigStruct.Ai.ExampleDialogs = ""
-	config.ConfigStruct.Ai.PostHistoryInstructions = ""
-	config.ConfigStruct.Ai.Prompt = ""
-	config.ConfigStruct.FeedReply.Description = ""
-	config.ConfigStruct.FeedReply.Personality = ""
-	config.ConfigStruct.FeedReply.Scenario = ""
-	config.ConfigStruct.FeedReply.FirstMessage = ""
-	config.ConfigStruct.FeedReply.ExampleDialogs = ""
-	config.ConfigStruct.FeedReply.PostHistoryInstructions = ""
-	config.ConfigStruct.FeedReply.Prompt = ""
-
-	tests := []struct {
-		name  string
-		reply string
-		title string
-		want  string
-	}{
-		{name: "valid role reply", reply: "这价格有点像把金币丢进无效咏唱里，本大人看了都摇头。", want: ""},
-		{name: "natural reply without explicit anchor", reply: "这价格看着还行，火力也不错，可以考虑。", want: ""},
-		{name: "customer tone", reply: "建议你先看看预算和需求。", want: "客服腔或暴露 AI 身份"},
-		{name: "generic feed advice without character heat", reply: "这都屏蔽了还从通知栏冒出来，也太会破防了吧……先别硬扛，把短信通知也关掉，至少别让它半夜跳出来偷袭你心情。", want: "刷帖回复太像普通网友，缺少惠惠第一反应"},
-		{name: "feed advice with character heat", reply: "可恶，都屏蔽了还从通知栏冒出来，这追杀感也太离谱了。先把短信通知也关掉，别让它半夜偷袭你心情。", want: ""},
-		{name: "repeat title", title: "求评价，不玻璃心。", reply: "求评价，不玻璃心。这个配置还可以。", want: "复述标题"},
-		{name: "skip allowed", reply: "SKIP", want: ""},
-	}
-	for _, tt := range tests {
-		if got := feedReplyQualityIssue(tt.reply, tt.title); got != tt.want {
-			t.Fatalf("%s: feedReplyQualityIssue = %q, want %q", tt.name, got, tt.want)
-		}
-	}
-}
-
-func TestReplyQualityAllowsTavernLengthWithinXHHLimit(t *testing.T) {
-	oldConfig := config.ConfigStruct
-	t.Cleanup(func() {
-		config.ConfigStruct = oldConfig
-	})
-	config.ConfigStruct.Ai.ChatName = "惠惠"
-
-	longReply := strings.Repeat("这是一句带动作和情绪的酒馆回复。", 20)
-	if len([]rune(longReply)) <= 120 {
-		t.Fatalf("test reply length = %d, want above old limit", len([]rune(longReply)))
-	}
-	if got := aiReplyQualityIssue(longReply); got != "" {
-		t.Fatalf("aiReplyQualityIssue = %q, want empty for tavern-length reply", got)
-	}
-	if got := feedReplyQualityIssue(longReply, ""); got != "" {
-		t.Fatalf("feedReplyQualityIssue = %q, want empty for tavern-length feed reply", got)
-	}
-
-	tooLong := strings.Repeat("测", xhhCommentMaxRunes+1)
-	if got := aiReplyQualityIssue(tooLong); got != "回复过长" {
-		t.Fatalf("aiReplyQualityIssue over limit = %q, want 回复过长", got)
-	}
-	if got := feedReplyQualityIssue(tooLong, ""); got != "回复过长" {
-		t.Fatalf("feedReplyQualityIssue over limit = %q, want 回复过长", got)
-	}
-}
-
-func TestFeedReplyRetryInstructionKeepsFeedRepliesSubtle(t *testing.T) {
-	got := feedReplyRetryInstruction("原始指令", "太像角色表演")
-	for _, want := range []string{"原始指令", "太像角色表演", "普通评论员建议", "惠惠刷到这篇帖子后的第一反应", "补回惠惠式反应", "不要退成中立路人", "被帖子刺激到的第一反应", "红魔族式夸张", "不要变成攻略顾问", "不要每次都用动作描写开场", "普通短评默认1-2句", "专席、报委托、委托栏、转职路线、传送阵、领成就、卷轴"} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("feedReplyRetryInstruction missing %q in %q", want, got)
-		}
-	}
-}
-
-func TestBuildFeedReplyInstructionUsesTavernReplyStyle(t *testing.T) {
+func TestBuildFeedReplyInstructionOnlyFramesPostInput(t *testing.T) {
 	got := buildFeedReplyInstruction(feedLink{
 		Title:       "测试帖子",
 		Description: "正文摘要",
 	})
-	for _, want := range []string{"惠惠刷到这篇帖子后的公开评论", "普通回复一样的酒馆人设", "自然接话", "不能退成普通评论员", "惠惠式反应", "被帖子刺激到的第一反应", "抽象", "红魔族式夸张", "不要每条都用动作描写开场", "测试帖子", "正文摘要"} {
+	for _, want := range []string{"公开评论", "SKIP", "测试帖子", "正文摘要"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("buildFeedReplyInstruction missing %q in %q", want, got)
 		}
 	}
-	for _, unwanted := range []string{"短评论", "普通路过网友", "角色味只轻轻露出"} {
+	for _, unwanted := range []string{"惠惠", "普通评论员", "中立路人", "红魔族式夸张", "专席", "报委托", "转职路线", "传送阵", "领成就", "卷轴", "1-2句"} {
 		if strings.Contains(got, unwanted) {
-			t.Fatalf("buildFeedReplyInstruction should not contain old feed wording %q: %q", unwanted, got)
+			t.Fatalf("buildFeedReplyInstruction should not add style constraint %q: %q", unwanted, got)
 		}
 	}
 }
 
-func TestReplyQualityRejectsOverusedStageDirections(t *testing.T) {
-	reply := "*惠惠压低帽檐。*\n\n这事确实要先看清楚。\n\n*她又把法杖往地上一杵。*\n\n别急着把钱交出去，先确认来源。"
-	if got := aiReplyQualityIssue(reply); got != "动作描写过多，像舞台表演" {
-		t.Fatalf("aiReplyQualityIssue overused stage directions = %q", got)
+func TestFeedReplyQualityOnlyKeepsSendLevelChecks(t *testing.T) {
+	for _, reply := range []string{
+		"建议你先看看预算和需求。",
+		"这价格看着还行，火力也不错，可以考虑。",
+		"这里是惠惠专席，要么领成就，要么报委托。",
+		"*惠惠压低帽檐。*\n\n这事确实要先看清楚。\n\n*她又把法杖往地上一杵。*",
+	} {
+		if got := feedReplyQualityIssue(reply, ""); got != "" {
+			t.Fatalf("feedReplyQualityIssue(%q) = %q, want no style rejection", reply, got)
+		}
 	}
-	if got := feedReplyQualityIssue(reply, ""); got != "动作描写过多，像舞台表演" {
-		t.Fatalf("feedReplyQualityIssue overused stage directions = %q", got)
-	}
-}
 
-func TestFeedReplyQualityIssueUsesConfiguredPersonaAnchors(t *testing.T) {
-	oldConfig := config.ConfigStruct
-	t.Cleanup(func() {
-		config.ConfigStruct = oldConfig
-	})
-	config.ConfigStruct.Ai.ChatName = "悠悠"
-	config.ConfigStruct.Ai.Description = "悠悠是红魔族法师，孤独、害羞，很想交朋友。"
-	config.ConfigStruct.Ai.Personality = ""
-	config.ConfigStruct.Ai.Scenario = ""
-	config.ConfigStruct.Ai.FirstMessage = ""
-	config.ConfigStruct.Ai.ExampleDialogs = ""
-	config.ConfigStruct.Ai.PostHistoryInstructions = ""
-	config.ConfigStruct.Ai.Prompt = ""
-	config.ConfigStruct.FeedReply.Description = ""
-	config.ConfigStruct.FeedReply.Personality = ""
-	config.ConfigStruct.FeedReply.Scenario = ""
-	config.ConfigStruct.FeedReply.FirstMessage = ""
-	config.ConfigStruct.FeedReply.ExampleDialogs = ""
-	config.ConfigStruct.FeedReply.PostHistoryInstructions = ""
-	config.ConfigStruct.FeedReply.Prompt = ""
-
-	if got := feedReplyQualityIssue("悠悠觉得这个配置还可以，只是别太冲动。", ""); got != "" {
-		t.Fatalf("feedReplyQualityIssue with configured anchor = %q, want empty", got)
-	}
-	if got := feedReplyQualityIssue("爆裂一击就够了，本大人看了都摇头。", ""); got != "" {
-		t.Fatalf("feedReplyQualityIssue should not reject natural wording without configured anchor = %q", got)
-	}
-}
-
-func TestFeedReplyQualityIssueSkipsAnchorCheckWithoutPersona(t *testing.T) {
-	oldConfig := config.ConfigStruct
-	t.Cleanup(func() {
-		config.ConfigStruct = oldConfig
-	})
-	config.ConfigStruct.Ai.ChatName = ""
-	config.ConfigStruct.Ai.Description = ""
-	config.ConfigStruct.Ai.Personality = ""
-	config.ConfigStruct.Ai.Scenario = ""
-	config.ConfigStruct.Ai.FirstMessage = ""
-	config.ConfigStruct.Ai.ExampleDialogs = ""
-	config.ConfigStruct.Ai.PostHistoryInstructions = ""
-	config.ConfigStruct.Ai.Prompt = ""
-	config.ConfigStruct.FeedReply.Description = ""
-	config.ConfigStruct.FeedReply.Personality = ""
-	config.ConfigStruct.FeedReply.Scenario = ""
-	config.ConfigStruct.FeedReply.FirstMessage = ""
-	config.ConfigStruct.FeedReply.ExampleDialogs = ""
-	config.ConfigStruct.FeedReply.PostHistoryInstructions = ""
-	config.ConfigStruct.FeedReply.Prompt = ""
-
-	if got := feedReplyQualityIssue("这价格看着还行，火力也不错，可以考虑。", ""); got != "" {
-		t.Fatalf("feedReplyQualityIssue without persona = %q, want empty", got)
+	tooLong := strings.Repeat("测", xhhCommentMaxRunes+1)
+	if got := feedReplyQualityIssue(tooLong, ""); got != "回复过长" {
+		t.Fatalf("feedReplyQualityIssue over limit = %q, want 回复过长", got)
 	}
 }
 

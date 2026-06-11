@@ -10,258 +10,61 @@ import (
 	"go.uber.org/zap"
 )
 
-func TestAIReplyQualityIssueAllowsNaturalReplyWithoutExplicitPersonaAnchor(t *testing.T) {
-	oldConfig := config.ConfigStruct
-	t.Cleanup(func() {
-		config.ConfigStruct = oldConfig
-	})
-	config.ConfigStruct.Ai.ChatName = "Megumin"
-	config.ConfigStruct.Ai.Description = ""
-	config.ConfigStruct.Ai.Personality = "proud arch wizard explosion"
-	config.ConfigStruct.Ai.Scenario = ""
-	config.ConfigStruct.Ai.FirstMessage = ""
-	config.ConfigStruct.Ai.ExampleDialogs = ""
-	config.ConfigStruct.Ai.PostHistoryInstructions = ""
-	config.ConfigStruct.Ai.Prompt = ""
+func TestReplyQualityOnlyKeepsSendLevelChecks(t *testing.T) {
+	restoreReplyQualityTestState(t)
+	config.ConfigStruct.Ai.ChatName = "惠惠"
 
-	if got := aiReplyQualityIssue("Megumin says explosion solves this."); got != "" {
-		t.Fatalf("aiReplyQualityIssue valid reply = %q, want empty", got)
+	styleReplies := []string{
+		"建议你先看看预算和需求。",
+		"这里是惠惠专席，要么领成就，要么报委托。",
+		"*惠惠压低帽檐。*\n\n这事确实要先看清楚。\n\n*她又把法杖往地上一杵。*",
+		"哼，这次算你说得不错🙂",
+		"惠惠觉得这事可以先缓一下，惠惠不是不管你。",
+		"转什么deepseek！本大魔法师又不是传送阵客服！",
 	}
-	if got := aiReplyQualityIssue("That looks pretty reasonable."); got != "" {
-		t.Fatalf("aiReplyQualityIssue natural reply = %q, want empty", got)
+	for _, reply := range styleReplies {
+		if got := aiReplyQualityIssue(reply); got != "" {
+			t.Fatalf("aiReplyQualityIssue(%q) = %q, want no style rejection", reply, got)
+		}
+		if got := feedReplyQualityIssue(reply, "标题"); got != "" {
+			t.Fatalf("feedReplyQualityIssue(%q) = %q, want no style rejection", reply, got)
+		}
 	}
 }
 
-func TestAIReplyQualityIssueDoesNotTreatSkipAsValid(t *testing.T) {
-	oldConfig := config.ConfigStruct
-	t.Cleanup(func() {
-		config.ConfigStruct = oldConfig
-	})
-	config.ConfigStruct.Ai.ChatName = "Megumin"
+func TestReplyQualityStillRejectsSkipAndOverLengthForSendSafety(t *testing.T) {
+	restoreReplyQualityTestState(t)
 
 	if got := aiReplyQualityIssue("SKIP"); got == "" {
-		t.Fatal("aiReplyQualityIssue(SKIP) = empty, want issue")
+		t.Fatal("aiReplyQualityIssue(SKIP) = empty, want send-level issue")
+	}
+	if got := feedReplyQualityIssue("SKIP", ""); got != "" {
+		t.Fatalf("feedReplyQualityIssue(SKIP) = %q, want allowed feed skip", got)
+	}
+
+	tooLong := strings.Repeat("测", xhhCommentMaxRunes+1)
+	if got := aiReplyQualityIssue(tooLong); got != "回复过长" {
+		t.Fatalf("aiReplyQualityIssue over limit = %q, want 回复过长", got)
+	}
+	if got := feedReplyQualityIssue(tooLong, ""); got != "回复过长" {
+		t.Fatalf("feedReplyQualityIssue over limit = %q, want 回复过长", got)
 	}
 }
 
-func TestAIReplyQualityIssueRejectsRepeatedChatName(t *testing.T) {
-	oldConfig := config.ConfigStruct
-	t.Cleanup(func() {
-		config.ConfigStruct = oldConfig
-	})
-	config.ConfigStruct.Ai.ChatName = "惠惠"
-
-	if got := aiReplyQualityIssue("惠惠觉得这事可以先缓一下，惠惠不是不管你。"); got == "" {
-		t.Fatal("aiReplyQualityIssue repeated chat name = empty, want issue")
-	}
-	if got := aiReplyQualityIssue("这事可以先缓一下，我会看着点。"); got != "" {
-		t.Fatalf("aiReplyQualityIssue natural reply = %q, want empty", got)
-	}
-}
-
-func TestAIReplyQualityIssueRejectsOveractedPersonaTerms(t *testing.T) {
-	oldConfig := config.ConfigStruct
-	t.Cleanup(func() {
-		config.ConfigStruct = oldConfig
-	})
-	config.ConfigStruct.Ai.ChatName = "惠惠"
-	config.ConfigStruct.Ai.Description = "红魔族大魔法师，会爆裂魔法"
-
-	reply := "哼，想召唤本大魔法师来接委托？红魔族的爆裂魔法已经准备好了！"
-	if got := aiReplyQualityIssue(reply); got == "" {
-		t.Fatal("aiReplyQualityIssue overacted persona reply = empty, want issue")
-	}
-	if got := aiReplyQualityIssue("你这句像是在试探我底牌啊。可以聊，但别真把我拆开研究。"); got != "" {
-		t.Fatalf("aiReplyQualityIssue natural reply = %q, want empty", got)
-	}
-}
-
-func TestAIReplyQualityIssueRejectsHarshCutePingReplies(t *testing.T) {
+func TestGenerateAIReplyDoesNotRetryStyleReplies(t *testing.T) {
 	restoreReplyQualityTestState(t)
-	config.ConfigStruct.Ai.ChatName = "惠惠"
-
-	reply := "又喵？！这到底是暗号，还是猫化病毒已经扩散了？翻译成人话给我听！"
-	if got := aiReplyQualityIssue(reply); got == "" {
-		t.Fatal("aiReplyQualityIssue harsh cute-ping reply = empty, want issue")
-	}
-	if got := aiReplyQualityIssue("喵什么喵……哼，既然都把我叫出来了，就陪你一下。想说什么？"); got != "" {
-		t.Fatalf("aiReplyQualityIssue soft cute-ping reply = %q, want empty", got)
-	}
-}
-
-func TestAIReplyQualityIssueRejectsDangerLabelsForBanter(t *testing.T) {
-	restoreReplyQualityTestState(t)
-
-	reply := "你这输入法已经被病毒污染了吧，先登记成高危魔物！"
-	if got := aiReplyQualityIssue(reply); got == "" {
-		t.Fatal("aiReplyQualityIssue danger-label banter reply = empty, want issue")
-	}
-	if got := aiReplyQualityIssue("你这输入法也太会拐弯了吧。先说正事，我听一句。"); got != "" {
-		t.Fatalf("aiReplyQualityIssue playful banter reply = %q, want empty", got)
-	}
-}
-
-func TestAIReplyQualityIssueRejectsPersonaShellTemplateWords(t *testing.T) {
-	restoreReplyQualityTestState(t)
-
-	for _, reply := range []string{
-		"这里是惠惠专席，要么领成就，要么报委托。",
-		"你这转职路线跳太快了，先从传送阵出来再说。",
-		"这公司像临时拼出来的解除理由卷轴，先别被他们带节奏。",
-	} {
-		if got := aiReplyQualityIssue(reply); got != "角色套壳词过重，像模板回复" {
-			t.Fatalf("aiReplyQualityIssue persona shell reply = %q, want 角色套壳词过重，像模板回复 for %q", got, reply)
-		}
-	}
-}
-
-func TestAIReplyQualityIssueAllowsNaturalShortMemeReplies(t *testing.T) {
-	restoreReplyQualityTestState(t)
-
-	for _, reply := range []string{
-		"不转不转，你这是把我当转接台了是吧。下一个还准备转谁？",
-		"奖励可以有，但别笑得这么可疑。先说好，只奖励一点点。",
-		"谁是妈妈啊！乱叫也要有个限度，最多准你叫前辈。",
-		"喵什么喵……行吧，听见了。你这是在撒娇还是在试探我？",
-	} {
-		if got := aiReplyQualityIssue(reply); got != "" {
-			t.Fatalf("aiReplyQualityIssue natural short meme reply = %q, want empty for %q", got, reply)
-		}
-	}
-}
-
-func TestAIReplyQualityIssueRejectsOverusedCharacterProps(t *testing.T) {
-	restoreReplyQualityTestState(t)
-
-	reply := "*惠惠按住帽檐，举起法杖，披风一甩，眼罩都差点歪掉。* 这是本大魔法师的爆裂魔法警告！"
-	if got := aiReplyQualityIssue(reply); got == "" {
-		t.Fatal("aiReplyQualityIssue prop-heavy reply = empty, want issue")
-	}
-	if got := aiReplyQualityIssue("不转不转，职业栏已经够挤了。你要是真有事，就好好说一句。"); got != "" {
-		t.Fatalf("aiReplyQualityIssue natural banter reply = %q, want empty", got)
-	}
-}
-
-func TestAIReplyQualityIssueRejectsRawEmojiButAllowsXHHShortcodes(t *testing.T) {
-	restoreReplyQualityTestState(t)
-
-	if got := aiReplyQualityIssue("哼，这次算你说得不错🙂"); got == "" {
-		t.Fatal("aiReplyQualityIssue raw emoji reply = empty, want issue")
-	}
-	if got := aiReplyQualityIssue("哼，这次算你说得不错[cube_喜欢]"); got != "" {
-		t.Fatalf("aiReplyQualityIssue XHH shortcode reply = %q, want empty", got)
-	}
-	if got := aiReplyQualityIssue("行吧，这个表情我收下了[heygirl_开心]"); got != "" {
-		t.Fatalf("aiReplyQualityIssue arbitrary official shortcode reply = %q, want empty", got)
-	}
-}
-
-func TestAIReplyQualityIssueRejectsExplicitSexualContent(t *testing.T) {
-	restoreReplyQualityTestState(t)
-
-	for _, reply := range []string{
-		"可以陪你玩色色的成人剧情，直接上床也行。",
-		"那就写一段露骨色情内容给你看。",
-		"Sure, let's do explicit sex roleplay.",
-	} {
-		if got := aiReplyQualityIssue(reply); got != "回复包含露骨色情内容" {
-			t.Fatalf("aiReplyQualityIssue explicit sexual reply = %q, want 回复包含露骨色情内容 for %q", got, reply)
-		}
-	}
-}
-
-func TestAIReplyQualityIssueAllowsPlayfulNonSexualRoleplay(t *testing.T) {
-	restoreReplyQualityTestState(t)
-
-	for _, reply := range []string{
-		"谁是妈妈啊！乱认亲也要有个限度……最多准你叫前辈。",
-		"猫娘可以陪你演一下，但别往奇怪方向拐。喵一句就够了吧。",
-		"可以陪你闹，撒娇也行一点点，别把我当成没有脾气的角色卡。",
-	} {
-		if got := aiReplyQualityIssue(reply); got != "" {
-			t.Fatalf("aiReplyQualityIssue harmless playful reply = %q, want empty for %q", got, reply)
-		}
-	}
-}
-
-func TestAIReplyQualityIssueForQuestionRejectsShortMemePullingPostTopic(t *testing.T) {
-	restoreReplyQualityTestState(t)
-
-	reply := "转雨姐？你们这楼是准备把我当万能转盘了吧。行，雨姐可以来，但这6.4万的大饼先别想躲雨里蒙混过去。"
-	if got := aiReplyQualityIssueForQuestion(reply, "转雨姐[cube_喜欢]"); got != "短梗回复强行拉回主帖主题" {
-		t.Fatalf("aiReplyQualityIssueForQuestion short meme old topic = %q", got)
-	}
-	if got := aiReplyQualityIssueForQuestion("转雨姐？不转不转，你把我当转盘了是吧。下一个还准备转谁？", "转雨姐[cube_喜欢]"); got != "" {
-		t.Fatalf("aiReplyQualityIssueForQuestion natural short meme = %q, want empty", got)
-	}
-	if got := aiReplyQualityIssueForQuestion("6.4万的大饼确实该被炸出原形。", "6.4万这个事怎么看"); got != "" {
-		t.Fatalf("aiReplyQualityIssueForQuestion explicit topic mention = %q, want empty", got)
-	}
-}
-
-func TestAIReplyRetryInstructionAvoidsForcingPersonaAnchors(t *testing.T) {
-	oldConfig := config.ConfigStruct
-	t.Cleanup(func() {
-		config.ConfigStruct = oldConfig
-	})
-	config.ConfigStruct.Ai.ChatName = "Megumin"
-	config.ConfigStruct.Ai.Personality = "explosion magic"
-
-	got := aiReplyRetryInstruction("hello", "missing persona")
-	for _, want := range []string{"hello", "missing persona", "不要靠反复自称名字", "用态度、情绪和判断体现人设", "补回惠惠式反应", "不要退成中立路人", "第一反应或第一人称姿态", "短梗只接当前这句话", "不要主动拉回主帖主题", "红魔族式夸张", "不要变成攻略顾问", "动作描写只能少量点到"} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("aiReplyRetryInstruction missing %q in %q", want, got)
-		}
-	}
-	for _, unwanted := range []string{"Megumin", "explosion", "人设锚点"} {
-		if strings.Contains(got, unwanted) {
-			t.Fatalf("aiReplyRetryInstruction should not force anchor %q in %q", unwanted, got)
-		}
-	}
-}
-
-func TestGenerateAIReplyWithQualityRetryUntilValid(t *testing.T) {
-	restoreReplyQualityTestState(t)
-	config.ConfigStruct.Ai.ChatName = "Megumin"
-	config.ConfigStruct.Ai.Personality = "explosion magic"
 
 	calls := 0
 	getAIReplyForQualityRetry = func([]ai.Content, string, []ai.Topics, []ai.Tags, ...zap.Field) string {
 		calls++
-		if calls == 1 {
-			return "建议你先别急着买。"
-		}
-		return "Megumin says explosion is the answer."
+		return "建议你先看看预算和需求。"
 	}
 
 	got, skipped := generateAIReplyWithQualityRetry(nil, "hello", nil, nil)
 	if skipped {
-		t.Fatal("generateAIReplyWithQualityRetry skipped, want valid reply")
+		t.Fatal("generateAIReplyWithQualityRetry skipped style reply, want sent")
 	}
-	if got != "Megumin says explosion is the answer." {
-		t.Fatalf("reply = %q", got)
-	}
-	if calls != 2 {
-		t.Fatalf("calls = %d, want 2", calls)
-	}
-}
-
-func TestGenerateAIReplyWithQualityRetryAcceptsNaturalReplyWithoutExplicitAnchor(t *testing.T) {
-	restoreReplyQualityTestState(t)
-	config.ConfigStruct.Ai.ChatName = "Megumin"
-	config.ConfigStruct.Ai.Personality = "explosion magic"
-
-	calls := 0
-	getAIReplyForQualityRetry = func([]ai.Content, string, []ai.Topics, []ai.Tags, ...zap.Field) string {
-		calls++
-		return "That looks reasonable."
-	}
-
-	got, skipped := generateAIReplyWithQualityRetry(nil, "hello", nil, nil)
-	if skipped {
-		t.Fatal("generateAIReplyWithQualityRetry skipped = true, want false")
-	}
-	if got != "That looks reasonable." {
+	if got != "建议你先看看预算和需求。" {
 		t.Fatalf("reply = %q", got)
 	}
 	if calls != 1 {
@@ -269,26 +72,21 @@ func TestGenerateAIReplyWithQualityRetryAcceptsNaturalReplyWithoutExplicitAnchor
 	}
 }
 
-func TestGenerateFeedReplyWithQualityRetryUntilValid(t *testing.T) {
+func TestGenerateFeedReplyDoesNotRetryStyleReplies(t *testing.T) {
 	restoreReplyQualityTestState(t)
-	config.ConfigStruct.Ai.ChatName = "Megumin"
-	config.ConfigStruct.Ai.Personality = "explosion magic"
 
 	calls := 0
 	getAIFeedReplyForQualityRetry = func(string, []ai.Content, string, []ai.Topics, []ai.Tags, ...zap.Field) string {
 		calls++
-		if calls == 1 {
-			return "建议你先看看预算和需求。"
-		}
-		return "Megumin says explosion belongs in this post."
+		return "这价格看着还行，火力也不错，可以考虑。"
 	}
 
 	got := generateFeedReplyWithQualityRetry("prompt", nil, "instruction", "", nil, nil)
-	if got != "Megumin says explosion belongs in this post." {
+	if got != "这价格看着还行，火力也不错，可以考虑。" {
 		t.Fatalf("reply = %q", got)
 	}
-	if calls != 2 {
-		t.Fatalf("calls = %d, want 2", calls)
+	if calls != 1 {
+		t.Fatalf("calls = %d, want 1", calls)
 	}
 }
 

@@ -193,12 +193,27 @@ func TestIndexTemplateIncludesMeguminPersonaTemplateAction(t *testing.T) {
 	for _, want := range []string{
 		"套用惠惠酒馆人设",
 		"meguminPersonaTemplate",
-		"先回应对方这句话本身，再体现惠惠",
-		"惠惠刷到这篇帖子后的公开评论",
-		"不要每句都出现惠惠、红魔族、爆裂魔法、本大魔法师、委托、召唤",
+		"惠惠 是红魔族的大魔法师",
+		"一天只能使用一次强大的爆裂魔法",
+		"请基于当前上下文，以 惠惠 的人格自然回应",
+		"请基于当前帖子内容，以惠惠的人格写一条公开评论",
 	} {
 		if !strings.Contains(html, want) {
 			t.Fatalf("index template missing %q", want)
+		}
+	}
+	for _, unwanted := range []string{
+		"专席",
+		"报委托",
+		"转职路线",
+		"传送阵",
+		"领成就",
+		"卷轴",
+		"普通短评默认",
+		"红魔族式夸张",
+	} {
+		if strings.Contains(html, unwanted) {
+			t.Fatalf("index template should not include old hard constraint %q", unwanted)
 		}
 	}
 }

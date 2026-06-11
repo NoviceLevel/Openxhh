@@ -6,65 +6,27 @@ import (
 	"testing"
 )
 
-func TestBuildReplySystemPromptKeepsCustomPromptAndAddsHumanPresence(t *testing.T) {
-	got := buildReplySystemPrompt("你是测试角色。")
-	for _, want := range []string{"你是测试角色。", "真人感与情绪规则", "先接住对方具体说的话", "不要主动说“作为 AI / 机器人 / 模型”"} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("buildReplySystemPrompt should contain %q; got %q", want, got)
-		}
+func TestBuildReplySystemPromptUsesOnlyConfiguredPrompt(t *testing.T) {
+	got := buildReplySystemPrompt("  persona from config  ")
+	if got != "persona from config" {
+		t.Fatalf("buildReplySystemPrompt = %q, want configured prompt only", got)
 	}
-	if strings.Contains(got, "回复协议") {
-		t.Fatalf("buildReplySystemPrompt should not append old forced protocol wording: %q", got)
-	}
-}
-
-func TestBuildReplySystemPromptAddsDefaultHumanPresenceWithoutCharacter(t *testing.T) {
-	got := buildReplySystemPrompt("")
-	for _, want := range []string{"真人感与情绪规则", "默认保持温和、有主见、有一点生活感", "只输出最终要发到评论区的回复文本"} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("buildReplySystemPrompt should contain %q; got %q", want, got)
-		}
-	}
-}
-
-func TestBuildReplySystemPromptAddsNaturalInteractionGuardrails(t *testing.T) {
-	got := buildReplySystemPrompt("persona")
-	for _, want := range []string{
+	for _, unwanted := range []string{
 		"Natural interaction guardrails",
-		"Do not immediately translate every message into character lore",
-		"Do not become a neutral passerby or generic helper",
+		"真人感与情绪规则",
 		"Every reply needs a Megumin-like reaction",
-		"If a reply could be said by any ordinary commenter",
-		"For feed replies, imagine the character just scrolled into the post",
-		"not a neutral content review",
-		"Do not treat personality as a suffix",
-		"visible first reaction",
-		"first-person stance",
-		"Keep the Crimson Demon absurdity alive",
-		"casual or low-stakes posts",
-		"70% character reaction",
-		"Use at most one obvious persona term",
-		`only says things like "喵"`,
-		`Do not scold them to "speak human language"`,
-		`For short memes like "转xxx", "奖励", "喵", or "叫妈妈"`,
-		"do not pull the main post topic back into the reply",
-		"Only use the post topic if the user explicitly mentions it",
-		"Stage directions are optional seasoning",
-		"Do not turn every joke into danger labels",
-		"Do not default to prop choreography",
+		"Default to 1-2 sentences",
 		"Do not use template lore-shell words",
-		"Default to 1-2 sentences for ordinary replies",
-		"Be willing to play along with harmless requests",
-		"Do not generate explicit sexual content",
-		"deflect briefly in character",
-		"use any official Xiaoheihe shortcode emoji",
-		"[cube_喜欢]",
-		"Do not output raw Unicode emoji",
-		"Prefer concrete callbacks",
 	} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("buildReplySystemPrompt missing %q in %q", want, got)
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("buildReplySystemPrompt should not append %q: %q", unwanted, got)
 		}
+	}
+}
+
+func TestBuildReplySystemPromptAllowsEmptyPrompt(t *testing.T) {
+	if got := buildReplySystemPrompt("   "); got != "" {
+		t.Fatalf("buildReplySystemPrompt empty = %q, want empty", got)
 	}
 }
 
@@ -148,16 +110,16 @@ func TestBuildFeedReplyScenePromptFramesPostComment(t *testing.T) {
 	}
 }
 
-func TestBuildFeedReplyScenePromptDefaultUsesTavernStyle(t *testing.T) {
+func TestBuildFeedReplyScenePromptDefaultOnlyFramesTask(t *testing.T) {
 	got := buildFeedReplyScenePrompt("")
-	for _, want := range []string{"惠惠刷到这篇帖子后的公开评论", "普通回复一样的酒馆人设", "自然接话", "不能退成普通评论员", "惠惠式反应", "抽象", "红魔族式夸张", "闲聊和普通刷帖", "不要每条都用动作描写开场", "SKIP"} {
+	for _, want := range []string{"小黑盒首页帖子内容", "请基于这篇小黑盒帖子写一条公开评论", "SKIP"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("buildFeedReplyScenePrompt default missing %q in %q", want, got)
 		}
 	}
-	for _, unwanted := range []string{"短评论", "普通路过网友", "角色味只轻轻露出"} {
+	for _, unwanted := range []string{"惠惠", "普通评论员", "惠惠式反应", "红魔族式夸张", "专席", "报委托", "传送阵", "卷轴", "普通短评默认1-2句"} {
 		if strings.Contains(got, unwanted) {
-			t.Fatalf("buildFeedReplyScenePrompt default should not contain old feed wording %q: %q", unwanted, got)
+			t.Fatalf("buildFeedReplyScenePrompt default should not add style constraint %q: %q", unwanted, got)
 		}
 	}
 }
