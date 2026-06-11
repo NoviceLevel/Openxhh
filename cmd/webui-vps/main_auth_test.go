@@ -195,8 +195,9 @@ func TestIndexTemplateIncludesMeguminPersonaTemplateAction(t *testing.T) {
 		"meguminPersonaTemplate",
 		"惠惠 是红魔族的大魔法师",
 		"一天只能使用一次强大的爆裂魔法",
-		"公开评论区，不是酒馆私聊",
-		"回复要适合公开评论区",
+		"当前场景：小黑盒评论区、楼层或首页帖子",
+		"你是惠惠，正在根据眼前的帖子或评论接话",
+		"更主观、更口语、更有情绪",
 		"applyPersonaFields('feedReply',aiTemplate)",
 		"['ai.prompt','feedReply.prompt']",
 	} {
@@ -215,6 +216,13 @@ func TestIndexTemplateIncludesMeguminPersonaTemplateAction(t *testing.T) {
 		"红魔族式夸张",
 		"森林里找个没人的地方",
 		"开始咏唱爆裂魔法",
+		"不是客服",
+		"不是酒馆私聊",
+		"像真人短评",
+		"不像舞台剧",
+		"硬拐成爆裂魔法",
+		"反复自称本大魔法师",
+		"强行爆裂梗",
 	} {
 		if strings.Contains(html, unwanted) {
 			t.Fatalf("index template should not include old hard constraint %q", unwanted)
