@@ -257,6 +257,73 @@ func TestSendReqChatCompletionsRetriesStreamWhenEmpty(t *testing.T) {
 	}
 }
 
+func TestSendReqRetriesWithoutImagesOnFileDownloadFailure(t *testing.T) {
+	restoreAIConfig(t)
+	oldLogger := loger.Loger
+	loger.Loger = zap.NewNop()
+	t.Cleanup(func() { loger.Loger = oldLogger })
+	config.ConfigStruct.Ai.WebSearch = testBoolPtr(false)
+
+	image := Content{Type: "image_url"}
+	image.ImgUrl.Url = "https://img.example.com/blocked.jpg"
+
+	type requestBody struct {
+		Messages []struct {
+			Role    string          `json:"role"`
+			Content json.RawMessage `json:"content"`
+		} `json:"messages"`
+		Stream bool `json:"stream"`
+	}
+
+	attempts := 0
+	var bodies []requestBody
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		attempts++
+		var body requestBody
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		bodies = append(bodies, body)
+		w.Header().Set("Content-Type", "application/json")
+		if attempts == 1 {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"error":{"message":"error getting file type: failed to download file, status code: 403","code":"count_token_failed"}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"text ok"}}],"usage":{"total_tokens":11}}`))
+	}))
+	defer server.Close()
+
+	config.ConfigStruct.Ai.BaseUrl = server.URL + "/v1/chat/completions"
+	resp := SendReq("test-model", []any{
+		Messages[[]Content]{Role: "user", Content: []Content{{Type: "text", Text: "hello"}, image}},
+	})
+	if len(resp.Choices) != 1 || resp.Choices[0].Msg.Content != "text ok" {
+		t.Fatalf("response = %+v", resp)
+	}
+	if attempts != 2 || len(bodies) != 2 {
+		t.Fatalf("attempts=%d bodies=%d, want 2", attempts, len(bodies))
+	}
+
+	var firstContent []Content
+	if err := json.Unmarshal(bodies[0].Messages[0].Content, &firstContent); err != nil {
+		t.Fatalf("first content: %v", err)
+	}
+	if len(firstContent) != 2 || firstContent[1].Type != "image_url" {
+		t.Fatalf("first content = %+v, want text+image", firstContent)
+	}
+
+	var secondContent []Content
+	if err := json.Unmarshal(bodies[1].Messages[0].Content, &secondContent); err != nil {
+		t.Fatalf("second content: %v", err)
+	}
+	if len(secondContent) != 1 || secondContent[0].Type != "text" || secondContent[0].Text != "hello" {
+		t.Fatalf("second content = %+v, want text only", secondContent)
+	}
+}
+
 func TestSendChatCompletionResponsesFallsBackToCompatPayload(t *testing.T) {
 	restoreAIConfig(t)
 

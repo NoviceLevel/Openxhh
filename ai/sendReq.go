@@ -156,17 +156,15 @@ func SendReq(Model string, Msg []any) (Jresp respStruct) {
 		}
 		if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 			bodyStr := string(Dresp)
-			if resp.StatusCode == http.StatusBadRequest && strings.Contains(bodyStr, "failed to download url") {
+			if !strings.Contains(payload.Name, "+noimg") && shouldRetryWithoutImage(resp.StatusCode, bodyStr) {
 				failedURL := extractFailedImageURL(bodyStr)
-				if failedURL != "" {
-					loger.Loger.Warn("[Ai]图片下载失败，去掉失败图片重试", zap.String("failed_url", failedURL), zap.String("variant", payload.Name))
-					newPayloads, newMsg, bErr := rebuildWithoutImage(Model, Msg, failedURL)
-					if bErr == nil && len(newPayloads) > 0 {
-						payloads = newPayloads
-						Msg = newMsg
-						i = -1
-						continue
-					}
+				loger.Loger.Warn("[Ai]图片下载失败，去掉图片重试", zap.String("failed_url", failedURL), zap.String("variant", payload.Name), zap.Int("status", resp.StatusCode))
+				newPayloads, newMsg, bErr := rebuildWithoutImage(Model, Msg, failedURL)
+				if bErr == nil && len(newPayloads) > 0 {
+					payloads = newPayloads
+					Msg = newMsg
+					i = -1
+					continue
 				}
 			}
 			if useResponses && i < len(payloads)-1 && shouldTryNextResponsesPayload(resp.StatusCode) {
@@ -279,6 +277,17 @@ func resetChatCompletionsModeCacheForTest() {
 		chatCompletionsModeCache.Delete(key)
 		return true
 	})
+}
+
+func shouldRetryWithoutImage(status int, body string) bool {
+	if status < http.StatusBadRequest {
+		return false
+	}
+	lowerBody := strings.ToLower(body)
+	return strings.Contains(lowerBody, "failed to download url") ||
+		strings.Contains(lowerBody, "failed to download file") ||
+		strings.Contains(lowerBody, "error getting file type") ||
+		(strings.Contains(lowerBody, "count_token_failed") && strings.Contains(lowerBody, "file"))
 }
 
 func buildResponsesReqBody(Model string, Msg []any, legacy bool) ([]byte, error) {
@@ -787,8 +796,8 @@ func removeImageFromMessages(Msg []any, targetURL string) []any {
 		}
 		var filtered []Content
 		for i, c := range contents {
-			if c.Type == "image_url" && strings.Contains(c.ImgUrl.Url, targetURL) {
-				if i > 0 && len(filtered) > 0 && contents[i-1].Type == "text" &&
+			if c.Type == "image_url" && (targetURL == "" || strings.Contains(c.ImgUrl.Url, targetURL)) {
+				if targetURL != "" && i > 0 && len(filtered) > 0 && contents[i-1].Type == "text" &&
 					filtered[len(filtered)-1].Text == contents[i-1].Text {
 					filtered = filtered[:len(filtered)-1]
 				}
