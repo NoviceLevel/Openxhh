@@ -69,6 +69,48 @@ func TestGenerateAIReplyDoesNotRetryStyleReplies(t *testing.T) {
 	}
 }
 
+func TestAIReplyQualityAllowsSeriousQuestionsButRejectsLongTemplate(t *testing.T) {
+	restoreReplyQualityTestState(t)
+
+	longReply := "哼，叫我出来就是为了这种扫盲工作吗？我可是精通爆裂魔法的大魔法师，才不是什么图鉴检索器。\n\n不过看在图里有那么多能被爆裂魔法一次性解决的元素，我就勉强看看吧。那分明是大乱炖，谁还分得那么清啊！"
+	if got := aiReplyQualityIssueForQuestion(longReply, "帮忙分析下图9都有哪些动漫元素"); got == "" {
+		t.Fatal("aiReplyQualityIssueForQuestion returned empty for long template reply")
+	}
+
+	shortAnswer := "图9像是动漫梗大乱炖，我能看出几处角色发型和校服元素。哼，发原图清楚点我再给你逐个炸出来。"
+	if got := aiReplyQualityIssueForQuestion(shortAnswer, "帮忙分析下图9都有哪些动漫元素"); got != "" {
+		t.Fatalf("aiReplyQualityIssueForQuestion short serious reply = %q, want empty", got)
+	}
+}
+
+func TestGenerateAIReplyRetriesLongTemplateReplyOnce(t *testing.T) {
+	restoreReplyQualityTestState(t)
+
+	replies := []string{
+		"哼，叫我出来就是为了这种扫盲工作吗？我可是精通爆裂魔法的大魔法师，才不是什么图鉴检索器。\n\n不过看在图里有那么多能被爆裂魔法一次性解决的元素，我就勉强看看吧。那分明是大乱炖，谁还分得那么清啊！",
+		"图9像是动漫梗大乱炖，我能看出几处角色发型和校服元素。哼，发原图清楚点我再给你逐个炸出来。",
+	}
+	calls := 0
+	getAIReplyForQualityRetry = func(contents []ai.Content, question string, topics []ai.Topics, tags []ai.Tags, fields ...zap.Field) string {
+		calls++
+		if calls == 2 && !strings.Contains(question, "上一条回复太长") {
+			t.Fatalf("retry question missing rewrite guidance: %q", question)
+		}
+		return replies[calls-1]
+	}
+
+	got, skipped := generateAIReplyWithQualityRetry(nil, "帮忙分析下图9都有哪些动漫元素", nil, nil)
+	if skipped {
+		t.Fatal("generateAIReplyWithQualityRetry skipped valid retry reply")
+	}
+	if got != replies[1] {
+		t.Fatalf("reply = %q, want retry reply %q", got, replies[1])
+	}
+	if calls != 2 {
+		t.Fatalf("calls = %d, want 2", calls)
+	}
+}
+
 func TestGenerateFeedReplyDoesNotRetryShortStyleReplies(t *testing.T) {
 	restoreReplyQualityTestState(t)
 

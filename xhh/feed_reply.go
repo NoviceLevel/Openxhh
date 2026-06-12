@@ -271,7 +271,36 @@ func aiReplyQualityIssue(reply string) string {
 }
 
 func aiReplyQualityIssueForQuestion(reply string, questionText string) string {
-	return aiReplyQualityIssue(reply)
+	if issue := basicReplySendIssue(reply, false); issue != "" {
+		return issue
+	}
+	reply = strings.TrimSpace(reply)
+	if reply == "" {
+		return ""
+	}
+	if hasMultipleReplyParagraphs(reply) {
+		return "普通回复段落过多"
+	}
+	maxRunes := maxAIReplyNaturalRunes
+	maxSentenceRunes := maxAIReplyNaturalSentenceRunes
+	maxSentences := maxAIReplyNaturalSentences
+	if isSeriousReplyQuestion(questionText) {
+		maxRunes = maxSeriousAIReplyNaturalRunes
+		maxSentenceRunes = maxSeriousAIReplyNaturalSentenceRunes
+		maxSentences = maxSeriousAIReplyNaturalSentences
+	}
+	if len([]rune(reply)) > maxRunes {
+		return "普通回复过长"
+	}
+	if sentenceCount(reply) > maxSentences {
+		return "普通回复句子过多"
+	}
+	for _, sentence := range splitReplySentences(reply) {
+		if len([]rune(strings.TrimSpace(sentence))) > maxSentenceRunes {
+			return "普通回复单句过长"
+		}
+	}
+	return ""
 }
 
 func basicReplySendIssue(reply string, allowSkip bool) string {
@@ -286,6 +315,10 @@ func basicReplySendIssue(reply string, allowSkip bool) string {
 		return "回复过长"
 	}
 	return ""
+}
+
+func hasMultipleReplyParagraphs(text string) bool {
+	return strings.Contains(strings.TrimSpace(text), "\n\n")
 }
 
 func sentenceCount(text string) int {
@@ -314,6 +347,23 @@ func addReplySentence(sentences *[]string, sentence string) {
 	if sentence != "" {
 		*sentences = append(*sentences, sentence)
 	}
+}
+
+func isSeriousReplyQuestion(questionText string) bool {
+	text := strings.TrimSpace(questionText)
+	if text == "" {
+		return false
+	}
+	keywords := []string{
+		"分析", "帮忙", "求助", "建议", "怎么", "如何", "哪些", "什么", "为什么",
+		"怎么办", "能不能", "可以吗", "配置", "问题", "图", "识别", "原因",
+	}
+	for _, keyword := range keywords {
+		if strings.Contains(text, keyword) {
+			return true
+		}
+	}
+	return false
 }
 
 func feedReplyInterval() int {
