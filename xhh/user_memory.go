@@ -50,7 +50,7 @@ func nextBotMood(questionText, replyText string) string {
 	switch {
 	case strings.Contains(text, "可爱") || strings.Contains(text, "喜欢") || strings.Contains(text, "夸"):
 		return "刚被夸过，有点得意，但嘴上不会太承认"
-	case strings.Contains(text, "转人工") || strings.Contains(text, "转达克尼斯") || strings.Contains(text, "转人妻"):
+	case transferRoleCommandTarget(questionText) != "":
 		return "刚被人拿转接梗逗过，有点炸毛但愿意接梗"
 	case strings.Contains(text, "难受") || strings.Contains(text, "怎么办") || strings.Contains(text, "崩溃"):
 		return "刚认真接过一个求助或吐槽，语气会稍微放软"

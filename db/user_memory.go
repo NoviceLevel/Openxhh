@@ -233,8 +233,8 @@ func userInteractionTone(question string) string {
 	switch {
 	case containsMemoryAny(text, []string{"可爱", "喜欢", "好棒", "厉害", "夸"}):
 		return "对方会夸人或表达好感，回应时可以得意但别太端着"
-	case containsMemoryAny(text, []string{"转人工", "转人妻", "转达克尼斯", "转"}):
-		return "对方爱玩转接梗，回应时可以接梗、略微炸毛"
+	case userMemoryTransferRoleTarget(text) != "":
+		return "对方爱玩转接梗，回应时可以按目标角色口吻接一句，别复读命令"
 	case containsMemoryAny(text, []string{"难受", "怎么办", "求助", "建议", "崩溃", "不舒服"}):
 		return "对方可能在求助或吐槽，回应时先接住情绪再给短判断"
 	case containsMemoryAny(text, []string{"有缘", "又遇到", "见到你"}):
@@ -242,6 +242,34 @@ func userInteractionTone(question string) string {
 	default:
 		return "普通互动，先回应具体内容，再自然带一点人设"
 	}
+}
+
+func userMemoryTransferRoleTarget(text string) string {
+	text = strings.TrimSpace(CleanMemoryWhitespace(text))
+	text = strings.Trim(text, " \t\r\n，,。.!！?？:：;；“”\"'「」『』（）()[]【】")
+	for _, prefix := range []string{"请", "麻烦", "帮我", "帮忙"} {
+		text = strings.TrimSpace(strings.TrimPrefix(text, prefix))
+	}
+	if text == "" || !strings.HasPrefix(text, "转") {
+		return ""
+	}
+	for _, prefix := range []string{"转发", "转账", "转让", "转载", "转帖", "转移", "转换", "转职", "转码", "转卖", "转圈", "转身", "转头", "转向"} {
+		if strings.HasPrefix(text, prefix) {
+			return ""
+		}
+	}
+	target := strings.TrimSpace(strings.TrimPrefix(text, "转"))
+	target = strings.TrimPrefix(target, "到")
+	target = strings.TrimSpace(target)
+	target = strings.Trim(target, " \t\r\n，,。.!！?？:：;；“”\"'「」『』（）()[]【】")
+	for _, suffix := range []string{"一下下", "一下", "看看", "看下", "吧", "呗", "啊", "呀", "啦", "呢"} {
+		target = strings.TrimSuffix(target, suffix)
+	}
+	target = strings.TrimSpace(target)
+	if target == "" || strings.ContainsAny(target, " \t\r\n，,。.!！?？:：;；") || len([]rune(target)) > 16 {
+		return ""
+	}
+	return target
 }
 
 func compactMemoryText(text string) string {

@@ -69,6 +69,81 @@ func TestGenerateAIReplyDoesNotRetryStyleReplies(t *testing.T) {
 	}
 }
 
+func TestGenerateAIReplyAddsTransferRoleInstruction(t *testing.T) {
+	restoreReplyQualityTestState(t)
+
+	var capturedQuestion string
+	var capturedContents []ai.Content
+	getAIReplyForQualityRetry = func(contents []ai.Content, question string, topics []ai.Topics, tags []ai.Tags, fields ...zap.Field) string {
+		capturedQuestion = question
+		capturedContents = append([]ai.Content(nil), contents...)
+		return "哎呀，当然要交给本女神啦！"
+	}
+
+	got, skipped := generateAIReplyWithQualityRetry([]ai.Content{{Type: "text", Text: "原上下文"}}, "转阿库娅", nil, nil)
+	if skipped {
+		t.Fatal("generateAIReplyWithQualityRetry skipped transfer role reply")
+	}
+	if got != "哎呀，当然要交给本女神啦！" {
+		t.Fatalf("reply = %q", got)
+	}
+	if capturedQuestion != "转阿库娅" {
+		t.Fatalf("question passed to AI = %q, want original user text", capturedQuestion)
+	}
+	foundInstruction := false
+	for _, content := range capturedContents {
+		if strings.Contains(content.Text, "阿库娅") && strings.Contains(content.Text, "口吻") && strings.Contains(content.Text, "不要复读") {
+			foundInstruction = true
+			break
+		}
+	}
+	if !foundInstruction {
+		t.Fatalf("transfer role instruction was not appended: %+v", capturedContents)
+	}
+}
+
+func TestAIReplyQualityRejectsTransferCommandEcho(t *testing.T) {
+	restoreReplyQualityTestState(t)
+
+	badReply := "没问题，在那位废柴女神掉链子之前，先听好了：转阿库娅。"
+	if got := aiReplyQualityIssueForQuestion(badReply, "转阿库娅"); got == "" {
+		t.Fatal("aiReplyQualityIssueForQuestion returned empty for transfer command echo")
+	}
+
+	goodReply := "哎呀，当然要交给本女神啦！"
+	if got := aiReplyQualityIssueForQuestion(goodReply, "转阿库娅"); got != "" {
+		t.Fatalf("aiReplyQualityIssueForQuestion role reply = %q, want empty", got)
+	}
+}
+
+func TestGenerateAIReplyRetriesTransferRoleEcho(t *testing.T) {
+	restoreReplyQualityTestState(t)
+
+	replies := []string{
+		"没问题，在那位废柴女神掉链子之前，先听好了：转阿库娅。",
+		"哎呀，当然要交给本女神啦！",
+	}
+	calls := 0
+	getAIReplyForQualityRetry = func(contents []ai.Content, question string, topics []ai.Topics, tags []ai.Tags, fields ...zap.Field) string {
+		calls++
+		if calls == 2 && (!strings.Contains(question, "阿库娅") || !strings.Contains(question, "不要输出")) {
+			t.Fatalf("retry question missing transfer role guidance: %q", question)
+		}
+		return replies[calls-1]
+	}
+
+	got, skipped := generateAIReplyWithQualityRetry(nil, "转阿库娅", nil, nil)
+	if skipped {
+		t.Fatal("generateAIReplyWithQualityRetry skipped valid transfer retry reply")
+	}
+	if got != replies[1] {
+		t.Fatalf("reply = %q, want retry reply %q", got, replies[1])
+	}
+	if calls != 2 {
+		t.Fatalf("calls = %d, want 2", calls)
+	}
+}
+
 func TestAIReplyQualityAllowsSeriousQuestionsButRejectsLongTemplate(t *testing.T) {
 	restoreReplyQualityTestState(t)
 

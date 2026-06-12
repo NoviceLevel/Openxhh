@@ -79,3 +79,19 @@ func TestBotMoodPersists(t *testing.T) {
 		t.Fatalf("BotMood = %q", got)
 	}
 }
+
+func TestUserInteractionToneRecognizesTransferRoleCommand(t *testing.T) {
+	got := userInteractionTone("转阿库娅")
+	for _, want := range []string{"转接梗", "角色口吻"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("transfer role tone missing %q: %q", want, got)
+		}
+	}
+}
+
+func TestUserInteractionToneDoesNotTreatEveryTurnAsTransfer(t *testing.T) {
+	got := userInteractionTone("这个中转站看起来挺赚钱的")
+	if strings.Contains(got, "转接梗") {
+		t.Fatalf("ordinary text was classified as transfer joke: %q", got)
+	}
+}

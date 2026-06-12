@@ -274,6 +274,9 @@ func aiReplyQualityIssueForQuestion(reply string, questionText string) string {
 	if issue := basicReplySendIssue(reply, false); issue != "" {
 		return issue
 	}
+	if issue := transferRoleReplyIssue(reply, questionText); issue != "" {
+		return issue
+	}
 	reply = strings.TrimSpace(reply)
 	if reply == "" {
 		return ""
@@ -298,6 +301,24 @@ func aiReplyQualityIssueForQuestion(reply string, questionText string) string {
 	for _, sentence := range splitReplySentences(reply) {
 		if len([]rune(strings.TrimSpace(sentence))) > maxSentenceRunes {
 			return "普通回复单句过长"
+		}
+	}
+	return ""
+}
+
+func transferRoleReplyIssue(reply string, questionText string) string {
+	transferRole := transferRoleCommandTarget(questionText)
+	if transferRole == "" {
+		return ""
+	}
+	reply = strings.Join(strings.Fields(CleanXHHRichText(reply)), "")
+	command := "转" + transferRole
+	if strings.Contains(reply, command) {
+		return "转接梗回复复读命令"
+	}
+	for _, marker := range []string{"已转接", "正在转接", "转接中", "为你转接", "帮你转接", "转给"} {
+		if strings.Contains(reply, marker) && strings.Contains(reply, transferRole) {
+			return "转接梗回复像在执行命令"
 		}
 	}
 	return ""
