@@ -91,6 +91,9 @@ func createCommentResult(source, text, link_id, reply_id, root_id, iscy, imageUR
 				loger.Loger.Error("[XHH]评论发送失败且 reply_id 无法解析", zap.String("info", readableXHHResponseBody(string(data))), zap.String("reply_id", reply_id))
 				return commentCreateResult{Sent: false, Handled: false}
 			}
+			if isXHHUserBlockedMessage(msg) {
+				blockUserFromFailedReply(CommentID, msg)
+			}
 			db.Replyed(CommentID)
 			loger.Loger.Warn("[XHH]异常发送：AI回复已生成但评论发送失败，已标记完成避免重复发送", zap.String("Resp", readableXHHResponseBody(string(data))), zap.String("msg", msg), zap.String("link_id", link_id), zap.String("reply_id", reply_id), zap.String("root_id", root_id))
 			time.Sleep(5 * time.Second)
@@ -187,6 +190,22 @@ func rewriteXHHBlockedCommentText(text string) string {
 
 func isXHHBlockedWordMessage(msg string) bool {
 	return strings.Contains(msg, "屏蔽词") || strings.Contains(strings.ToLower(msg), "blocked")
+}
+
+func isXHHUserBlockedMessage(msg string) bool {
+	return strings.Contains(msg, "你回复的用户已经将你拉黑")
+}
+
+func blockUserFromFailedReply(commentID int, reason string) {
+	userID, userName, ok := db.UserByQueuedCommentID(commentID)
+	if !ok {
+		loger.Loger.Warn("[XHH]对方已拉黑机器人，但无法定位本地用户", zap.Int("comment_id", commentID), zap.String("reason", reason))
+		return
+	}
+	if db.SaveBlockedUser(userID, userName, reason) {
+		db.MarkBlockedUserRepliesHandled(userID)
+		loger.Loger.Warn("[XHH]对方已拉黑机器人，已加入本地屏蔽用户", zap.Int("user_id", userID), zap.String("user_name", userName), zap.Int("comment_id", commentID))
+	}
 }
 
 func recordOutboundComment(source, text, linkIDText, replyIDText, rootIDText, imageURL string, response []byte, commentID int64, createdAt int64) {

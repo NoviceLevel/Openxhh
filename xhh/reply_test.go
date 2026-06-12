@@ -6,7 +6,9 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"openxhh/config"
+	"openxhh/db"
 	"openxhh/loger"
+	"openxhh/sqlite"
 	"strings"
 	"testing"
 
@@ -89,6 +91,29 @@ func TestReplyReturnsHandledWhenXHHRejectsComment(t *testing.T) {
 
 	if !Reply("测试回复", "183102356", "885370839", "885210606", "0") {
 		t.Fatal("Reply returned false for handled failed response, want true to avoid duplicate retries")
+	}
+}
+
+func TestReplyBlocksUserLocallyWhenTargetHasBlockedBot(t *testing.T) {
+	setupXHHMessageQueueTest(t)
+	setupCommentCreateHTTPTest(t, http.StatusOK, `{"status":"failed","msg":"你回复的用户已经将你拉黑","result":{}}`)
+	_, err := sqlite.Db.Exec("INSERT INTO at (msg_id, comment_a_id, comment_root_id, link_id, user_a_id, user_a_name, comment_text, reply) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", 3001, 887160567, 884884008, 183059890, 456789, "拉黑用户", "test", false)
+	if err != nil {
+		t.Fatalf("insert blocked reply row: %v", err)
+	}
+	_, err = sqlite.Db.Exec("INSERT INTO at (msg_id, comment_a_id, comment_root_id, link_id, user_a_id, user_a_name, comment_text, reply) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", 3002, 887160568, 884884008, 183059890, 456789, "拉黑用户", "pending", false)
+	if err != nil {
+		t.Fatalf("insert second blocked reply row: %v", err)
+	}
+
+	if !Reply("测试回复", "183059890", "887160567", "884884008", "0") {
+		t.Fatal("Reply returned false for handled blocked-user response")
+	}
+	if !db.IsBlockedUser(456789) {
+		t.Fatal("target user was not saved to local blocklist")
+	}
+	if got := db.PendingReplyCountByUser(456789); got != 0 {
+		t.Fatalf("PendingReplyCountByUser = %d, want 0", got)
 	}
 }
 

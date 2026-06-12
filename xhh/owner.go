@@ -2,6 +2,7 @@ package xhh
 
 import (
 	"openxhh/config"
+	"openxhh/db"
 	"openxhh/loger"
 	"strconv"
 	"strings"
@@ -11,6 +12,9 @@ var Owners []int
 var ownerIDsLoaded bool
 
 func Check(UID int) bool {
+	if db.IsBlockedUser(UID) {
+		return false
+	}
 	cfg := config.ConfigStruct.Xhh
 	if !cfg.EnableWhitelist {
 		return true

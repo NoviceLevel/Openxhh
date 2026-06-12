@@ -29,6 +29,7 @@ func Init() {
 	migrateMessageStreamTables()
 	migrateCommentCacheTables()
 	migrateUserMemoryTables()
+	migrateBlockedUserTable()
 }
 
 func migrateAtTable() {

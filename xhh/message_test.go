@@ -278,6 +278,47 @@ func setupXHHMessageQueueTest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create outbound_messages table: %v", err)
 	}
+	_, err = sqlite.Db.Exec(`CREATE TABLE blocked_users (
+		user_id BIGINT PRIMARY KEY,
+		user_name TEXT DEFAULT '',
+		reason TEXT DEFAULT '',
+		created_at BIGINT DEFAULT 0,
+		updated_at BIGINT DEFAULT 0
+	)`)
+	if err != nil {
+		t.Fatalf("create blocked_users table: %v", err)
+	}
+}
+
+func TestShouldQueueMessageSkipsBlockedUser(t *testing.T) {
+	setupXHHMessageQueueTest(t)
+	if !db.SaveBlockedUser(89055874, "blocked", "target blocked bot") {
+		t.Fatal("SaveBlockedUser returned false")
+	}
+	msg := Msg{
+		MsgID:         2001,
+		CommentID:     867937700,
+		RootCommentID: 867937000,
+		LinkID:        181099114,
+		UserID:        89055874,
+		UserName:      "blocked",
+		CommentText:   "别再回复",
+		CreatedAt:     1001,
+	}
+
+	if shouldQueueMessage(msg) {
+		t.Fatal("shouldQueueMessage returned true for locally blocked user")
+	}
+	if got := db.PendingReplyCountByUser(89055874); got != 0 {
+		t.Fatalf("PendingReplyCountByUser = %d, want 0", got)
+	}
+	var stored bool
+	if err := sqlite.Db.QueryRow("SELECT COALESCE(reply, false) FROM at WHERE msg_id=?", 2001).Scan(&stored); err != nil {
+		t.Fatalf("query skipped row: %v", err)
+	}
+	if !stored {
+		t.Fatal("blocked user row should be inserted as already replied")
+	}
 }
 
 func TestShouldMentionTarget(t *testing.T) {

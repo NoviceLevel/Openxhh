@@ -42,6 +42,7 @@ func setupSQLiteCommTest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create at table: %v", err)
 	}
+	migrateBlockedUserTable()
 }
 
 type failingCommScanner struct{}
@@ -144,5 +145,34 @@ func TestInsertWithUserNameReturnsFalseForDuplicateComment(t *testing.T) {
 	}
 	if InsertWithUserName(100, 201, -1, 1, 300, "user", "duplicate msg", false) {
 		t.Fatal("duplicate msg InsertWithUserName returned true, want false")
+	}
+}
+
+func TestBlockedUserLifecycle(t *testing.T) {
+	setupSQLiteCommTest(t)
+	insertCommForTest(t, 10, 12345, false)
+	insertCommForTest(t, 20, 12345, false)
+	insertCommForTest(t, 30, 67890, false)
+
+	userID, userName, ok := UserByQueuedCommentID(1010)
+	if !ok || userID != 12345 || userName != "user" {
+		t.Fatalf("UserByQueuedCommentID = (%d,%q,%v), want (12345,user,true)", userID, userName, ok)
+	}
+	if IsBlockedUser(12345) {
+		t.Fatal("IsBlockedUser returned true before saving")
+	}
+	if !SaveBlockedUser(12345, "user", "blocked by target") {
+		t.Fatal("SaveBlockedUser returned false")
+	}
+	if !IsBlockedUser(12345) {
+		t.Fatal("IsBlockedUser returned false after saving")
+	}
+
+	MarkBlockedUserRepliesHandled(12345)
+	if got := PendingReplyCountByUser(12345); got != 0 {
+		t.Fatalf("PendingReplyCountByUser(blocked) = %d, want 0", got)
+	}
+	if got := PendingReplyCountByUser(67890); got != 1 {
+		t.Fatalf("PendingReplyCountByUser(other) = %d, want 1", got)
 	}
 }
