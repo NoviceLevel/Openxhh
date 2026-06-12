@@ -246,7 +246,24 @@ func shouldSkipFeedReply(reply string) bool {
 }
 
 func feedReplyQualityIssue(reply string, title string) string {
-	return basicReplySendIssue(reply, true)
+	if issue := basicReplySendIssue(reply, true); issue != "" {
+		return issue
+	}
+	if shouldSkipFeedReply(reply) {
+		return ""
+	}
+	if len([]rune(strings.TrimSpace(reply))) > maxFeedReplyNaturalRunes {
+		return "刷帖回复过长"
+	}
+	if sentenceCount(reply) > maxFeedReplyNaturalSentences {
+		return "刷帖回复句子过多"
+	}
+	for _, sentence := range splitReplySentences(reply) {
+		if len([]rune(strings.TrimSpace(sentence))) > maxFeedReplyNaturalSentenceRunes {
+			return "刷帖回复单句过长"
+		}
+	}
+	return ""
 }
 
 func aiReplyQualityIssue(reply string) string {
@@ -270,6 +287,35 @@ func basicReplySendIssue(reply string, allowSkip bool) string {
 	}
 	return ""
 }
+
+func sentenceCount(text string) int {
+	return len(splitReplySentences(text))
+}
+
+func splitReplySentences(text string) []string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return nil
+	}
+	sentences := make([]string, 0, 2)
+	start := 0
+	for i, r := range text {
+		if strings.ContainsRune("。！？!?\n", r) {
+			addReplySentence(&sentences, text[start:i])
+			start = i + len(string(r))
+		}
+	}
+	addReplySentence(&sentences, text[start:])
+	return sentences
+}
+
+func addReplySentence(sentences *[]string, sentence string) {
+	sentence = strings.TrimSpace(sentence)
+	if sentence != "" {
+		*sentences = append(*sentences, sentence)
+	}
+}
+
 func feedReplyInterval() int {
 	if config.ConfigStruct.FeedReply.Interval <= 0 {
 		return 900

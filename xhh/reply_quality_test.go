@@ -18,16 +18,13 @@ func TestReplyQualityOnlyKeepsSendLevelChecks(t *testing.T) {
 		"建议你先看看预算和需求。",
 		"这里是惠惠专席，要么领成就，要么报委托。",
 		"*惠惠压低帽檐。*\n\n这事确实要先看清楚。\n\n*她又把法杖往地上一杵。*",
-		"哼，这次算你说得不错🙂",
+		"哼，这次算你说得不错。",
 		"惠惠觉得这事可以先缓一下，惠惠不是不管你。",
 		"转什么deepseek！本大魔法师又不是传送阵客服！",
 	}
 	for _, reply := range styleReplies {
 		if got := aiReplyQualityIssue(reply); got != "" {
 			t.Fatalf("aiReplyQualityIssue(%q) = %q, want no style rejection", reply, got)
-		}
-		if got := feedReplyQualityIssue(reply, "标题"); got != "" {
-			t.Fatalf("feedReplyQualityIssue(%q) = %q, want no style rejection", reply, got)
 		}
 	}
 }
@@ -72,21 +69,60 @@ func TestGenerateAIReplyDoesNotRetryStyleReplies(t *testing.T) {
 	}
 }
 
-func TestGenerateFeedReplyDoesNotRetryStyleReplies(t *testing.T) {
+func TestGenerateFeedReplyDoesNotRetryShortStyleReplies(t *testing.T) {
 	restoreReplyQualityTestState(t)
 
 	calls := 0
 	getAIFeedReplyForQualityRetry = func(string, []ai.Content, string, []ai.Topics, []ai.Tags, ...zap.Field) string {
 		calls++
-		return "这价格看着还行，火力也不错，可以考虑。"
+		return "这价格看着还行，火力也不错。"
 	}
 
 	got := generateFeedReplyWithQualityRetry("prompt", nil, "instruction", "", nil, nil)
-	if got != "这价格看着还行，火力也不错，可以考虑。" {
+	if got != "这价格看着还行，火力也不错。" {
 		t.Fatalf("reply = %q", got)
 	}
 	if calls != 1 {
 		t.Fatalf("calls = %d, want 1", calls)
+	}
+}
+
+func TestFeedReplyQualityRejectsLongNaturalReplies(t *testing.T) {
+	restoreReplyQualityTestState(t)
+
+	longReply := "喂，别在那儿哭丧着脸了！那种一看就是圈子自闭的群，退了就退了，这叫及时止损！要是这种群里没几个能听懂我爆裂魔法真谛的家伙，我早就一个魔法炸过去让服务器原地退休了。"
+	if got := feedReplyQualityIssue(longReply, ""); got == "" {
+		t.Fatal("feedReplyQualityIssue returned empty for long feed reply")
+	}
+
+	shortReply := "退了就退了，别为了没人接话的群难过。哼，是他们没眼光。"
+	if got := feedReplyQualityIssue(shortReply, ""); got != "" {
+		t.Fatalf("feedReplyQualityIssue short reply = %q, want empty", got)
+	}
+}
+
+func TestGenerateFeedReplyRetriesLongReplyOnce(t *testing.T) {
+	restoreReplyQualityTestState(t)
+
+	replies := []string{
+		"喂，别在那儿哭丧着脸了！那种一看就是圈子自闭的群，退了就退了，这叫及时止损！要是这种群里没几个能听懂我爆裂魔法真谛的家伙，我早就一个魔法炸过去让服务器原地退休了。",
+		"退了就退了，别为了没人接话的群难过。哼，是他们没眼光。",
+	}
+	calls := 0
+	getAIFeedReplyForQualityRetry = func(prompt string, contents []ai.Content, instruction string, topics []ai.Topics, tags []ai.Tags, fields ...zap.Field) string {
+		calls++
+		if calls == 2 && !strings.Contains(instruction, "上一条太长") {
+			t.Fatalf("retry instruction missing short-rewrite guidance: %q", instruction)
+		}
+		return replies[calls-1]
+	}
+
+	got := generateFeedReplyWithQualityRetry("prompt", nil, "instruction", "", nil, nil)
+	if got != replies[1] {
+		t.Fatalf("reply = %q, want retry reply %q", got, replies[1])
+	}
+	if calls != 2 {
+		t.Fatalf("calls = %d, want 2", calls)
 	}
 }
 

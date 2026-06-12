@@ -148,15 +148,14 @@ func TestBuildFeedReplyInstructionOnlyFramesPostInput(t *testing.T) {
 	}
 }
 
-func TestFeedReplyQualityOnlyKeepsSendLevelChecks(t *testing.T) {
+func TestFeedReplyQualityKeepsShortNaturalReplies(t *testing.T) {
 	for _, reply := range []string{
 		"建议你先看看预算和需求。",
-		"这价格看着还行，火力也不错，可以考虑。",
-		"这里是惠惠专席，要么领成就，要么报委托。",
-		"*惠惠压低帽檐。*\n\n这事确实要先看清楚。\n\n*她又把法杖往地上一杵。*",
+		"这价格看着还行，火力也不错。",
+		"哼，这次算你说得不错。",
 	} {
 		if got := feedReplyQualityIssue(reply, ""); got != "" {
-			t.Fatalf("feedReplyQualityIssue(%q) = %q, want no style rejection", reply, got)
+			t.Fatalf("feedReplyQualityIssue(%q) = %q, want no issue", reply, got)
 		}
 	}
 
