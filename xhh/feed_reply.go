@@ -292,6 +292,11 @@ func aiReplyQualityIssueForQuestion(reply string, questionText string) string {
 		maxSentenceRunes = maxSeriousAIReplyNaturalSentenceRunes
 		maxSentences = maxSeriousAIReplyNaturalSentences
 	}
+	if isCodeListReplyQuestion(questionText) {
+		maxRunes = 260
+		maxSentenceRunes = 220
+		maxSentences = 6
+	}
 	if len([]rune(reply)) > maxRunes {
 		return "普通回复过长"
 	}
@@ -376,8 +381,9 @@ func isSeriousReplyQuestion(questionText string) bool {
 		return false
 	}
 	keywords := []string{
-		"分析", "帮忙", "求助", "建议", "怎么", "如何", "哪些", "什么", "为什么",
+		"分析", "帮忙", "求助", "建议", "怎么", "如何", "哪些", "什么", "为什么", "列出",
 		"怎么办", "能不能", "可以吗", "配置", "问题", "图", "识别", "原因",
+		"兑换码", "礼包码", "皮肤码", "激活码", "口令码", "时装",
 	}
 	for _, keyword := range keywords {
 		if strings.Contains(text, keyword) {
@@ -385,6 +391,16 @@ func isSeriousReplyQuestion(questionText string) bool {
 		}
 	}
 	return false
+}
+
+func isCodeListReplyQuestion(questionText string) bool {
+	text := strings.TrimSpace(questionText)
+	if text == "" {
+		return false
+	}
+	listIntent := strings.Contains(text, "列出") || strings.Contains(text, "整理") || strings.Contains(text, "汇总")
+	codeIntent := strings.Contains(text, "兑换码") || strings.Contains(text, "礼包码") || strings.Contains(text, "皮肤码") || strings.Contains(text, "激活码") || strings.Contains(text, "口令码")
+	return listIntent && codeIntent
 }
 
 func feedReplyInterval() int {

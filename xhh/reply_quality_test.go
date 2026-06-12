@@ -186,6 +186,40 @@ func TestGenerateAIReplyRetriesLongTemplateReplyOnce(t *testing.T) {
 	}
 }
 
+func TestGenerateAIReplySendsRetryWhenOnlyNaturalStyleIssueRemains(t *testing.T) {
+	restoreReplyQualityTestState(t)
+
+	replies := []string{
+		"哼，叫我出来就是为了这种跑腿找兑换码的事吗？我可是大魔法师，才不是什么随叫随到的寻宝机器人！\n\n不过，既然大家都想要，那我就勉为其难帮你留意一下吧。要是让我发现剩下的代码，我会大发慈悲地告诉你，记得时刻感谢我。",
+		"哼，这么多人把我也叫出来，结果就为了这几个兑换码？看来大家都在蹲守呢。可惜本大魔法师对这些花哨的时装没兴趣，还没我那身披风帅气。",
+	}
+	calls := 0
+	getAIReplyForQualityRetry = func(contents []ai.Content, question string, topics []ai.Topics, tags []ai.Tags, fields ...zap.Field) string {
+		calls++
+		return replies[calls-1]
+	}
+
+	got, skipped := generateAIReplyWithQualityRetry(nil, "看盒千日，用盒一时，请列出失落城堡2的八个时装皮肤兑换码", nil, nil)
+	if skipped {
+		t.Fatal("generateAIReplyWithQualityRetry skipped retry with only natural-style issue")
+	}
+	if got != replies[1] {
+		t.Fatalf("reply = %q, want retry reply %q", got, replies[1])
+	}
+	if calls != 2 {
+		t.Fatalf("calls = %d, want 2", calls)
+	}
+}
+
+func TestAIReplyQualityTreatsExchangeCodeQuestionsAsSerious(t *testing.T) {
+	restoreReplyQualityTestState(t)
+
+	reply := "可用兑换码建议先试这些：LC2FASHION01、LC2FASHION02、LC2FASHION03、LC2FASHION04、LC2FASHION05、LC2FASHION06、LC2FASHION07、LC2FASHION08。哼，过期了可别赖我。"
+	if got := aiReplyQualityIssueForQuestion(reply, "请列出失落城堡2的八个时装皮肤兑换码"); got != "" {
+		t.Fatalf("aiReplyQualityIssueForQuestion exchange-code reply = %q, want empty", got)
+	}
+}
+
 func TestGenerateFeedReplyDoesNotRetryShortStyleReplies(t *testing.T) {
 	restoreReplyQualityTestState(t)
 

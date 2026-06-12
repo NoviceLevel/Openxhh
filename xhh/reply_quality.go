@@ -2,6 +2,7 @@ package xhh
 
 import (
 	"openxhh/ai"
+	"openxhh/loger"
 	"strings"
 
 	"go.uber.org/zap"
@@ -45,10 +46,23 @@ func generateAIReplyWithQualityRetry(contents []ai.Content, questionText string,
 	if shouldSkipFeedReply(retry) || len([]rune(retry)) > xhhCommentMaxRunes {
 		return "", true
 	}
-	if aiReplyQualityIssueForQuestion(retry, questionText) != "" {
-		return "", true
+	if issue := aiReplyQualityIssueForQuestion(retry, questionText); issue != "" {
+		if aiReplyQualityIssueBlocksSending(issue) {
+			return "", true
+		}
+		loger.Loger.Warn("[XHH]AI回复质量检查仍有问题，使用重试结果", append(logFields, zap.String("issue", issue))...)
+		return retry, false
 	}
 	return retry, false
+}
+
+func aiReplyQualityIssueBlocksSending(issue string) bool {
+	switch issue {
+	case "回复为跳过指令", "回复过长", "转接梗回复复读命令", "转接梗回复像在执行命令":
+		return true
+	default:
+		return false
+	}
 }
 
 func appendTransferRoleInstruction(contents []ai.Content, questionText string) []ai.Content {
