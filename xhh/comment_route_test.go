@@ -33,6 +33,22 @@ func TestBuildCommentRouteRequestDoesNotBiasImageDiscussion(t *testing.T) {
 	}
 }
 
+func TestShouldForceTextReplyForShortTransferRoleCommand(t *testing.T) {
+	mention := ParseMentionControl("转猫娘[cube_喜欢]")
+
+	if !shouldForceTextReply(mention) {
+		t.Fatal("short transfer role command should force text reply")
+	}
+}
+
+func TestShouldForceTextReplyDoesNotCaptureImageRequest(t *testing.T) {
+	mention := ParseMentionControl("生成一张猫娘图")
+
+	if shouldForceTextReply(mention) {
+		t.Fatal("explicit image request should not force text reply")
+	}
+}
+
 func TestBuildCommentRouteRequestUsesSemanticText(t *testing.T) {
 	v := db.CommStruct{Text: `<a data-user-id="93872966" href="u" target="_blank">@小猫娘喵喵</a>要艾特她啦`}
 	userText := NormalizeCommentText(v.Text)

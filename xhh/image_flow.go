@@ -286,7 +286,7 @@ func normalizeImageReplyText(text string) string {
 	return text
 }
 
-func generateImageForComment(ctx context.Context, prompt string, options ImageCommentOptions) (ai.ImageResult, error) {
+var generateImageForComment = func(ctx context.Context, prompt string, options ImageCommentOptions) (ai.ImageResult, error) {
 	if options.DryRun && options.MockImage {
 		return ai.DryRunImage(prompt), nil
 	}

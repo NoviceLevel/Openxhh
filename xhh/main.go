@@ -774,6 +774,9 @@ func replyComment(v db.CommStruct) {
 	var isok bool
 	if mentionControl.WakeOnly {
 		isok = replyWithAiComment(v, mentionControl)
+	} else if shouldForceTextReply(mentionControl) {
+		loger.Loger.Info("[XHH]短转接口令强制走文本回复", zap.Int("msg_id", v.MsgID), zap.Int("comment_id", v.CommentID), zap.Int("link_id", v.LinkID), zap.String("text", mentionQuestionText(mentionControl)))
+		isok = replyWithAiComment(v, mentionControl)
 	} else if route, routed := routeCommentIntent(v, userText, mentionControl); routed {
 		route.MentionTarget = resolveRouteMentionTarget(route.MentionTarget, mentionControl.TargetText, userText)
 		if route.MentionTarget != "" {
@@ -796,9 +799,7 @@ func replyComment(v db.CommStruct) {
 		imageResult := ProcessImageGenerationComment(v.LinkID, v.CommentID, v.RootID, v.Uid, mentionControl.CleanedText, ImageCommentOptions{TriggerUserName: v.UserName, MentionTargetText: mentionControl.TargetText})
 		if imageResult.Err != nil {
 			loger.Loger.Error("[XHH]图片评论处理失败", zap.Error(imageResult.Err), zap.Int("comment_id", v.CommentID), zap.Int("link_id", v.LinkID))
-			if imageResult.Handled {
-				isok = true
-			}
+			isok = replyWithAiComment(v, mentionControl)
 		} else if imageResult.Handled {
 			isok = imageResult.OK
 		} else {
@@ -840,6 +841,10 @@ func routeCommentIntent(v db.CommStruct, userText string, mentionControl Mention
 		return ai.CommentRouteResult{}, false
 	}
 	return route, true
+}
+
+func shouldForceTextReply(mentionControl MentionControl) bool {
+	return transferRoleCommandTarget(mentionQuestionText(mentionControl)) != ""
 }
 
 func resolveRouteMentionTarget(routeTarget, ruleTarget, userText string) string {
@@ -904,9 +909,6 @@ func processRoutedImageComment(v db.CommStruct, mentionControl MentionControl, r
 	result := ProcessImageGenerationComment(v.LinkID, v.CommentID, v.RootID, v.Uid, mentionControl.CleanedText, ImageCommentOptions{TriggerUserName: v.UserName, MentionTargetText: mentionControl.TargetText, Route: route})
 	if result.Err != nil {
 		loger.Loger.Error("[XHH]图片评论处理失败", zap.Error(result.Err), zap.Int("comment_id", v.CommentID), zap.Int("link_id", v.LinkID))
-		if result.Handled {
-			return true
-		}
 		return replyWithAiComment(v, mentionControl)
 	}
 	if result.Handled {
